@@ -504,7 +504,14 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(ch.ruler&&ch.ruler.p1&&ch.ruler.p2){
       const{x,y}=getCoords(container,e.clientX,e.clientY);
       if(isNearRuler(ch,x,y)){
-        ch.ruler=null;document.getElementById('rulerTooltip').style.display='none';rCanvas(ch);return;
+        // Clear this chart AND all mirrored rulers (FS sibling charts)
+        ch.ruler=null;
+        // Clear ruler from ALL charts (not just mirrored)
+        [...S.charts,...S.fsCharts].forEach(c=>{
+          if(c!==ch&&c.ruler){c.ruler=null;requestAnimationFrame(()=>rCanvas(c));}
+        });
+        document.getElementById('rulerTooltip').style.display='none';
+        rCanvas(ch);return;
       }
     }
     removeDrawingAtCursor(ch);
@@ -1308,13 +1315,24 @@ function startChartWS(){
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
     if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
     else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)ch.candles.push(candle);
-    try{ch.cs.update({time:toChartTime(candle.t),open:candle.o,high:candle.h,low:candle.l,close:candle.c});
-      ch.vs.update({time:toChartTime(candle.t),value:candle.qv,color:candle.c>=candle.o?'#1fa89122':'#e0404022'});}catch(e){}
-    ch.drawings.forEach(d=>{if(d.type==='aray'||d.type==='atline')checkAlerts(ch,d);});
-    document.getElementById(`cp${slot}`).textContent=fmtPrice(candle.c);
-    const t=S.tk[k.s];const cg=document.getElementById(`cg${slot}`);
-    if(t?.c24!=null){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
-    if(!ch._rafPending){ch._rafPending=true;requestAnimationFrame(()=>{ch._rafPending=false;rCanvas(ch);});}
+    // Batch updates in RAF to avoid blocking main thread mid-paint
+    ch._pendingCandle=candle;
+    if(!ch._rafPending){
+      ch._rafPending=true;
+      requestAnimationFrame(()=>{
+        ch._rafPending=false;
+        const c=ch._pendingCandle;if(!c||!ch.cs)return;
+        try{
+          ch.cs.update({time:toChartTime(c.t),open:c.o,high:c.h,low:c.l,close:c.c});
+          ch.vs.update({time:toChartTime(c.t),value:c.qv,color:c.c>=c.o?'#1fa89122':'#e0404022'});
+        }catch(e){}
+        ch.drawings.forEach(d=>{if(d.type==='aray'||d.type==='atline')checkAlerts(ch,d);});
+        const cpEl=document.getElementById(`cp${slot}`);if(cpEl)cpEl.textContent=fmtPrice(c.c);
+        const t=S.tk[k.s];const cg=document.getElementById(`cg${slot}`);
+        if(t?.c24!=null&&cg){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
+        rCanvas(ch);
+      });
+    }
   };
   ws.onclose=()=>{if(!closed)setTimeout(startChartWS,3000);};
   ws.onerror=()=>{closed=true;ws.close();setTimeout(startChartWS,3000);};
@@ -1324,13 +1342,16 @@ function startChartWS(){
 function startScreenerWS(){
   const ws=new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
   ws.onmessage=(evt)=>{
-    const arr=JSON.parse(evt.data);
-    for(const t of arr){
-      if(!t.s.endsWith('USDT'))continue;
-      if(S.tk[t.s]){S.tk[t.s].p=+t.c;S.tk[t.s].c24=+t.P;S.tk[t.s].qv=+t.q;S.tk[t.s].tr=+t.n||S.tk[t.s].tr;}
-      if(S.mx[t.s]){S.mx[t.s].price=+t.c;S.mx[t.s].ch24=+t.P;S.mx[t.s].vol24=+t.q;S.mx[t.s].trd24=+t.n||S.mx[t.s].trd24;}
-    }
-    scheduleRender();updTime();
+    // Parse off the main thread tick to avoid jank
+    const raw=evt.data;
+    queueMicrotask(()=>{
+      const arr=JSON.parse(raw);
+      for(const t of arr){
+        if(!t.s.endsWith('USDT'))continue;
+        if(S.tk[t.s]){S.tk[t.s].p=+t.c;S.tk[t.s].c24=+t.P;S.tk[t.s].qv=+t.q;S.tk[t.s].tr=+t.n||S.tk[t.s].tr;}
+        if(S.mx[t.s]){S.mx[t.s].price=+t.c;S.mx[t.s].ch24=+t.P;S.mx[t.s].vol24=+t.q;S.mx[t.s].trd24=+t.n||S.mx[t.s].trd24;}
+      }
+      scheduleRender();updTime();
     if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym]){
       const t=S.tk[S.fsSym];const m=S.mx[S.fsSym]||{};
       document.getElementById('fsPrc').textContent=fmtPrice(t.p);
@@ -1341,7 +1362,8 @@ function startScreenerWS(){
       if(fc)fc.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
       const fhc=document.getElementById('fsHcount');if(fhc)fhc.textContent=document.getElementById('hcount').textContent;
     }
-    checkAllAlerts();
+      checkAllAlerts();
+    }); // end queueMicrotask
   };
   ws.onclose=()=>setTimeout(startScreenerWS,3000);
   S.wsScreener=ws;
@@ -1396,6 +1418,35 @@ function renderScreenerInto(bodyEl,rows){
   const start=S.page*S.charts.length;
   const pageSyms=new Set(rows.slice(start,start+S.charts.length).map(r=>r.sym));
   const cols=activeCols();
+
+  // Fast-path: if rows & cols match, update cells in-place (no DOM rebuild)
+  const existingRows=bodyEl.querySelectorAll('.srow');
+  const colsKey=cols.map(c=>c.id).join(',');
+  if(existingRows.length===rows.length && bodyEl.dataset.colsKey===colsKey){
+    rows.forEach((m,idx)=>{
+      const row=existingRows[idx];
+      if(!row)return;
+      const grp=getSymGroup(m.sym);
+      const grpCol=GROUP_COLORS[grp]||'';
+      // Update row class
+      const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
+      if(row.className!==newCls)row.className=newCls;
+      // Update metric cells
+      const cells=row.querySelectorAll('.mc');
+      cols.forEach((c,ci)=>{
+        const cell=cells[ci];if(!cell)return;
+        const v=m[c.id];
+        const newTxt=fv(v,c.id);
+        const newCls='mc '+fc(v,c.id)+' '+fh(v,c.id);
+        if(cell.textContent!==newTxt)cell.textContent=newTxt;
+        if(cell.className!==newCls)cell.className=newCls;
+      });
+    });
+    return;
+  }
+
+  // Full rebuild (first load, column change, or row count change)
+  bodyEl.dataset.colsKey=colsKey;
   const frag=document.createDocumentFragment();
   for(const m of rows){
     const grp=getSymGroup(m.sym);
@@ -1403,16 +1454,14 @@ function renderScreenerInto(bodyEl,rows){
     const row=document.createElement('div');
     row.className='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
     row.onclick=()=>openFullscreenBySym(m.sym);
-    // Color stripe on left
     if(grpCol){
       const stripe=document.createElement('div');
       stripe.className='cg-badge';stripe.style.background=grpCol;stripe.style.opacity='0.7';
       row.appendChild(stripe);
     }
     const rt=document.createElement('div');rt.className='rtick';
-    if(!grpCol)rt.style.paddingLeft='9px'; // compensate when no stripe
+    if(!grpCol)rt.style.paddingLeft='9px';
     const pgNum=pageSyms.has(m.sym)?`<span class="tpg">·${S.page+1}</span>`:'';
-    // Group dot (click to pick color)
     const gdot=document.createElement('span');gdot.className='cg-dot';
     gdot.style.background=grpCol||'var(--bg4)';gdot.style.borderColor=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
     gdot.title='Цветовая группа';
@@ -1435,7 +1484,20 @@ function renderScreenerInto(bodyEl,rows){
 }
 
 let _rt=null;
-function scheduleRender(){if(_rt)return;_rt=requestAnimationFrame(()=>{_rt=null;renderTable();});}
+// Use requestIdleCallback if available — browser picks a free moment between frames
+const _schedFn = typeof requestIdleCallback !== 'undefined'
+  ? (cb) => requestIdleCallback(cb, {timeout:600})
+  : (cb) => setTimeout(cb, 500);
+function scheduleRender(){
+  if(_rt)return;
+  _rt=_schedFn(()=>{_rt=null;if(!_scrolling)renderTable();});
+}
+// Skip DOM rebuild while user is scrolling the screener
+let _scrolling=false,_scrollEnd=null;
+document.addEventListener('DOMContentLoaded',()=>{
+  const sb=document.getElementById('sbody');
+  if(sb){sb.addEventListener('scroll',()=>{_scrolling=true;clearTimeout(_scrollEnd);_scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);});}
+});
 
 function renderTable(){
   const rows=sortedRows();
@@ -2265,24 +2327,39 @@ async function main(){
 // ═══════════════════════════════════════════════════════════════
 //  EXPOSE GLOBALS (required for onclick= in HTML with ES modules)
 // ═══════════════════════════════════════════════════════════════
-window.setTf            = setTf;
-window.changePage       = changePage;
-window.setDrawMode      = setDrawMode;
-window.toggleScreener   = toggleScreener;
-window.toggleFsScreener = toggleFsScreener;
-window.openSettings     = openSettings;
-window.closeSettings    = closeSettings;
-window.switchSettingsTab= switchSettingsTab;
-window.toggleAlertLog   = toggleAlertLog;
-window.clearFsDrawings  = clearFsDrawings;
-window.closeFullscreen  = closeFullscreen;
-window.openFullscreen   = openFullscreen;
-window.openFullscreenBySym = openFullscreenBySym;
-window.onSearch         = onSearch;
-window.onVolFilter      = onVolFilter;
-window.toggleDensity    = toggleDensity;
-window.renderAlertLog   = renderAlertLog;
-window.S                = S;
+window.setTf              = setTf;
+window.changePage         = changePage;
+window.setDrawMode        = setDrawMode;
+window.toggleScreener     = toggleScreener;
+window.toggleFsScreener   = toggleFsScreener;
+window.openSettings       = openSettings;
+window.closeSettings      = closeSettings;
+window.switchSettingsTab  = switchSettingsTab;
+window.toggleAlertLog     = toggleAlertLog;
+window.clearFsDrawings    = clearFsDrawings;
+window.closeFullscreen    = closeFullscreen;
+window.openFullscreen     = openFullscreen;
+window.openFullscreenBySym= openFullscreenBySym;
+window.onSearch           = onSearch;
+window.onVolFilter        = onVolFilter;
+window.toggleDensity      = toggleDensity;
+window.renderAlertLog     = renderAlertLog;
+window.dragSpl            = dragSpl;
+window.setGridSize        = setGridSize;
+window.setUpColor         = setUpColor;
+window.setWatermark       = setWatermark;
+window.setSortAbs         = setSortAbs;
+window.toggleCol          = toggleCol;
+window.resetDensitySettings = resetDensitySettings;
+window.showGroupPicker    = showGroupPicker;
+window.openGroupManager   = openGroupManager;
+window.setSymGroup        = setSymGroup;
+window.S                  = S;
+window.setDensityVisible  = setDensityVisible;
+window.setAlertSetting    = setAlertSetting;
+window.copyTicker         = copyTicker;
+window.clearDrawingsSlot  = clearDrawingsSlot;
+window.doSort             = doSort;
 
 
 main();

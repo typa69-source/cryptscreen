@@ -8,8 +8,5 @@
   },
   "devDependencies": {
     "vite": "^5.2.0"
-  },
-  "dependencies": {
-    "terser": "^5.46.1"
   }
 }
