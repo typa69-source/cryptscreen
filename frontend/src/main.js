@@ -36,8 +36,8 @@ function buildAuthUI() {
       <div class="auth-logo"><span>C</span>RYPT<span>S</span>CREEN</div>
       <div class="auth-sub">Crypto Futures Screener</div>
       <div class="auth-tabs">
-        <button class="auth-tab on" data-tab="login">Войти ЧЕК</button>
-        <button class="auth-tab" data-tab="register">Регистрация ЧЕК</button>
+        <button class="auth-tab on" data-tab="login">Войти</button>
+        <button class="auth-tab" data-tab="register">Регистрация</button>
       </div>
       <div id="authForm">
         <div class="auth-field"><label class="auth-label">EMAIL</label><input class="auth-input" id="authEmail" type="email" placeholder="you@example.com" autocomplete="email"></div>
@@ -435,7 +435,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const containerId=isFs?`fsChartEl${fsIdx}`:`cb${slot}`;
   const container=document.getElementById(containerId);
   if(!container)return false;
-  if(ch.lc){try{ch.lc.remove();}catch(e){}}
+  if(ch.lc){try{ch.lc.remove();}catch(e){}ch.lc=null;ch.cs=null;ch.vs=null;}
   if(ch._ab)ch._ab.abort();
   container.innerHTML='';
 
@@ -874,7 +874,7 @@ const PRICE_AXIS_W=65;
 
 // ── Render canvas ──────────────────────────────────────────────
 function rCanvas(ch){
-  const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs)return;
+  const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
   // #3: clip drawing area so we don't overdraw the price axis
@@ -1930,7 +1930,7 @@ function toggleScreener(){
   }
   const btn=document.getElementById('toggleScrBtn');
   if(btn){btn.textContent=(S.screenerVisible?'◀':'▶')+' Список';btn.classList.toggle('on',S.screenerVisible);}
-  setTimeout(()=>{S.charts.forEach((ch,i)=>{const cb=document.getElementById(`cb${i}`);if(cb&&ch.lc){try{ch.lc.resize(cb.clientWidth,cb.clientHeight);ch.canvas.width=cb.clientWidth;ch.canvas.height=cb.clientHeight;rCanvas(ch);}catch(e){}}});},60);
+  setTimeout(()=>{S.charts.forEach((ch,i)=>{const cb=document.getElementById(`cb${i}`);if(cb&&ch.lc&&ch.cs){try{ch.lc.resize(cb.clientWidth,cb.clientHeight);ch.canvas.width=cb.clientWidth;ch.canvas.height=cb.clientHeight;rCanvas(ch);}catch(e){}}});},60);
   if(S.screenerVisible)renderTable();
 }
 
@@ -1949,7 +1949,7 @@ function toggleFsScreener(){
   }
   const btn=document.getElementById('fsToggleScrBtn');
   if(btn){btn.textContent=(S.fsScreenerVisible?'◀':'▶')+' Список';btn.classList.toggle('on',S.fsScreenerVisible);}
-  setTimeout(()=>{S.fsCharts.forEach((fch,i)=>{const el=document.getElementById(`fsChartEl${i}`);if(el&&fch.lc){try{fch.lc.resize(el.clientWidth,el.clientHeight);fch.canvas.width=el.clientWidth;fch.canvas.height=el.clientHeight;rCanvas(fch);}catch(e){}}});},60);
+  setTimeout(()=>{S.fsCharts.forEach((fch,i)=>{const el=document.getElementById(`fsChartEl${i}`);if(el&&fch.lc&&fch.cs){try{fch.lc.resize(el.clientWidth,el.clientHeight);fch.canvas.width=el.clientWidth;fch.canvas.height=el.clientHeight;rCanvas(fch);}catch(e){}}});},60);
   if(S.fsScreenerVisible)renderTable();
 }
 
