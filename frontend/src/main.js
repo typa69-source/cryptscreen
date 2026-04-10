@@ -36,7 +36,7 @@ function buildAuthUI() {
       <div class="auth-logo"><span>C</span>RYPT<span>S</span>CREEN</div>
       <div class="auth-sub">Crypto Futures Screener</div>
       <div class="auth-tabs">
-        <button class="auth-tab on" data-tab="login">Войти</button>
+        <button class="auth-tab on" data-tab="login">Войти ЧЕК</button>
         <button class="auth-tab" data-tab="register">Регистрация ЧЕК</button>
       </div>
       <div id="authForm">
