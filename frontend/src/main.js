@@ -435,6 +435,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const containerId=isFs?`fsChartEl${fsIdx}`:`cb${slot}`;
   const container=document.getElementById(containerId);
   if(!container)return false;
+  if(ch._ro){try{ch._ro.disconnect();}catch(e){}ch._ro=null;}
   if(ch.lc){try{ch.lc.remove();}catch(e){}ch.lc=null;ch.cs=null;ch.vs=null;}
   if(ch._ab)ch._ab.abort();
   container.innerHTML='';
@@ -564,11 +565,15 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(ch.interact&&!S.drawMode)ch.interact.style.pointerEvents='';
   },{capture:true,signal:sig});
 
+  // Store ro on ch so initLCChart can disconnect it before lc.remove()
+  if(ch._ro){try{ch._ro.disconnect();}catch(e){}}
   const ro=new ResizeObserver(()=>{
+    if(!ch.lc||!ch.cs)return; // guard: chart already disposed
     try{canvas.width=container.clientWidth;canvas.height=container.clientHeight;
-      lc.resize(container.clientWidth,container.clientHeight);rCanvas(ch);}catch(e){}
+      ch.lc.resize(container.clientWidth,container.clientHeight);rCanvas(ch);}catch(e){}
   });
   ro.observe(container);
+  ch._ro=ro;
 
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
     if(range&&range.from<HIST_TRIGGER){
