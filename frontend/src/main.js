@@ -37,7 +37,7 @@ function buildAuthUI() {
       <div class="auth-sub">Crypto Futures Screener</div>
       <div class="auth-tabs">
         <button class="auth-tab on" data-tab="login">Войти</button>
-        <button class="auth-tab" data-tab="register">Регистрация</button>
+        <button class="auth-tab" data-tab="register">Регистрация ЧЕК</button>
       </div>
       <div id="authForm">
         <div class="auth-field"><label class="auth-label">EMAIL</label><input class="auth-input" id="authEmail" type="email" placeholder="you@example.com" autocomplete="email"></div>
