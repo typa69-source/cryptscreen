@@ -14,6 +14,9 @@
   <div class="rt-row" id="rtBars"></div>
   <div class="rt-row" id="rtTime"></div>
   <div class="rt-row" id="rtVol"></div>
+  <div class="rt-row" id="rtNatr"></div>
+  <div class="rt-row" id="rtVr"></div>
+  <div class="rt-row" id="rtTr"></div>
 </div>
 
 <div id="ld">
@@ -44,6 +47,7 @@
     <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
     <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
     <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
+    <span id="fsCgDot" class="cg-dot chart-cg-dot" style="margin-left:8px;cursor:pointer" title="Цветовая группа" onclick="showChartGroupPicker(S.fsSym,this)"></span>
     <div class="hsep"></div>
     <!-- TF -->
     <span style="font-size:9px;color:var(--text3)">ТФ</span>
@@ -148,6 +152,7 @@
       <div class="hsep"></div>
       <button class="hbtn on" id="toggleScrBtn" onclick="toggleScreener()">▶ Список</button>
       <button class="hbtn" onclick="toggleAlertLog()" title="История алертов">🔔<span id="alertBadge"></span></button>
+      <button class="hbtn" id="potBtn" onclick="togglePotentialPanel()" title="Потенциал — мониторинг условий">⚡ Потенциал<span id="potBadge" style="display:none;background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;margin-left:3px"></span></button>
       <button class="hbtn" onclick="openSettings()">⚙ Настройки</button>
     </div>
   </div>
@@ -209,6 +214,19 @@
       <div class="sbody" id="sbody"></div>
     </div>
   </div>
+</div>
+
+<!-- POTENTIAL PANEL -->
+<div id="potentialPanel" style="display:none">
+  <div class="pot-hdr">
+    <span class="pot-title">⚡ Потенциал — мониторинг условий</span>
+    <div style="display:flex;align-items:center;gap:4px;margin-left:auto">
+      <button class="alp-clear" id="potClearBtn" onclick="clearPotentialMatches()">Очистить</button>
+      <button class="alp-x" onclick="togglePotentialPanel()">✕</button>
+    </div>
+  </div>
+  <div id="potSettings" class="pot-settings"></div>
+  <div id="potList" class="pot-list"><div class="pot-empty">Условия не сработали</div></div>
 </div>
 
 <script type="module" src="/src/main.js"></script>

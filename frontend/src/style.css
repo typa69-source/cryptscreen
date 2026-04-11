@@ -283,3 +283,51 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 .ind-check.checked{background:var(--accent);border-color:var(--accent);color:#fff}
 .ind-name{font-size:10px;color:var(--text);flex:1}
 .ind-sub{font-size:8px;color:var(--text3);margin-left:auto}
+
+/* CHART COLOR GROUP DOT (in chart headers) */
+.chart-cg-dot{
+  width:12px;height:12px;border-radius:50%;
+  display:inline-block;cursor:pointer;flex-shrink:0;
+  border:1px solid var(--border2);background:var(--bg4);
+  transition:transform .12s,box-shadow .12s;
+  vertical-align:middle;
+}
+.chart-cg-dot:hover{transform:scale(1.25);box-shadow:0 0 6px rgba(255,255,255,.2);}
+
+/* .cg-dot in screener — make slightly bigger */
+.cg-dot{
+  width:12px;height:12px;border-radius:50%;
+  display:inline-block;cursor:pointer;flex-shrink:0;
+  border:1px solid var(--border2);background:var(--bg4);
+  transition:transform .1s;
+}
+.cg-dot:hover{transform:scale(1.3);}
+
+/* POTENTIAL PANEL */
+#potentialPanel{
+  position:fixed;right:10px;top:52px;z-index:400;
+  width:360px;max-height:70vh;
+  background:var(--bg2);border:1px solid var(--border2);border-radius:6px;
+  box-shadow:0 8px 32px rgba(0,0,0,.7);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.pot-hdr{display:flex;align-items:center;padding:8px 12px;
+  border-bottom:1px solid var(--border);flex-shrink:0;gap:6px;}
+.pot-title{font-size:11px;font-weight:600;color:#fff;}
+.pot-settings{padding:6px 10px;border-bottom:1px solid var(--border);flex-shrink:0;
+  display:flex;flex-direction:column;gap:4px;max-height:220px;overflow-y:auto;}
+.pot-row{display:flex;align-items:center;justify-content:space-between;padding:2px 0;}
+.pot-lbl{font-size:9px;color:var(--text2);}
+.pot-list{flex:1;overflow-y:auto;min-height:0;}
+.pot-item{display:flex;align-items:center;gap:6px;padding:6px 10px;
+  cursor:pointer;border-bottom:1px solid rgba(37,37,48,.5);
+  transition:background .08s;}
+.pot-item:hover{background:rgba(255,255,255,.03);}
+.pot-sym{font-size:10px;font-weight:600;color:#fff;min-width:55px;}
+.pot-tag{font-size:9px;color:var(--text3);background:var(--bg4);
+  border-radius:3px;padding:1px 4px;}
+.pot-empty{padding:16px;text-align:center;color:var(--text3);font-size:9px;}
+
+/* RULER TOOLTIP extra rows */
+#rulerTooltip{min-width:175px;}
+#rtNatr,#rtVr,#rtTr{font-size:10px;color:var(--text2);}

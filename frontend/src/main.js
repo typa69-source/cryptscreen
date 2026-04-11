@@ -248,18 +248,31 @@ const S = {
   // #9: Color groups
   symGroups:{},       // sym → groupIdx (1-7), 0=none
   activeGroupFilter:0,// 0=all, 1-7=show only that group
+  lastGroupUsed:1,    // last group assigned by user
   _savedCpW:'',_savedFsCaW:'',
+  // Potential monitor
+  potentialSettings:{
+    enabled:false,
+    chMin:5, chMax:50,      // price change % min/max
+    vrMin:1.5,              // volume spike min
+    trMin:1.5,              // trade spike min
+    natrMin:0,              // NATR min
+    cooldown:60,            // seconds between repeated alerts per coin
+  },
+  potentialMatches:{},      // sym → {ts, ...metrics}
+  potentialAlerted:{},      // sym → last alert ts
+  _potInterval:null,
 };
 
 function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
-    hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null};
+    hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null, _crosshairRaf:false};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
-    hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null};
+    hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null, _crosshairRaf:false};
 }
 
 function activeCols(){
@@ -281,20 +294,62 @@ function ldHide(){const el=document.getElementById('ld');document.getElementById
 // ═══════════════════════════════════════════════════════════════
 //  FETCH
 // ═══════════════════════════════════════════════════════════════
-function fj(url,timeout=15000){
+// Global rate limiter — track if we're banned
+let _bnBannedUntil = 0;
+const _reqQueue = []; let _reqRunning = 0; const _reqMax = 8;
+function _runQueue(){
+  while(_reqRunning < _reqMax && _reqQueue.length){
+    const {fn,res,rej} = _reqQueue.shift();
+    _reqRunning++;
+    fn().then(r=>{_reqRunning--;res(r);_runQueue();}).catch(e=>{_reqRunning--;rej(e);_runQueue();});
+  }
+}
+function fj(url,timeout=15000,retries=2){
   return new Promise((res,rej)=>{
-    const t=setTimeout(()=>rej(new Error('Timeout')),timeout);
-    fetch(url).then(r=>{clearTimeout(t);if(!r.ok)rej(new Error('HTTP '+r.status));else r.json().then(res).catch(rej);}).catch(e=>{clearTimeout(t);rej(e);});
+    const now=Date.now();
+    if(_bnBannedUntil>now){
+      const wait=_bnBannedUntil-now;
+      console.warn(`Binance ban active, waiting ${Math.round(wait/1000)}s`);
+      setTimeout(()=>fj(url,timeout,retries).then(res).catch(rej), Math.min(wait,30000));
+      return;
+    }
+    const doFetch=()=>new Promise((rs,rj)=>{
+      const t=setTimeout(()=>rj(new Error('Timeout')),timeout);
+      fetch(url).then(async r=>{
+        clearTimeout(t);
+        const text=await r.text();
+        let data;
+        try{data=JSON.parse(text);}catch(e){rj(new Error('JSON parse error'));return;}
+        if(data?.code===-1003){
+          const until=data.msg?.match(/banned until (\d+)/)?.[1];
+          if(until){_bnBannedUntil=+until;console.warn('Binance ban until',new Date(_bnBannedUntil));}
+          else _bnBannedUntil=Date.now()+60000;
+          rj(new Error('RATE_LIMIT'));return;
+        }
+        if(!r.ok){rj(new Error('HTTP '+r.status));return;}
+        rs(data);
+      }).catch(e=>{clearTimeout(t);rj(e);});
+    });
+    const attempt=(n)=>{
+      _reqQueue.push({fn:doFetch,res:rs=>{res(rs);},rej:e=>{
+        if(e.message==='RATE_LIMIT'&&n>0){
+          setTimeout(()=>attempt(n-1), 5000+Math.random()*5000);
+        } else { rej(e); }
+      }});
+      _runQueue();
+    };
+    attempt(retries);
   });
 }
 function parseKlines(raw){return raw.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5],tr:+k[8],qv:+k[7]}));}
-async function batchKlines(syms,iv,lim,pFrom,pTo,bs=20){
+async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
   const out={};
   for(let i=0;i<syms.length;i+=bs){
     const batch=syms.slice(i,i+bs);
     const results=await Promise.allSettled(batch.map(s=>fj(`${API}/klines?symbol=${s}&interval=${iv}&limit=${lim}`).then(d=>[s,parseKlines(d)])));
     for(const r of results)if(r.status==='fulfilled')out[r.value[0]]=r.value[1];
     if(pFrom!=null)ldSet(null,pFrom+Math.round((i/syms.length)*(pTo-pFrom)),`${iv}: ${Math.min(i+bs,syms.length)}/${syms.length}`);
+    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,300+Math.random()*200));
   }
   return out;
 }
@@ -409,6 +464,7 @@ function buildChartGrid(){
     g.insertAdjacentHTML('beforeend',`
       <div class="ccell" id="cc${i}">
         <div class="chead">
+          <span class="chart-cg-dot cg-dot" id="cgd${i}" title="Цветовая группа" onclick="showChartGroupPicker(S.charts[${i}].sym,this)"></span>
           <span class="csym" id="cs${i}" title="Нажмите для копирования" onclick="copyTicker(this.textContent)" style="cursor:pointer">—</span>
           <span class="cprc" id="cp${i}"></span>
           <span class="cchg" id="cg${i}"></span>
@@ -443,7 +499,10 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const lc=S.LC.createChart(container,{
     layout:{background:{color:'#0a0a0b'},textColor:'#404050'},
     grid:{vertLines:{color:'#141418'},horzLines:{color:'#141418'}},
-    crosshair:{vertLine:{color:'#33333f',width:1,style:1,labelBackgroundColor:'#1c1c22'},horzLine:{color:'#33333f',width:1,style:1,labelBackgroundColor:'#1c1c22'}},
+    crosshair:{
+      vertLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#1c1c22',labelVisible:false},
+      horzLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#1c1c22',labelVisible:false}
+    },
     rightPriceScale:{borderColor:'#252530',textColor:'#606070'},
     timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false},
     handleScroll:{mouseWheel:true,pressedMouseMove:true},
@@ -488,10 +547,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     ch.hoverX=x;ch.hoverY=y;
     const prev=ch.hoveredIdx;
     ch.hoveredIdx=findDrawingNear(ch,x,y);
-    if(ch.hoveredIdx!==prev)rCanvas(ch);
+    if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;rCanvas(ch);});}
   },{signal:sig});
   container.addEventListener('mouseleave',()=>{
     ch.hoveredIdx=-1;
+    ch.hoverX=0;ch.hoverY=0;
     rCanvas(ch);
   },{signal:sig});
   container.addEventListener('mousedown',e=>{if(e.button===1){e.preventDefault();onRulerStart(ch,e,container);}},{capture:true,signal:sig});
@@ -646,6 +706,9 @@ function updateChartHeader(slot,sym){
   document.getElementById(`ctd${slot}`).innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const corVal=m.corr14??m.corr;
   document.getElementById(`cco${slot}`).innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+  // Update color dot
+  const dot=document.getElementById(`cgd${slot}`);
+  if(dot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';dot.style.background=col||'var(--bg4)';dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';dot.style.display=sym?'':'none';}
 }
 
 async function loadMoreHistory(slot){
@@ -905,31 +968,43 @@ function rCanvas(ch){
   }
   if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
-  // #5: custom crosshair (shown in draw mode or when Ctrl held, outside price axis)
-  if((S.drawMode||_ctrlHeld)&&ch.hoverX>0&&ch.hoverX<drawW){
+  // Custom crosshair: always visible when cursor is on chart
+  // In cursor mode: free (no snap). In draw mode or Ctrl: snap to candle OHLC
+  if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
     drawCustomCrosshair(ctx,ch,drawW,H);
   }
 }
 
-// #5: Custom crosshair drawn on canvas (shown in draw mode / Ctrl)
+// Custom crosshair drawn on canvas
+// - Cursor mode, no Ctrl: free (grey, no snap)
+// - Ctrl held or draw mode: snap to candle OHLC (blue dot)
 function drawCustomCrosshair(ctx,ch,W,H){
   const x=ch.hoverX,y=ch.hoverY;
-  const snapped=_ctrlHeld?snapPoint(ch,x,y,true):null;
+  const shouldSnap=_ctrlHeld||!!S.drawMode;
+  const snapped=shouldSnap?snapPoint(ch,x,y,true):null;
   const dx=snapped?(timeToCoordX(ch,snapped.time)??x):x;
   const dy=snapped?(ch.cs.priceToCoordinate(snapped.price)??y):y;
+  const col=snapped?'#3b82f6aa':'#60607088';
   ctx.save();
   ctx.setLineDash([3,3]);
-  ctx.strokeStyle=snapped?'#3b82f6aa':'#60607080';
+  ctx.strokeStyle=col;
   ctx.lineWidth=1;
-  // Horizontal
   ctx.beginPath();ctx.moveTo(0,dy);ctx.lineTo(W,dy);ctx.stroke();
-  // Vertical
   ctx.beginPath();ctx.moveTo(dx,0);ctx.lineTo(dx,H);ctx.stroke();
   ctx.setLineDash([]);
+  // Price label
+  const price=snapped?snapped.price:ch.cs?.coordinateToPrice(y);
+  if(price!=null){
+    const label=fmtPrice(price);
+    ctx.font='9px JetBrains Mono,monospace';
+    const tw=ctx.measureText(label).width+8;
+    ctx.fillStyle=snapped?'#3b82f6':'#252530';
+    ctx.fillRect(W-tw-2,dy-9,tw+2,14);
+    ctx.fillStyle=snapped?'#fff':'#80809a';
+    ctx.textAlign='right';ctx.fillText(label,W-4,dy+1);ctx.textAlign='left';
+  }
   if(snapped){
     ctx.beginPath();ctx.fillStyle='#3b82f6';ctx.arc(dx,dy,4,0,Math.PI*2);ctx.fill();
-    ctx.font='9px JetBrains Mono,monospace';ctx.fillStyle='#3b82f6cc';
-    ctx.textAlign='right';ctx.fillText(fmtPrice(snapped.price),W-2,dy-4);ctx.textAlign='left';
   }
   ctx.restore();
 }
@@ -1171,7 +1246,7 @@ function showAlertPctInput(ch,drawing,container){
 function onInteractMove(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   ch.hoverX=x;ch.hoverY=y;
-  if(S.drawMode||_ctrlHeld)requestAnimationFrame(()=>rCanvas(ch));
+  if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;rCanvas(ch);});}
 }
 
 // #6: dblclick in draw mode on an existing alert → edit %
@@ -1282,14 +1357,44 @@ function updateRulerTooltip(ch){
   const pct=(r.p2.price-r.p1.price)/r.p1.price*100;
   const isUp=pct>=0;const col=isUp?'#1fa891':'#e04040';
   const tMin=(Math.min(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000,tMax=(Math.max(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000;
-  let bars=0,vol=0;
-  for(const c of ch.candles)if(c.t>=tMin&&c.t<=tMax){bars++;vol+=c.qv;}
+  let bars=0,vol=0,sumTr=0;
+  const rangeCl=[];
+  for(const c of ch.candles)if(c.t>=tMin&&c.t<=tMax){bars++;vol+=c.qv;sumTr+=c.tr||0;rangeCl.push(c);}
+
+  // NATR of the range
+  let natrTxt='—';
+  if(rangeCl.length>=2){
+    const natr=calcNATR(rangeCl,rangeCl.length-1);
+    if(natr!=null)natrTxt=fn(natr,2)+'%';
+  }
+
+  // Volume spike: avg vol of range candles vs avg of preceding N candles
+  let vrTxt='—', trTxt='—';
+  if(rangeCl.length>0&&ch.candles.length>bars){
+    const idx0=ch.candles.findIndex(c=>c.t===rangeCl[0].t);
+    if(idx0>0){
+      const preN=Math.min(idx0,bars*3,50);
+      const pre=ch.candles.slice(Math.max(0,idx0-preN),idx0);
+      if(pre.length>0){
+        const avgVol=pre.reduce((s,c)=>s+c.qv,0)/pre.length;
+        const avgTr=pre.reduce((s,c)=>s+(c.tr||0),0)/pre.length;
+        const rangeAvgVol=vol/rangeCl.length;
+        const rangeAvgTr=sumTr/rangeCl.length;
+        if(avgVol>0)vrTxt=fn(rangeAvgVol/avgVol,2)+'×';
+        if(avgTr>0)trTxt=fn(rangeAvgTr/avgTr,2)+'×';
+      }
+    }
+  }
+
   document.getElementById('rtPct').textContent=(isUp?'+':'')+pct.toFixed(3)+'%';
   document.getElementById('rtPct').style.color=col;
   document.getElementById('rtBars').textContent=`Баров: ${bars}`;
   document.getElementById('rtTime').textContent=`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`;
   document.getElementById('rtVol').textContent=`Объём: ${fk(vol)} USDT`;
-  const tw=165,th=80;
+  document.getElementById('rtNatr').textContent=`NATR: ${natrTxt}`;
+  document.getElementById('rtVr').textContent=`ОБ*: ${vrTxt}`;
+  document.getElementById('rtTr').textContent=`СД*: ${trTxt}`;
+  const tw=175,th=120;
   tt.style.left=Math.min(r.mouseX+18,window.innerWidth-tw-8)+'px';
   tt.style.top=Math.max(r.mouseY-th-8,4)+'px';
   tt.style.display='block';
@@ -1401,7 +1506,7 @@ function buildScreenerHeader(hdrEl){
 function sortedRows(){
   let rows=Object.values(S.mx);
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
-  if(S.minVol>0)rows=rows.filter(r=>r.vol24!=null&&r.vol24>=S.minVol*1e6);
+  if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
   // #9: group filter
   if(S.activeGroupFilter>0)rows=rows.filter(r=>getSymGroup(r.sym)===S.activeGroupFilter);
   rows.sort((a,b)=>{
@@ -1845,29 +1950,60 @@ function buildGroupFilterBar(){
 }
 
 function showGroupPicker(sym,anchorEl){
+  // Auto-assign to last used group (or remove if already in that group)
+  const cur=getSymGroup(sym);
+  const target=S.lastGroupUsed||1;
+  if(cur===target){setSymGroup(sym,0);}
+  else{setSymGroup(sym,target);S.lastGroupUsed=target;}
+  // Show quick-change picker so user can pick a different color
+  showQuickGroupChanger(sym,anchorEl);
+}
+
+function showChartGroupPicker(sym,anchorEl){
+  if(!sym)return;
+  showGroupPicker(sym,anchorEl);
+}
+
+function showQuickGroupChanger(sym,anchorEl){
   const old=document.getElementById('cgroupPicker');if(old)old.remove();
   const r=anchorEl.getBoundingClientRect();
   const pick=document.createElement('div');
   pick.id='cgroupPicker';
   pick.style.cssText=`position:fixed;z-index:600;left:${r.left}px;top:${r.bottom+4}px;
-    background:var(--bg3);border:1px solid var(--border2);border-radius:5px;
-    padding:6px 8px;display:flex;gap:6px;align-items:center;
+    background:var(--bg3);border:1px solid var(--border2);border-radius:6px;
+    padding:6px 8px;display:flex;flex-direction:column;gap:5px;
     box-shadow:0 4px 16px rgba(0,0,0,.6)`;
+  // Label
+  const lbl=document.createElement('div');lbl.style.cssText='font-size:9px;color:var(--text3);padding-bottom:2px;border-bottom:1px solid var(--border);';
+  lbl.textContent='Изменить группу:';pick.appendChild(lbl);
+  // Color row
+  const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;';
   // "none" option
   const none=document.createElement('div');
   none.className='cg-dot';none.style.background='var(--bg4)';none.style.borderColor='var(--border2)';
-  none.title='Снять группу';none.onclick=()=>{setSymGroup(sym,0);pick.remove();};
-  pick.appendChild(none);
+  none.title='Снять группу';
+  if(getSymGroup(sym)===0)none.style.outline='2px solid #fff';
+  none.onclick=()=>{setSymGroup(sym,0);pick.remove();syncAllGroupDots(sym);};
+  row.appendChild(none);
   for(let g=1;g<=7;g++){
     const dot=document.createElement('div');dot.className='cg-dot';
     dot.style.background=GROUP_COLORS[g];
-    const cur=getSymGroup(sym);
-    if(cur===g)dot.style.outline='2px solid #fff';
-    dot.title=`Группа ${g}`;dot.onclick=()=>{setSymGroup(sym,g);pick.remove();};
-    pick.appendChild(dot);
+    if(getSymGroup(sym)===g)dot.style.outline='2px solid #fff';
+    dot.title=`Группа ${g} · нажмите чтобы установить`;
+    dot.onclick=()=>{S.lastGroupUsed=g;setSymGroup(sym,g);pick.remove();syncAllGroupDots(sym);};
+    row.appendChild(dot);
   }
+  pick.appendChild(row);
   document.body.appendChild(pick);
   setTimeout(()=>document.addEventListener('mousedown',function h(e){if(!pick.contains(e.target)){pick.remove();document.removeEventListener('mousedown',h);}},true),50);
+}
+
+// Sync all visible dots (chart headers + FS) after a group change
+function syncAllGroupDots(sym){
+  S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
+  const fsCgDot=document.getElementById('fsCgDot');
+  if(fsCgDot&&S.fsSym===sym){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
+  buildGroupFilterBar();
 }
 
 function openGroupManager(g){
@@ -2197,6 +2333,9 @@ function openFullscreenBySym(sym){
   S.fsSym=sym;S.fsOpen=true;
   document.getElementById('fsView').classList.add('open');
   document.getElementById('fsSym').textContent=sym.replace(/USDT$/,'');
+  // Update FS color dot
+  const fsCgDot=document.getElementById('fsCgDot');
+  if(fsCgDot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
   const t=S.tk[sym]||{};const m=S.mx[sym]||{};
   document.getElementById('fsPrc').textContent=fmtPrice(t.p);
   const ce=document.getElementById('fsChg');
@@ -2330,7 +2469,149 @@ async function main(){
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  EXPOSE GLOBALS (required for onclick= in HTML with ES modules)
+//  POTENTIAL MONITOR — configurable screener with sound alerts
+// ═══════════════════════════════════════════════════════════════
+function togglePotentialPanel(){
+  const p=document.getElementById('potentialPanel');
+  if(!p)return;
+  const vis=p.style.display==='none'||p.style.display==='';
+  p.style.display=vis?'flex':'none';
+  const btn=document.getElementById('potBtn');if(btn)btn.classList.toggle('on',vis);
+  if(vis){renderPotentialSettings();renderPotentialList();}
+}
+
+function renderPotentialSettings(){
+  const el=document.getElementById('potSettings');if(!el)return;
+  const ps=S.potentialSettings;
+  el.innerHTML=`
+  <div class="pot-row">
+    <label class="pot-lbl">Мониторинг</label>
+    <button class="tbtn${ps.enabled?' on':''}" onclick="setPotSetting('enabled',${!ps.enabled})">
+      ${ps.enabled?'● Вкл':'○ Выкл'}
+    </button>
+  </div>
+  <div class="pot-row">
+    <label class="pot-lbl">Изм. цены %</label>
+    <div style="display:flex;gap:4px;align-items:center">
+      <input type="number" value="${ps.chMin}" step="1" min="0" max="200" onchange="setPotSetting('chMin',+this.value)"
+        style="width:46px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+      <span style="color:var(--text3);font-size:9px">–</span>
+      <input type="number" value="${ps.chMax}" step="1" min="0" max="1000" onchange="setPotSetting('chMax',+this.value)"
+        style="width:46px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+      <span style="font-size:9px;color:var(--text3)">%</span>
+    </div>
+  </div>
+  <div class="pot-row">
+    <label class="pot-lbl">ОБ* ≥ (объём×)</label>
+    <input type="number" value="${ps.vrMin}" step="0.1" min="0" onchange="setPotSetting('vrMin',+this.value)"
+      style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+  </div>
+  <div class="pot-row">
+    <label class="pot-lbl">СД* ≥ (сделки×)</label>
+    <input type="number" value="${ps.trMin}" step="0.1" min="0" onchange="setPotSetting('trMin',+this.value)"
+      style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+  </div>
+  <div class="pot-row">
+    <label class="pot-lbl">NATR ≥</label>
+    <input type="number" value="${ps.natrMin}" step="0.1" min="0" onchange="setPotSetting('natrMin',+this.value)"
+      style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+  </div>
+  <div class="pot-row">
+    <label class="pot-lbl">Кулдаун алерта (сек)</label>
+    <div style="display:flex;gap:3px">
+      ${[30,60,120,300].map(s=>`<button class="tbtn${ps.cooldown===s?' on':''}" onclick="setPotSetting('cooldown',${s})">${s}с</button>`).join('')}
+    </div>
+  </div>
+  <div style="font-size:9px;color:var(--text3);padding:4px 6px;line-height:1.5">
+    Условие: |изм. 24ч| от ${ps.chMin}% до ${ps.chMax}%<br>
+    И ОБ* ≥ ${ps.vrMin}× И СД* ≥ ${ps.trMin}× И NATR ≥ ${ps.natrMin}%
+  </div>`;
+}
+
+function setPotSetting(key,val){
+  S.potentialSettings[key]=val;
+  renderPotentialSettings();
+  if(key==='enabled'){
+    if(val){startPotentialMonitor();}
+    else{stopPotentialMonitor();}
+  }
+}
+
+function checkPotentialConditions(){
+  if(!S.potentialSettings.enabled)return;
+  const ps=S.potentialSettings;
+  const now=Date.now();
+  let newMatches=false;
+  for(const sym of S.syms){
+    const m=S.mx[sym];if(!m)continue;
+    const ch24=Math.abs(m.ch24??0);
+    const vr=m.vr5??m.vr1h;
+    const tr=m.tr5??m.tr1h;
+    const natr=m.na14??m.na30;
+    const ok=(
+      ch24>=ps.chMin && ch24<=ps.chMax &&
+      (ps.vrMin<=0||( vr!=null&&vr>=ps.vrMin)) &&
+      (ps.trMin<=0||(tr!=null&&tr>=ps.trMin)) &&
+      (ps.natrMin<=0||(natr!=null&&natr>=ps.natrMin))
+    );
+    if(ok){
+      const isNew=!S.potentialMatches[sym];
+      S.potentialMatches[sym]={ts:S.potentialMatches[sym]?.ts||now,ch24:m.ch24,vr,tr,natr,price:m.price};
+      // Sound alert
+      const lastAlert=S.potentialAlerted[sym]||0;
+      if(now-lastAlert>(ps.cooldown||60)*1000){
+        S.potentialAlerted[sym]=now;
+        if(isNew||now-lastAlert>(ps.cooldown||60)*1000){
+          playAlert(660);newMatches=true;
+        }
+      }
+    } else {
+      if(S.potentialMatches[sym])delete S.potentialMatches[sym];
+    }
+  }
+  renderPotentialList();
+  // Badge
+  const cnt=Object.keys(S.potentialMatches).length;
+  const badge=document.getElementById('potBadge');
+  if(badge){badge.textContent=cnt;badge.style.display=cnt?'inline':'none';}
+}
+
+function renderPotentialList(){
+  const el=document.getElementById('potList');if(!el)return;
+  const matches=Object.entries(S.potentialMatches).sort((a,b)=>b[1].ts-a[1].ts);
+  if(!matches.length){el.innerHTML='<div class="pot-empty">Условия не сработали</div>';return;}
+  el.innerHTML=matches.map(([sym,d])=>{
+    const sn=sym.replace(/USDT$/,'');
+    const col=d.ch24>=0?'#1fa891':'#e04040';
+    const grp=getSymGroup(sym);const grpCol=GROUP_COLORS[grp]||'';
+    return`<div class="pot-item" onclick="openFullscreenBySym('${sym}')">
+      ${grpCol?`<span style="width:3px;height:100%;background:${grpCol};display:inline-block;flex-shrink:0;border-radius:2px"></span>`:''}
+      <span class="pot-sym">${sn}</span>
+      <span style="color:${col};font-weight:600;font-size:10px">${d.ch24>=0?'+':''}${fn(d.ch24,2)}%</span>
+      <span class="pot-tag">ОБ ${d.vr!=null?fn(d.vr,1)+'×':'—'}</span>
+      <span class="pot-tag">СД ${d.tr!=null?fn(d.tr,1)+'×':'—'}</span>
+      <span class="pot-tag">NATR ${d.natr!=null?fn(d.natr,2)+'%':'—'}</span>
+      <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(d.price)}</span>
+    </div>`;
+  }).join('');
+}
+
+function clearPotentialMatches(){
+  S.potentialMatches={};S.potentialAlerted={};
+  renderPotentialList();
+  const badge=document.getElementById('potBadge');if(badge)badge.style.display='none';
+}
+
+function startPotentialMonitor(){
+  stopPotentialMonitor();
+  checkPotentialConditions();
+  S._potInterval=setInterval(checkPotentialConditions,15000);
+}
+function stopPotentialMonitor(){
+  if(S._potInterval){clearInterval(S._potInterval);S._potInterval=null;}
+}
+
+// ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
 window.setTf              = setTf;
 window.changePage         = changePage;
@@ -2357,6 +2638,7 @@ window.setSortAbs         = setSortAbs;
 window.toggleCol          = toggleCol;
 window.resetDensitySettings = resetDensitySettings;
 window.showGroupPicker    = showGroupPicker;
+window.showChartGroupPicker = showChartGroupPicker;
 window.openGroupManager   = openGroupManager;
 window.setSymGroup        = setSymGroup;
 window.S                  = S;
@@ -2365,6 +2647,9 @@ window.setAlertSetting    = setAlertSetting;
 window.copyTicker         = copyTicker;
 window.clearDrawingsSlot  = clearDrawingsSlot;
 window.doSort             = doSort;
+window.togglePotentialPanel = togglePotentialPanel;
+window.setPotSetting      = setPotSetting;
+window.clearPotentialMatches = clearPotentialMatches;
 
 
 main();
