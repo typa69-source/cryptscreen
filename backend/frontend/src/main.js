@@ -248,25 +248,18 @@ const S = {
   // #9: Color groups
   symGroups:{},       // sym → groupIdx (1-7), 0=none
   activeGroupFilter:0,// 0=all, 1-7=show only that group
-  lastGroupUsed:1,    // last group assigned by user
   _savedCpW:'',_savedFsCaW:'',
-  // Potential monitor — multi-preset system
-  potentialPresets:[],   // [{id,name,conditions:[{field,min,max}],matches:{},alerted:{},enabled}]
-  _potInterval:null,
-  _potNextId:1,
 };
 
 function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
-    hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _crosshairRaf:false, _brushStroke:null};
+    hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
-    hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _crosshairRaf:false, _brushStroke:null};
+    hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null};
 }
 
 function activeCols(){
@@ -288,62 +281,20 @@ function ldHide(){const el=document.getElementById('ld');document.getElementById
 // ═══════════════════════════════════════════════════════════════
 //  FETCH
 // ═══════════════════════════════════════════════════════════════
-// Global rate limiter — track if we're banned
-let _bnBannedUntil = 0;
-const _reqQueue = []; let _reqRunning = 0; const _reqMax = 8;
-function _runQueue(){
-  while(_reqRunning < _reqMax && _reqQueue.length){
-    const {fn,res,rej} = _reqQueue.shift();
-    _reqRunning++;
-    fn().then(r=>{_reqRunning--;res(r);_runQueue();}).catch(e=>{_reqRunning--;rej(e);_runQueue();});
-  }
-}
-function fj(url,timeout=15000,retries=2){
+function fj(url,timeout=15000){
   return new Promise((res,rej)=>{
-    const now=Date.now();
-    if(_bnBannedUntil>now){
-      const wait=_bnBannedUntil-now;
-      console.warn(`Binance ban active, waiting ${Math.round(wait/1000)}s`);
-      setTimeout(()=>fj(url,timeout,retries).then(res).catch(rej), Math.min(wait,30000));
-      return;
-    }
-    const doFetch=()=>new Promise((rs,rj)=>{
-      const t=setTimeout(()=>rj(new Error('Timeout')),timeout);
-      fetch(url).then(async r=>{
-        clearTimeout(t);
-        const text=await r.text();
-        let data;
-        try{data=JSON.parse(text);}catch(e){rj(new Error('JSON parse error'));return;}
-        if(data?.code===-1003){
-          const until=data.msg?.match(/banned until (\d+)/)?.[1];
-          if(until){_bnBannedUntil=+until;console.warn('Binance ban until',new Date(_bnBannedUntil));}
-          else _bnBannedUntil=Date.now()+60000;
-          rj(new Error('RATE_LIMIT'));return;
-        }
-        if(!r.ok){rj(new Error('HTTP '+r.status));return;}
-        rs(data);
-      }).catch(e=>{clearTimeout(t);rj(e);});
-    });
-    const attempt=(n)=>{
-      _reqQueue.push({fn:doFetch,res:rs=>{res(rs);},rej:e=>{
-        if(e.message==='RATE_LIMIT'&&n>0){
-          setTimeout(()=>attempt(n-1), 5000+Math.random()*5000);
-        } else { rej(e); }
-      }});
-      _runQueue();
-    };
-    attempt(retries);
+    const t=setTimeout(()=>rej(new Error('Timeout')),timeout);
+    fetch(url).then(r=>{clearTimeout(t);if(!r.ok)rej(new Error('HTTP '+r.status));else r.json().then(res).catch(rej);}).catch(e=>{clearTimeout(t);rej(e);});
   });
 }
 function parseKlines(raw){return raw.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5],tr:+k[8],qv:+k[7]}));}
-async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
+async function batchKlines(syms,iv,lim,pFrom,pTo,bs=20){
   const out={};
   for(let i=0;i<syms.length;i+=bs){
     const batch=syms.slice(i,i+bs);
     const results=await Promise.allSettled(batch.map(s=>fj(`${API}/klines?symbol=${s}&interval=${iv}&limit=${lim}`).then(d=>[s,parseKlines(d)])));
     for(const r of results)if(r.status==='fulfilled')out[r.value[0]]=r.value[1];
     if(pFrom!=null)ldSet(null,pFrom+Math.round((i/syms.length)*(pTo-pFrom)),`${iv}: ${Math.min(i+bs,syms.length)}/${syms.length}`);
-    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,300+Math.random()*200));
   }
   return out;
 }
@@ -458,7 +409,6 @@ function buildChartGrid(){
     g.insertAdjacentHTML('beforeend',`
       <div class="ccell" id="cc${i}">
         <div class="chead">
-          <span class="chart-cg-dot cg-dot" id="cgd${i}" title="Цветовая группа" onclick="showChartGroupPicker(S.charts[${i}].sym,this)"></span>
           <span class="csym" id="cs${i}" title="Нажмите для копирования" onclick="copyTicker(this.textContent)" style="cursor:pointer">—</span>
           <span class="cprc" id="cp${i}"></span>
           <span class="cchg" id="cg${i}"></span>
@@ -485,18 +435,14 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const containerId=isFs?`fsChartEl${fsIdx}`:`cb${slot}`;
   const container=document.getElementById(containerId);
   if(!container)return false;
-  if(ch._ro){try{ch._ro.disconnect();}catch(e){}ch._ro=null;}
-  if(ch.lc){try{ch.lc.remove();}catch(e){}ch.lc=null;ch.cs=null;ch.vs=null;}
+  if(ch.lc){try{ch.lc.remove();}catch(e){}}
   if(ch._ab)ch._ab.abort();
   container.innerHTML='';
 
   const lc=S.LC.createChart(container,{
     layout:{background:{color:'#0a0a0b'},textColor:'#404050'},
     grid:{vertLines:{color:'#141418'},horzLines:{color:'#141418'}},
-    crosshair:{
-      vertLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#1c1c22',labelVisible:false},
-      horzLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#1c1c22',labelVisible:false}
-    },
+    crosshair:{vertLine:{color:'#33333f',width:1,style:1,labelBackgroundColor:'#1c1c22'},horzLine:{color:'#33333f',width:1,style:1,labelBackgroundColor:'#1c1c22'}},
     rightPriceScale:{borderColor:'#252530',textColor:'#606070'},
     timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false},
     handleScroll:{mouseWheel:true,pressedMouseMove:true},
@@ -527,27 +473,6 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   interact.addEventListener('mousemove',e=>onInteractMove(ch,e,container));
   interact.addEventListener('click',e=>onInteractClick(ch,e,container));
   interact.addEventListener('dblclick',e=>onInteractDblClick(ch,e,container));
-  // Brush: draw on mousedown+drag
-  interact.addEventListener('mousedown',e=>{
-    if(e.button!==0||S.drawMode!=='brush')return;
-    e.preventDefault();
-    const{x,y}=getCoords(container,e.clientX,e.clientY);
-    const pt=pixelToPoint(ch,x,y);if(!pt)return;
-    const stroke={id:++S.drawIdCounter,type:'brush',pts:[pt],color:_brushColor,width:_brushWidth,opacity:0.85};
-    ch.drawings.push(stroke);
-    ch._brushStroke=stroke;
-  });
-  interact.addEventListener('mousemove',e=>{
-    if(!ch._brushStroke||S.drawMode!=='brush')return;
-    const{x,y}=getCoords(container,e.clientX,e.clientY);
-    const pt=pixelToPoint(ch,x,y);if(!pt)return;
-    ch._brushStroke.pts.push(pt);
-    rCanvas(ch);
-  });
-  interact.addEventListener('mouseup',e=>{
-    if(e.button!==0)return;
-    ch._brushStroke=null;
-  });
   interact.addEventListener('contextmenu',e=>{
     e.preventDefault();
     if(S.drawMode){setDrawMode(null);return;} // #10: RMB exits draw mode
@@ -562,11 +487,10 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     ch.hoverX=x;ch.hoverY=y;
     const prev=ch.hoveredIdx;
     ch.hoveredIdx=findDrawingNear(ch,x,y);
-    if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;rCanvas(ch);});}
+    if(ch.hoveredIdx!==prev)rCanvas(ch);
   },{signal:sig});
   container.addEventListener('mouseleave',()=>{
     ch.hoveredIdx=-1;
-    ch.hoverX=0;ch.hoverY=0;
     rCanvas(ch);
   },{signal:sig});
   container.addEventListener('mousedown',e=>{if(e.button===1){e.preventDefault();onRulerStart(ch,e,container);}},{capture:true,signal:sig});
@@ -640,15 +564,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(ch.interact&&!S.drawMode)ch.interact.style.pointerEvents='';
   },{capture:true,signal:sig});
 
-  // Store ro on ch so initLCChart can disconnect it before lc.remove()
-  if(ch._ro){try{ch._ro.disconnect();}catch(e){}}
   const ro=new ResizeObserver(()=>{
-    if(!ch.lc||!ch.cs)return; // guard: chart already disposed
     try{canvas.width=container.clientWidth;canvas.height=container.clientHeight;
-      ch.lc.resize(container.clientWidth,container.clientHeight);rCanvas(ch);}catch(e){}
+      lc.resize(container.clientWidth,container.clientHeight);rCanvas(ch);}catch(e){}
   });
   ro.observe(container);
-  ch._ro=ro;
 
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
     if(range&&range.from<HIST_TRIGGER){
@@ -721,9 +641,6 @@ function updateChartHeader(slot,sym){
   document.getElementById(`ctd${slot}`).innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const corVal=m.corr14??m.corr;
   document.getElementById(`cco${slot}`).innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
-  // Update color dot
-  const dot=document.getElementById(`cgd${slot}`);
-  if(dot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';dot.style.background=col||'var(--bg4)';dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';dot.style.display=sym?'':'none';}
 }
 
 async function loadMoreHistory(slot){
@@ -957,7 +874,7 @@ const PRICE_AXIS_W=65;
 
 // ── Render canvas ──────────────────────────────────────────────
 function rCanvas(ch){
-  const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
+  const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs)return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
   // #3: clip drawing area so we don't overdraw the price axis
@@ -971,7 +888,6 @@ function rCanvas(ch){
     else if(d.type==='tline')drawTLine(ctx,ch,d,hov);
     else if(d.type==='aray')drawAlertRay(ctx,ch,d,drawW,hov);
     else if(d.type==='atline')drawAlertTLine(ctx,ch,d,hov);
-    else if(d.type==='brush')drawBrushStroke(ctx,ch,d,hov);
   });
   if(ch.pendingP1&&(S.drawMode==='tline'||S.drawMode==='atline')){
     const x1=timeToCoordX(ch,ch.pendingP1.time);
@@ -984,67 +900,31 @@ function rCanvas(ch){
   }
   if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
-  // Custom crosshair: always visible when cursor is on chart
-  // In cursor mode: free (no snap). In draw mode or Ctrl: snap to candle OHLC
-  if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
+  // #5: custom crosshair (shown in draw mode or when Ctrl held, outside price axis)
+  if((S.drawMode||_ctrlHeld)&&ch.hoverX>0&&ch.hoverX<drawW){
     drawCustomCrosshair(ctx,ch,drawW,H);
   }
 }
 
-// Custom crosshair drawn on canvas
-// - Cursor mode, no Ctrl: free (grey, no snap)
-// - Ctrl held or draw mode: snap to candle OHLC (blue dot)
+// #5: Custom crosshair drawn on canvas (shown in draw mode / Ctrl)
 function drawCustomCrosshair(ctx,ch,W,H){
   const x=ch.hoverX,y=ch.hoverY;
-  const shouldSnap=_ctrlHeld;
-  const snapped=shouldSnap?snapPoint(ch,x,y,true):null;
+  const snapped=_ctrlHeld?snapPoint(ch,x,y,true):null;
   const dx=snapped?(timeToCoordX(ch,snapped.time)??x):x;
   const dy=snapped?(ch.cs.priceToCoordinate(snapped.price)??y):y;
-  const col=snapped?'#3b82f6aa':'#60607088';
   ctx.save();
   ctx.setLineDash([3,3]);
-  ctx.strokeStyle=col;
+  ctx.strokeStyle=snapped?'#3b82f6aa':'#60607080';
   ctx.lineWidth=1;
+  // Horizontal
   ctx.beginPath();ctx.moveTo(0,dy);ctx.lineTo(W,dy);ctx.stroke();
+  // Vertical
   ctx.beginPath();ctx.moveTo(dx,0);ctx.lineTo(dx,H);ctx.stroke();
   ctx.setLineDash([]);
-  // Price label
-  const price=snapped?snapped.price:ch.cs?.coordinateToPrice(y);
-  if(price!=null){
-    const label=fmtPrice(price);
-    ctx.font='9px JetBrains Mono,monospace';
-    const tw=ctx.measureText(label).width+8;
-    ctx.fillStyle=snapped?'#3b82f6':'#252530';
-    ctx.fillRect(W-tw-2,dy-9,tw+2,14);
-    ctx.fillStyle=snapped?'#fff':'#80809a';
-    ctx.textAlign='right';ctx.fillText(label,W-4,dy+1);ctx.textAlign='left';
-  }
   if(snapped){
     ctx.beginPath();ctx.fillStyle='#3b82f6';ctx.arc(dx,dy,4,0,Math.PI*2);ctx.fill();
-  }
-  // Time label on X axis
-  if(ch.lc){
-    let time=ch.lc.timeScale().coordinateToTime(dx);
-    if(!time&&ch.candles.length>=2){
-      const ts=ch.lc.timeScale();
-      const last=ch.candles[ch.candles.length-1];
-      const prev=ch.candles[ch.candles.length-2];
-      const t1=toChartTime(prev.t),t2=toChartTime(last.t);
-      const x1=ts.timeToCoordinate(t1),x2=ts.timeToCoordinate(t2);
-      if(x1!=null&&x2!=null&&Math.abs(x2-x1)>0){const spp=(t2-t1)/(x2-x1);time=Math.round(t2+(dx-x2)*spp);}
-    }
-    if(time){
-      const d=new Date((time-TZ_OFFSET_S)*1000);
-      const pad=n=>n.toString().padStart(2,'0');
-      const tStr=`${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
-      ctx.save();ctx.font='9px JetBrains Mono,monospace';
-      const tw=ctx.measureText(tStr).width+8;
-      const lx=Math.min(Math.max(dx-tw/2,0),W-tw);
-      ctx.fillStyle=snapped?'#3b82f6':'#1c1c28';
-      ctx.fillRect(lx,H-14,tw,14);
-      ctx.fillStyle=snapped?'#fff':'#80809a';
-      ctx.textAlign='left';ctx.fillText(tStr,lx+4,H-4);ctx.restore();
-    }
+    ctx.font='9px JetBrains Mono,monospace';ctx.fillStyle='#3b82f6cc';
+    ctx.textAlign='right';ctx.fillText(fmtPrice(snapped.price),W-2,dy-4);ctx.textAlign='left';
   }
   ctx.restore();
 }
@@ -1166,33 +1046,6 @@ function drawAlertTLine(ctx,ch,d,hov){
   ctx.restore();
 }
 
-// ── Brush stroke ──────────────────────────────────────────────
-function drawBrushStroke(ctx,ch,d,hov){
-  if(!d.pts||d.pts.length<2)return;
-  if(!ch.cs||!ch.lc)return;
-  ctx.save();
-  ctx.strokeStyle=d.color||'#f97316';
-  ctx.lineWidth=hov?d.width*1.5+1:d.width||2;
-  ctx.lineCap='round';ctx.lineJoin='round';
-  if(hov){ctx.shadowColor=d.color||'#f97316';ctx.shadowBlur=6;}
-  ctx.globalAlpha=d.opacity||0.85;
-  ctx.beginPath();
-  let started=false;
-  for(const p of d.pts){
-    const px=timeToCoordX(ch,p.time);
-    const py=ch.cs.priceToCoordinate(p.price);
-    if(px==null||py==null)continue;
-    if(!started){ctx.moveTo(px,py);started=true;}
-    else ctx.lineTo(px,py);
-  }
-  ctx.stroke();
-  ctx.restore();
-}
-
-// Current brush color (shared across charts)
-let _brushColor='#f97316';
-let _brushWidth=2;
-
 // ── Alert Sound ────────────────────────────────────────────────
 let _alertCtx=null;
 function playAlert(freq=880){
@@ -1313,7 +1166,7 @@ function showAlertPctInput(ch,drawing,container){
 function onInteractMove(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   ch.hoverX=x;ch.hoverY=y;
-  if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;rCanvas(ch);});}
+  if(S.drawMode||_ctrlHeld)requestAnimationFrame(()=>rCanvas(ch));
 }
 
 // #6: dblclick in draw mode on an existing alert → edit %
@@ -1355,13 +1208,10 @@ function onInteractClick(ch,e,container){
 
 function setDrawMode(mode){
   S.drawMode=mode;
-  [['draw-none',null],['draw-hray','hray'],['draw-tline','tline'],['draw-brush','brush'],['draw-aray','aray'],['draw-atline','atline'],
-   ['fs-draw-none',null],['fs-draw-hray','hray'],['fs-draw-tline','tline'],['fs-draw-brush','brush'],['fs-draw-aray','aray'],['fs-draw-atline','atline']].forEach(([id,m])=>{
+  [['draw-none',null],['draw-hray','hray'],['draw-tline','tline'],['draw-aray','aray'],['draw-atline','atline'],
+   ['fs-draw-none',null],['fs-draw-hray','hray'],['fs-draw-tline','tline'],['fs-draw-aray','aray'],['fs-draw-atline','atline']].forEach(([id,m])=>{
     const el=document.getElementById(id);if(el)el.classList.toggle('on',m===mode);
   });
-  // Show/hide brush palette
-  const bp=document.getElementById('brushPalette');
-  if(bp)bp.classList.toggle('visible',mode==='brush');
   const allCharts=[...S.charts,...S.fsCharts];
   allCharts.forEach(ch=>{
     ch.pendingP1=null;
@@ -1373,7 +1223,6 @@ function setDrawMode(mode){
       null:'Топ-9 · колёсико=линейка · ПКМ=удалить нарисованное · Ctrl=магнит · ЛКМ на точке=перетащить · ДблКлик=редактировать%',
       hray:'Горизонтальный луч: клик · ПКМ=выйти в курсор · Ctrl+клик=магнит · ДблКлик на линии=% алерта',
       tline:'Трендовая линия: 2 клика · ПКМ=выйти в курсор · Ctrl+клик=магнит',
-      brush:'Кисть: зажми и веди · ПКМ=выйти в курсор · выбери цвет и толщину ниже',
       aray:'Алерт-луч: клик → введите % · ПКМ=выйти в курсор · ДблКлик на линии=изменить%',
       atline:'Алерт-линия: 2 клика → введите % · ПКМ=выйти в курсор'
     };
@@ -1428,56 +1277,14 @@ function updateRulerTooltip(ch){
   const pct=(r.p2.price-r.p1.price)/r.p1.price*100;
   const isUp=pct>=0;const col=isUp?'#1fa891':'#e04040';
   const tMin=(Math.min(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000,tMax=(Math.max(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000;
-  let bars=0,vol=0,sumTr=0;
-  const rangeCl=[];
-  for(const c of ch.candles)if(c.t>=tMin&&c.t<=tMax){bars++;vol+=c.qv;sumTr+=c.tr||0;rangeCl.push(c);}
-
-  // NATR of the range
-  let natrTxt='—';
-  if(rangeCl.length>=2){
-    const natr=calcNATR(rangeCl,rangeCl.length-1);
-    if(natr!=null)natrTxt=fn(natr,2)+'%';
-  }
-
-  // Volume spike: avg vol of range candles vs avg of preceding N candles
-  let vrTxt='—', trTxt='—';
-  if(rangeCl.length>0&&ch.candles.length>bars){
-    const idx0=ch.candles.findIndex(c=>c.t===rangeCl[0].t);
-    if(idx0>0){
-      const preN=Math.min(idx0,bars*3,50);
-      const pre=ch.candles.slice(Math.max(0,idx0-preN),idx0);
-      if(pre.length>0){
-        const avgVol=pre.reduce((s,c)=>s+c.qv,0)/pre.length;
-        const avgTr=pre.reduce((s,c)=>s+(c.tr||0),0)/pre.length;
-        const rangeAvgVol=vol/rangeCl.length;
-        const rangeAvgTr=sumTr/rangeCl.length;
-        if(avgVol>0)vrTxt=fn(rangeAvgVol/avgVol,2)+'×';
-        if(avgTr>0)trTxt=fn(rangeAvgTr/avgTr,2)+'×';
-      }
-    }
-  }
-
+  let bars=0,vol=0;
+  for(const c of ch.candles)if(c.t>=tMin&&c.t<=tMax){bars++;vol+=c.qv;}
   document.getElementById('rtPct').textContent=(isUp?'+':'')+pct.toFixed(3)+'%';
   document.getElementById('rtPct').style.color=col;
   document.getElementById('rtBars').textContent=`Баров: ${bars}`;
   document.getElementById('rtTime').textContent=`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`;
   document.getElementById('rtVol').textContent=`Объём: ${fk(vol)} USDT`;
-  // Candle-based change: open of first candle → close of last candle in range
-  let cndPctTxt='—';
-  if(rangeCl.length>=1){
-    const openPrice=rangeCl[0].o;
-    const closePrice=rangeCl[rangeCl.length-1].c;
-    const cndPct=(closePrice-openPrice)/openPrice*100;
-    const cndCol=cndPct>=0?'#1fa891':'#e04040';
-    document.getElementById('rtNatr').textContent=`Свечи: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`;
-    document.getElementById('rtNatr').style.color=cndCol;
-  } else {
-    document.getElementById('rtNatr').textContent='Свечи: —';
-    document.getElementById('rtNatr').style.color='';
-  }
-  document.getElementById('rtVr').textContent=`NATR: ${natrTxt}`;
-  document.getElementById('rtTr').textContent=`ОБ*: ${vrTxt}  СД*: ${trTxt}`;
-  const tw=175,th=120;
+  const tw=165,th=80;
   tt.style.left=Math.min(r.mouseX+18,window.innerWidth-tw-8)+'px';
   tt.style.top=Math.max(r.mouseY-th-8,4)+'px';
   tt.style.display='block';
@@ -1491,49 +1298,6 @@ document.addEventListener('keydown',e=>{
       rCanvas(ch);
     });
   }
-});
-
-// FIX 7: Reconnect WebSocket and refresh candles after tab was hidden (sleep/background)
-let _lastHiddenAt=0;
-document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){_lastHiddenAt=Date.now();return;}
-  const hiddenMs=Date.now()-_lastHiddenAt;
-  if(hiddenMs<10000)return; // ignore short switches
-  console.log(`Tab back, was hidden ${Math.round(hiddenMs/1000)}s — reconnecting WS & refreshing candles`);
-  // Reconnect all WS
-  if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
-  if(S.wsScreener){try{S.wsScreener.close();}catch(e){}}
-  // Reload last candle for each visible chart to patch gap
-  S.charts.forEach(async ch=>{
-    if(!ch.sym||!ch.cs||!ch.candles.length)return;
-    try{
-      const raw=await fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=10`);
-      const nc=parseKlines(raw);
-      if(!ch.cs||!ch.lc)return;
-      // Append/update recent candles
-      for(const c of nc){
-        const last=ch.candles[ch.candles.length-1];
-        if(c.t===last?.t)ch.candles[ch.candles.length-1]=c;
-        else if(c.t>last?.t)ch.candles.push(c);
-      }
-      ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-      ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-      rCanvas(ch);
-    }catch(e){}
-  });
-  // Similarly for FS charts
-  if(S.fsOpen)S.fsCharts.forEach(async(fch,idx)=>{
-    if(!S.fsSym||!fch.cs||!fch.candles.length)return;
-    try{
-      const raw=await fj(`${API}/klines?symbol=${S.fsSym}&interval=${fch.tf}&limit=10`);
-      const nc=parseKlines(raw);if(!fch.cs)return;
-      for(const c of nc){const last=fch.candles[fch.candles.length-1];if(c.t===last?.t)fch.candles[fch.candles.length-1]=c;else if(c.t>last?.t)fch.candles.push(c);}
-      fch.cs.setData(fch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-      fch.vs.setData(fch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-      rCanvas(fch);
-    }catch(e){}
-  });
-  setTimeout(()=>{startChartWS();startScreenerWS();},500);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1588,7 +1352,6 @@ function startScreenerWS(){
         if(S.mx[t.s]){S.mx[t.s].price=+t.c;S.mx[t.s].ch24=+t.P;S.mx[t.s].vol24=+t.q;S.mx[t.s].trd24=+t.n||S.mx[t.s].trd24;}
       }
       scheduleRender();updTime();
-      if(document.hidden)return; // skip heavy DOM work when tab not visible
     if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym]){
       const t=S.tk[S.fsSym];const m=S.mx[S.fsSym]||{};
       document.getElementById('fsPrc').textContent=fmtPrice(t.p);
@@ -1633,7 +1396,7 @@ function buildScreenerHeader(hdrEl){
 function sortedRows(){
   let rows=Object.values(S.mx);
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
-  if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
+  if(S.minVol>0)rows=rows.filter(r=>r.vol24!=null&&r.vol24>=S.minVol*1e6);
   // #9: group filter
   if(S.activeGroupFilter>0)rows=rows.filter(r=>getSymGroup(r.sym)===S.activeGroupFilter);
   rows.sort((a,b)=>{
@@ -1656,13 +1419,10 @@ function renderScreenerInto(bodyEl,rows){
   const pageSyms=new Set(rows.slice(start,start+S.charts.length).map(r=>r.sym));
   const cols=activeCols();
 
-  // Fast-path: update cells in-place only when sym order AND cols unchanged
+  // Fast-path: if rows & cols match, update cells in-place (no DOM rebuild)
   const existingRows=bodyEl.querySelectorAll('.srow');
   const colsKey=cols.map(c=>c.id).join(',');
-  const symOrder=rows.map(r=>r.sym).join(',');
-  if(existingRows.length===rows.length
-    && bodyEl.dataset.colsKey===colsKey
-    && bodyEl.dataset.symOrder===symOrder){
+  if(existingRows.length===rows.length && bodyEl.dataset.colsKey===colsKey){
     rows.forEach((m,idx)=>{
       const row=existingRows[idx];
       if(!row)return;
@@ -1671,20 +1431,6 @@ function renderScreenerInto(bodyEl,rows){
       // Update row class
       const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
       if(row.className!==newCls)row.className=newCls;
-      // Update color dot in screener (Fix #5)
-      const gdot=row.querySelector('.cg-dot');
-      if(gdot){
-        const nc=grpCol||'var(--bg4)';
-        const nb=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
-        if(gdot.style.background!==nc)gdot.style.background=nc;
-        if(gdot.style.borderColor!==nb)gdot.style.borderColor=nb;
-      }
-      // Update color stripe
-      let stripe=row.querySelector('.cg-badge');
-      if(grpCol){
-        if(!stripe){stripe=document.createElement('div');stripe.className='cg-badge';row.prepend(stripe);}
-        stripe.style.background=grpCol;stripe.style.opacity='0.7';
-      } else if(stripe){stripe.remove();}
       // Update metric cells
       const cells=row.querySelectorAll('.mc');
       cols.forEach((c,ci)=>{
@@ -1699,9 +1445,8 @@ function renderScreenerInto(bodyEl,rows){
     return;
   }
 
-  // Full rebuild
+  // Full rebuild (first load, column change, or row count change)
   bodyEl.dataset.colsKey=colsKey;
-  bodyEl.dataset.symOrder=symOrder;
   const frag=document.createDocumentFragment();
   for(const m of rows){
     const grp=getSymGroup(m.sym);
@@ -1739,15 +1484,13 @@ function renderScreenerInto(bodyEl,rows){
 }
 
 let _rt=null;
-// Throttle renders: use rAF-based idle scheduling instead of fixed timeout
+// Use requestIdleCallback if available — browser picks a free moment between frames
 const _schedFn = typeof requestIdleCallback !== 'undefined'
-  ? (cb) => requestIdleCallback(cb, {timeout:400})
-  : (cb) => requestAnimationFrame(cb);
-let _renderScheduled=false;
+  ? (cb) => requestIdleCallback(cb, {timeout:600})
+  : (cb) => setTimeout(cb, 500);
 function scheduleRender(){
-  if(_renderScheduled)return;
-  _renderScheduled=true;
-  _schedFn(()=>{_renderScheduled=false;if(!_scrolling&&!document.hidden)renderTable();});
+  if(_rt)return;
+  _rt=_schedFn(()=>{_rt=null;if(!_scrolling)renderTable();});
 }
 // Skip DOM rebuild while user is scrolling the screener
 let _scrolling=false,_scrollEnd=null;
@@ -2097,60 +1840,29 @@ function buildGroupFilterBar(){
 }
 
 function showGroupPicker(sym,anchorEl){
-  // Auto-assign to last used group (or remove if already in that group)
-  const cur=getSymGroup(sym);
-  const target=S.lastGroupUsed||1;
-  if(cur===target){setSymGroup(sym,0);}
-  else{setSymGroup(sym,target);S.lastGroupUsed=target;}
-  // Show quick-change picker so user can pick a different color
-  showQuickGroupChanger(sym,anchorEl);
-}
-
-function showChartGroupPicker(sym,anchorEl){
-  if(!sym)return;
-  showGroupPicker(sym,anchorEl);
-}
-
-function showQuickGroupChanger(sym,anchorEl){
   const old=document.getElementById('cgroupPicker');if(old)old.remove();
   const r=anchorEl.getBoundingClientRect();
   const pick=document.createElement('div');
   pick.id='cgroupPicker';
   pick.style.cssText=`position:fixed;z-index:600;left:${r.left}px;top:${r.bottom+4}px;
-    background:var(--bg3);border:1px solid var(--border2);border-radius:6px;
-    padding:6px 8px;display:flex;flex-direction:column;gap:5px;
+    background:var(--bg3);border:1px solid var(--border2);border-radius:5px;
+    padding:6px 8px;display:flex;gap:6px;align-items:center;
     box-shadow:0 4px 16px rgba(0,0,0,.6)`;
-  // Label
-  const lbl=document.createElement('div');lbl.style.cssText='font-size:9px;color:var(--text3);padding-bottom:2px;border-bottom:1px solid var(--border);';
-  lbl.textContent='Изменить группу:';pick.appendChild(lbl);
-  // Color row
-  const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;';
   // "none" option
   const none=document.createElement('div');
   none.className='cg-dot';none.style.background='var(--bg4)';none.style.borderColor='var(--border2)';
-  none.title='Снять группу';
-  if(getSymGroup(sym)===0)none.style.outline='2px solid #fff';
-  none.onclick=()=>{setSymGroup(sym,0);pick.remove();syncAllGroupDots(sym);};
-  row.appendChild(none);
+  none.title='Снять группу';none.onclick=()=>{setSymGroup(sym,0);pick.remove();};
+  pick.appendChild(none);
   for(let g=1;g<=7;g++){
     const dot=document.createElement('div');dot.className='cg-dot';
     dot.style.background=GROUP_COLORS[g];
-    if(getSymGroup(sym)===g)dot.style.outline='2px solid #fff';
-    dot.title=`Группа ${g} · нажмите чтобы установить`;
-    dot.onclick=()=>{S.lastGroupUsed=g;setSymGroup(sym,g);pick.remove();syncAllGroupDots(sym);};
-    row.appendChild(dot);
+    const cur=getSymGroup(sym);
+    if(cur===g)dot.style.outline='2px solid #fff';
+    dot.title=`Группа ${g}`;dot.onclick=()=>{setSymGroup(sym,g);pick.remove();};
+    pick.appendChild(dot);
   }
-  pick.appendChild(row);
   document.body.appendChild(pick);
   setTimeout(()=>document.addEventListener('mousedown',function h(e){if(!pick.contains(e.target)){pick.remove();document.removeEventListener('mousedown',h);}},true),50);
-}
-
-// Sync all visible dots (chart headers + FS) after a group change
-function syncAllGroupDots(sym){
-  S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
-  const fsCgDot=document.getElementById('fsCgDot');
-  if(fsCgDot&&S.fsSym===sym){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
-  buildGroupFilterBar();
 }
 
 function openGroupManager(g){
@@ -2218,7 +1930,7 @@ function toggleScreener(){
   }
   const btn=document.getElementById('toggleScrBtn');
   if(btn){btn.textContent=(S.screenerVisible?'◀':'▶')+' Список';btn.classList.toggle('on',S.screenerVisible);}
-  setTimeout(()=>{S.charts.forEach((ch,i)=>{const cb=document.getElementById(`cb${i}`);if(cb&&ch.lc&&ch.cs){try{ch.lc.resize(cb.clientWidth,cb.clientHeight);ch.canvas.width=cb.clientWidth;ch.canvas.height=cb.clientHeight;rCanvas(ch);}catch(e){}}});},60);
+  setTimeout(()=>{S.charts.forEach((ch,i)=>{const cb=document.getElementById(`cb${i}`);if(cb&&ch.lc){try{ch.lc.resize(cb.clientWidth,cb.clientHeight);ch.canvas.width=cb.clientWidth;ch.canvas.height=cb.clientHeight;rCanvas(ch);}catch(e){}}});},60);
   if(S.screenerVisible)renderTable();
 }
 
@@ -2237,7 +1949,7 @@ function toggleFsScreener(){
   }
   const btn=document.getElementById('fsToggleScrBtn');
   if(btn){btn.textContent=(S.fsScreenerVisible?'◀':'▶')+' Список';btn.classList.toggle('on',S.fsScreenerVisible);}
-  setTimeout(()=>{S.fsCharts.forEach((fch,i)=>{const el=document.getElementById(`fsChartEl${i}`);if(el&&fch.lc&&fch.cs){try{fch.lc.resize(el.clientWidth,el.clientHeight);fch.canvas.width=el.clientWidth;fch.canvas.height=el.clientHeight;rCanvas(fch);}catch(e){}}});},60);
+  setTimeout(()=>{S.fsCharts.forEach((fch,i)=>{const el=document.getElementById(`fsChartEl${i}`);if(el&&fch.lc){try{fch.lc.resize(el.clientWidth,el.clientHeight);fch.canvas.width=el.clientWidth;fch.canvas.height=el.clientHeight;rCanvas(fch);}catch(e){}}});},60);
   if(S.fsScreenerVisible)renderTable();
 }
 
@@ -2480,9 +2192,6 @@ function openFullscreenBySym(sym){
   S.fsSym=sym;S.fsOpen=true;
   document.getElementById('fsView').classList.add('open');
   document.getElementById('fsSym').textContent=sym.replace(/USDT$/,'');
-  // Update FS color dot
-  const fsCgDot=document.getElementById('fsCgDot');
-  if(fsCgDot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
   const t=S.tk[sym]||{};const m=S.mx[sym]||{};
   document.getElementById('fsPrc').textContent=fmtPrice(t.p);
   const ce=document.getElementById('fsChg');
@@ -2616,270 +2325,7 @@ async function main(){
 }
 
 // ═══════════════════════════════════════════════════════════════
-//  POTENTIAL MONITOR — multi-preset tabbed system
-// ═══════════════════════════════════════════════════════════════
-const POT_FIELDS=[
-  {id:'ch24',   label:'ИЗМ 24ч %',  unit:'%',  step:0.5},
-  {id:'cday',   label:'ИЗМ день %', unit:'%',  step:0.5},
-  {id:'vr5',    label:'ОБ* 5м',     unit:'×',  step:0.1},
-  {id:'vr1h',   label:'ОБ* 1ч',     unit:'×',  step:0.1},
-  {id:'tr5',    label:'СД* 5м',     unit:'×',  step:0.1},
-  {id:'tr1h',   label:'СД* 1ч',     unit:'×',  step:0.1},
-  {id:'na14',   label:'NATR 5м',    unit:'%',  step:0.01},
-  {id:'na30',   label:'NATR 1м',    unit:'%',  step:0.01},
-  {id:'vol24',  label:'Объём 24ч',  unit:'M$', step:10},
-];
-
-let _potActiveTab=null; // preset id
-
-function togglePotentialPanel(){
-  const p=document.getElementById('potentialPanel');
-  if(!p)return;
-  const vis=p.style.display==='none'||p.style.display==='';
-  p.style.display=vis?'flex':'none';
-  const btn=document.getElementById('potBtn');if(btn)btn.classList.toggle('on',vis);
-  if(vis)renderPotentialPanel();
-}
-
-function renderPotentialPanel(){
-  const panel=document.getElementById('potentialPanel');if(!panel)return;
-  // Tabs bar
-  let tabBar=panel.querySelector('.pot-tab-bar');
-  if(!tabBar){tabBar=document.createElement('div');tabBar.className='pot-tab-bar';panel.querySelector('.pot-hdr').after(tabBar);}
-  tabBar.innerHTML='';
-  S.potentialPresets.forEach(pr=>{
-    const tab=document.createElement('button');
-    tab.className='pot-tab'+(pr.id===_potActiveTab?' active':'');
-    const cnt=Object.keys(pr.matches||{}).length;
-    tab.innerHTML=`<span>${pr.name}</span>${cnt?`<span class="pot-tab-cnt">${cnt}</span>`:''}`;
-    tab.onclick=()=>{_potActiveTab=pr.id;renderPotentialPanel();};
-    tabBar.appendChild(tab);
-  });
-  // Add button
-  const addBtn=document.createElement('button');
-  addBtn.className='pot-tab pot-tab-add';addBtn.title='Добавить пресет';addBtn.textContent='＋';
-  addBtn.onclick=()=>openPotPresetEditor(null);
-  tabBar.appendChild(addBtn);
-
-  // Body area
-  let body=panel.querySelector('.pot-body');
-  if(!body){body=document.createElement('div');body.className='pot-body';panel.appendChild(body);}
-  body.innerHTML='';
-
-  const pr=S.potentialPresets.find(p=>p.id===_potActiveTab);
-  if(!pr){
-    body.innerHTML='<div class="pot-empty">Нажми ＋ чтобы добавить пресет с условиями</div>';
-    return;
-  }
-
-  // Preset controls
-  const ctrl=document.createElement('div');ctrl.className='pot-preset-ctrl';
-  ctrl.innerHTML=`
-    <span style="font-size:9px;color:var(--text3);flex:1">${pr.conditions.length} условий</span>
-    <button class="tbtn${pr.enabled?' on':''}" onclick="togglePotPreset('${pr.id}')">${pr.enabled?'● Вкл':'○ Выкл'}</button>
-    <button class="tbtn" onclick="openPotPresetEditor('${pr.id}')" title="Редактировать">✎</button>
-    <button class="tbtn" onclick="deletePotPreset('${pr.id}')" style="color:var(--red)" title="Удалить">✕</button>`;
-  body.appendChild(ctrl);
-
-  // Conditions summary
-  if(pr.conditions.length){
-    const cond=document.createElement('div');cond.className='pot-cond-summary';
-    cond.innerHTML=pr.conditions.map(c=>{
-      const f=POT_FIELDS.find(x=>x.id===c.field);
-      const parts=[];
-      if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
-      if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
-      return`<span class="pot-cond-tag">${f?.label||c.field} ${parts.join(' ')}</span>`;
-    }).join('');
-    body.appendChild(cond);
-  }
-
-  // Matches list
-  const listEl=document.createElement('div');listEl.className='pot-list';
-  const matches=Object.entries(pr.matches||{}).sort((a,b)=>b[1].ts-a[1].ts);
-  if(!matches.length){
-    listEl.innerHTML=`<div class="pot-empty">${pr.enabled?'Совпадений нет — ждём…':'Мониторинг выключен'}</div>`;
-  } else {
-    matches.forEach(([sym,d])=>{
-      const sn=sym.replace(/USDT$/,'');
-      const m=S.mx[sym]||{};
-      const col=(m.ch24??0)>=0?'#1fa891':'#e04040';
-      const grp=getSymGroup(sym);const grpCol=GROUP_COLORS[grp]||'';
-      const item=document.createElement('div');item.className='pot-item';
-      item.onclick=()=>openFullscreenBySym(sym);
-      const tags=pr.conditions.map(c=>{
-        const f=POT_FIELDS.find(x=>x.id===c.field);
-        const val=m[c.field];
-        const fmt=c.field==='vol24'?fk(val):(val!=null?fn(val,2):'—');
-        return`<span class="pot-tag">${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit||''}</span>`;
-      }).join('');
-      item.innerHTML=`
-        ${grpCol?`<span style="width:3px;align-self:stretch;background:${grpCol};border-radius:2px;flex-shrink:0"></span>`:''}
-        <span class="pot-sym">${sn}</span>
-        <span style="color:${col};font-weight:600;font-size:10px">${(m.ch24??0)>=0?'+':''}${fn(m.ch24,2)}%</span>
-        ${tags}
-        <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(m.price)}</span>`;
-      listEl.appendChild(item);
-    });
-  }
-  body.appendChild(listEl);
-}
-
-function openPotPresetEditor(presetId){
-  const existing=presetId?S.potentialPresets.find(p=>p.id===presetId):null;
-  const old=document.getElementById('potPresetModal');if(old)old.remove();
-  const modal=document.createElement('div');modal.id='potPresetModal';
-  modal.style.cssText='position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;';
-  const box=document.createElement('div');
-  box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:340px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.8)';
-
-  // Working copy of conditions
-  const wCond=(existing?.conditions||[]).map(c=>({...c}));
-
-  const render=()=>{
-    box.innerHTML=`
-      <div style="display:flex;align-items:center;padding:12px 14px;border-bottom:1px solid var(--border);flex-shrink:0;gap:8px">
-        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${existing?'Редактировать':'Новый'} пресет</span>
-        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('potPresetModal').remove()">✕</button>
-      </div>
-      <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <label style="font-size:9px;color:var(--text3);display:block;margin-bottom:4px">НАЗВАНИЕ</label>
-        <input id="potPresetName" value="${existing?.name||''}" placeholder="Например: Импульс роста"
-          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:5px 8px;outline:none">
-      </div>
-      <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:space-between">
-        <span style="font-size:10px;color:var(--text2)">Условия (ВСЕ должны совпасть)</span>
-        <button class="tbtn" id="potAddCond">＋ Условие</button>
-      </div>
-      <div id="potCondList" style="flex:1;overflow-y:auto;min-height:0;padding:6px 14px"></div>
-      <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
-        <button class="tbtn" style="flex:1;color:var(--text2)" onclick="document.getElementById('potPresetModal').remove()">Отмена</button>
-        <button class="tbtn on" style="flex:2" id="potSaveBtn">✓ Сохранить</button>
-      </div>`;
-
-    // Render conditions
-    const cl=box.querySelector('#potCondList');
-    if(!wCond.length){cl.innerHTML='<div style="font-size:9px;color:var(--text3);padding:8px 0">Нет условий — нажми ＋ чтобы добавить</div>';}
-    wCond.forEach((c,idx)=>{
-      const f=POT_FIELDS.find(x=>x.id===c.field)||POT_FIELDS[0];
-      const row=document.createElement('div');
-      row.style.cssText='display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(37,37,48,.5)';
-      row.innerHTML=`
-        <select style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:3px 4px">
-          ${POT_FIELDS.map(x=>`<option value="${x.id}"${x.id===c.field?' selected':''}>${x.label}</option>`).join('')}
-        </select>
-        <span style="font-size:9px;color:var(--text3)">от</span>
-        <input type="number" value="${c.min??''}" placeholder="—" step="${f.step}"
-          style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <span style="font-size:9px;color:var(--text3)">до</span>
-        <input type="number" value="${c.max??''}" placeholder="—" step="${f.step}"
-          style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">✕</button>`;
-      const sel=row.querySelector('select');
-      sel.onchange=()=>{wCond[idx].field=sel.value;render();};
-      const[minI,maxI]=Array.from(row.querySelectorAll('input[type=number]'));
-      minI.onchange=()=>{const v=parseFloat(minI.value);wCond[idx].min=isNaN(v)?null:v;};
-      maxI.onchange=()=>{const v=parseFloat(maxI.value);wCond[idx].max=isNaN(v)?null:v;};
-      row.querySelector('[data-del]').onclick=()=>{wCond.splice(idx,1);render();};
-      cl.appendChild(row);
-    });
-
-    box.querySelector('#potAddCond').onclick=()=>{wCond.push({field:'ch24',min:null,max:null});render();};
-    box.querySelector('#potSaveBtn').onclick=()=>{
-      const name=box.querySelector('#potPresetName').value.trim()||'Пресет';
-      // read current input values
-      box.querySelectorAll('#potCondList .pot-cond-row-data').forEach(()=>{});
-      if(existing){
-        existing.name=name;existing.conditions=[...wCond];
-      } else {
-        const id='pot'+Date.now();
-        S.potentialPresets.push({id,name,conditions:[...wCond],matches:{},alerted:{},enabled:false,cooldown:60});
-        _potActiveTab=id;
-      }
-      modal.remove();renderPotentialPanel();
-    };
-  };
-  render();
-  modal.appendChild(box);document.body.appendChild(modal);
-  modal.addEventListener('mousedown',e=>{if(e.target===modal)modal.remove();});
-}
-
-function togglePotPreset(id){
-  const pr=S.potentialPresets.find(p=>p.id===id);if(!pr)return;
-  pr.enabled=!pr.enabled;
-  if(pr.enabled){if(!S._potInterval)S._potInterval=setInterval(runPotentialCheck,15000);runPotentialCheck();}
-  else{pr.matches={};pr.alerted={};}
-  renderPotentialPanel();
-}
-
-function deletePotPreset(id){
-  const idx=S.potentialPresets.findIndex(p=>p.id===id);if(idx<0)return;
-  S.potentialPresets.splice(idx,1);
-  if(_potActiveTab===id)_potActiveTab=S.potentialPresets[0]?.id||null;
-  renderPotentialPanel();
-}
-
-function runPotentialCheck(){
-  const now=Date.now();let anyEnabled=false;
-  S.potentialPresets.forEach(pr=>{
-    if(!pr.enabled)return;anyEnabled=true;
-    const newMatches={};
-    for(const sym of S.syms){
-      const m=S.mx[sym];if(!m)continue;
-      const ok=pr.conditions.every(c=>{
-        let val=m[c.field];
-        // vol24 is in USDT, convert condition to USDT (user enters in M$)
-        if(c.field==='vol24')val=val/1e6;
-        if(val==null||isNaN(val))return false;
-        if(c.min!=null&&val<c.min)return false;
-        if(c.max!=null&&val>c.max)return false;
-        return true;
-      });
-      if(ok)newMatches[sym]={ts:pr.matches[sym]?.ts||now,price:m.price,ch24:m.ch24};
-    }
-    // Alert for newly appeared symbols
-    for(const sym of Object.keys(newMatches)){
-      if(!pr.matches[sym]){
-        const lastAlert=pr.alerted[sym]||0;
-        const coolMs=(pr.cooldown||60)*1000;
-        if(now-lastAlert>coolMs){pr.alerted[sym]=now;playAlert(660);}
-      }
-    }
-    pr.matches=newMatches;
-  });
-  // Update badge
-  const totalMatches=S.potentialPresets.reduce((s,p)=>s+Object.keys(p.matches||{}).length,0);
-  const badge=document.getElementById('potBadge');
-  if(badge){badge.textContent=totalMatches;badge.style.display=totalMatches?'inline':'none';}
-  // Re-render panel if open
-  const panel=document.getElementById('potentialPanel');
-  if(panel&&panel.style.display!=='none')renderPotentialPanel();
-  if(!anyEnabled&&S._potInterval){clearInterval(S._potInterval);S._potInterval=null;}
-}
-
-function clearPotentialMatches(){
-  S.potentialPresets.forEach(pr=>{pr.matches={};pr.alerted={};});
-  renderPotentialPanel();
-  const badge=document.getElementById('potBadge');if(badge)badge.style.display='none';
-}
-
-function startPotentialMonitor(){
-  if(S._potInterval)clearInterval(S._potInterval);
-  S._potInterval=setInterval(runPotentialCheck,15000);
-  runPotentialCheck();
-}
-function stopPotentialMonitor(){
-  if(S._potInterval){clearInterval(S._potInterval);S._potInterval=null;}
-}
-
-function setBrushColor(col,el){
-  _brushColor=col;
-  document.querySelectorAll('.brush-color').forEach(d=>d.classList.remove('active'));
-  if(el)el.classList.add('active');
-}
-function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
-
-// ═══════════════════════════════════════════════════════════════
+//  EXPOSE GLOBALS (required for onclick= in HTML with ES modules)
 // ═══════════════════════════════════════════════════════════════
 window.setTf              = setTf;
 window.changePage         = changePage;
@@ -2906,7 +2352,6 @@ window.setSortAbs         = setSortAbs;
 window.toggleCol          = toggleCol;
 window.resetDensitySettings = resetDensitySettings;
 window.showGroupPicker    = showGroupPicker;
-window.showChartGroupPicker = showChartGroupPicker;
 window.openGroupManager   = openGroupManager;
 window.setSymGroup        = setSymGroup;
 window.S                  = S;
@@ -2915,13 +2360,6 @@ window.setAlertSetting    = setAlertSetting;
 window.copyTicker         = copyTicker;
 window.clearDrawingsSlot  = clearDrawingsSlot;
 window.doSort             = doSort;
-window.togglePotentialPanel = togglePotentialPanel;
-window.openPotPresetEditor  = openPotPresetEditor;
-window.togglePotPreset      = togglePotPreset;
-window.deletePotPreset      = deletePotPreset;
-window.clearPotentialMatches= clearPotentialMatches;
-window.setBrushColor        = setBrushColor;
-window.setBrushWidth        = setBrushWidth;
 
 
 main();

@@ -11,12 +11,9 @@
 
 <div id="rulerTooltip">
   <div class="rt-pct" id="rtPct"></div>
-  <div class="rt-row" id="rtNatr"></div>
   <div class="rt-row" id="rtBars"></div>
   <div class="rt-row" id="rtTime"></div>
   <div class="rt-row" id="rtVol"></div>
-  <div class="rt-row" id="rtVr"></div>
-  <div class="rt-row" id="rtTr"></div>
 </div>
 
 <div id="ld">
@@ -30,8 +27,6 @@
 <!-- FULLSCREEN VIEW -->
 <div id="fsView">
   <div id="fsHdr">
-    <button class="fs-back" onclick="closeFullscreen()">← Назад</button>
-    <div class="hsep"></div>
     <div class="fs-hdr-logo"><div class="logo-sq" style="font-size:8px;font-weight:700;width:14px;height:14px">C</div>CRYPTSCREEN</div>
     <div class="hsep"></div>
     <div class="fs-hdr-status">
@@ -41,13 +36,14 @@
       <span id="fsHtime" style="font-size:10px;color:var(--text3);min-width:65px;text-align:right"></span>
     </div>
     <div class="hsep"></div>
+    <button class="fs-back" onclick="closeFullscreen()">← Назад</button>
+    <div class="hsep"></div>
     <span id="fsSym"></span>
     <span id="fsPrc" style="margin-left:6px"></span>
     <span id="fsChg" style="margin-left:4px"></span>
     <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
     <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
     <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
-    <span id="fsCgDot" class="cg-dot chart-cg-dot" style="margin-left:8px;cursor:pointer" title="Цветовая группа" onclick="showChartGroupPicker(S.fsSym,this)"></span>
     <div class="hsep"></div>
     <!-- TF -->
     <span style="font-size:9px;color:var(--text3)">ТФ</span>
@@ -58,7 +54,6 @@
     <button class="tbtn on" id="fs-draw-none" onclick="setDrawMode(null)">↖</button>
     <button class="tbtn" id="fs-draw-hray" onclick="setDrawMode('hray')">─▷</button>
     <button class="tbtn" id="fs-draw-tline" onclick="setDrawMode('tline')">╱</button>
-    <button class="tbtn" id="fs-draw-brush" onclick="setDrawMode('brush')" title="Кисть">✏</button>
     <button class="tbtn" id="fs-draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч">🔔─</button>
     <button class="tbtn" id="fs-draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия">🔔╱</button>
     <button class="tbtn" id="fsClearDrawBtn" onclick="clearFsDrawings()" title="Двойное нажатие — удалить все рисунки текущей монеты" style="color:var(--text3)">✕✕</button>
@@ -153,7 +148,6 @@
       <div class="hsep"></div>
       <button class="hbtn on" id="toggleScrBtn" onclick="toggleScreener()">▶ Список</button>
       <button class="hbtn" onclick="toggleAlertLog()" title="История алертов">🔔<span id="alertBadge"></span></button>
-      <button class="hbtn" id="potBtn" onclick="togglePotentialPanel()" title="Потенциал — мониторинг условий">⚡ Потенциал<span id="potBadge" style="display:none;background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;margin-left:3px"></span></button>
       <button class="hbtn" onclick="openSettings()">⚙ Настройки</button>
     </div>
   </div>
@@ -186,18 +180,6 @@
     <button class="tbtn on" id="draw-none" onclick="setDrawMode(null)" title="Курсор">↖</button>
     <button class="tbtn" id="draw-hray" onclick="setDrawMode('hray')" title="Горизонтальный луч">─▷</button>
     <button class="tbtn" id="draw-tline" onclick="setDrawMode('tline')" title="Трендовая линия">╱</button>
-    <button class="tbtn" id="draw-brush" onclick="setDrawMode('brush')" title="Кисть — свободный рисунок">✏</button>
-    <div id="brushPalette">
-      <div class="brush-color active" style="background:#f97316" title="Оранжевый" onclick="setBrushColor('#f97316',this)"></div>
-      <div class="brush-color" style="background:#ef4444" title="Красный" onclick="setBrushColor('#ef4444',this)"></div>
-      <div class="brush-color" style="background:#eab308" title="Жёлтый" onclick="setBrushColor('#eab308',this)"></div>
-      <div class="brush-color" style="background:#22c55e" title="Зелёный" onclick="setBrushColor('#22c55e',this)"></div>
-      <div class="brush-color" style="background:#3b82f6" title="Синий" onclick="setBrushColor('#3b82f6',this)"></div>
-      <div class="brush-color" style="background:#a855f7" title="Фиолетовый" onclick="setBrushColor('#a855f7',this)"></div>
-      <div class="brush-color" style="background:#ec4899" title="Розовый" onclick="setBrushColor('#ec4899',this)"></div>
-      <div class="brush-color" style="background:#e2e8f0" title="Белый" onclick="setBrushColor('#e2e8f0',this)"></div>
-      <input type="number" class="brush-size" id="brushSizeInput" min="1" max="12" value="2" title="Толщина" onchange="setBrushWidth(+this.value)">
-    </div>
     <button class="tbtn" id="draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч (звук при достижении %)">🔔─</button>
     <button class="tbtn" id="draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия (звук при достижении %)">🔔╱</button>
     <div class="tsep"></div>
@@ -225,17 +207,6 @@
     <div class="spanel" id="spanel">
       <div class="shdr" id="shdr"></div>
       <div class="sbody" id="sbody"></div>
-    </div>
-  </div>
-</div>
-
-<!-- POTENTIAL PANEL -->
-<div id="potentialPanel" style="display:none">
-  <div class="pot-hdr">
-    <span class="pot-title">⚡ Потенциал</span>
-    <div style="display:flex;align-items:center;gap:4px;margin-left:auto">
-      <button class="alp-clear" id="potClearBtn" onclick="clearPotentialMatches()">Очистить</button>
-      <button class="alp-x" onclick="togglePotentialPanel()">✕</button>
     </div>
   </div>
 </div>
