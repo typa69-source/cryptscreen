@@ -469,6 +469,7 @@ function buildChartGrid(){
       <div class="ccell" id="cc${i}">
         <div class="chead">
           <span class="chart-cg-dot cg-dot" id="cgd${i}" title="Цветовая группа" onclick="showChartGroupPicker(S.charts[${i}].sym,this)"></span>
+          <img class="coin-icon" id="ci${i}" src="" alt="" style="display:none;width:14px;height:14px;border-radius:50%;flex-shrink:0">
           <span class="csym" id="cs${i}" title="Нажмите для копирования" onclick="copyTicker(this.textContent)" style="cursor:pointer">—</span>
           <span class="cprc" id="cp${i}"></span>
           <span class="cchg" id="cg${i}"></span>
@@ -484,6 +485,20 @@ function buildChartGrid(){
         </div>
       </div>`);
   }
+}
+
+// Coin icon cache and loader
+const _iconCache={};
+function setCoinIcon(elId,sym){
+  const base=sym.replace(/USDT$/,'').toUpperCase();
+  const el=document.getElementById(elId);if(!el)return;
+  if(_iconCache[base]===false){el.style.display='none';return;}
+  if(_iconCache[base]){el.src=_iconCache[base];el.style.display='';return;}
+  const url=`https://assets.coincap.io/assets/icons/${base.toLowerCase()}@2x.png`;
+  const img=new Image();
+  img.onload=()=>{_iconCache[base]=url;el.src=url;el.style.display='';};
+  img.onerror=()=>{_iconCache[base]=false;el.style.display='none';};
+  img.src=url;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -692,6 +707,7 @@ async function loadChart(slot,sym){
   ch.sym=sym;ch.candles=[];ch.histLoading=false;
   ch.drawings=getSymDrawings(sym); // shared reference
   document.getElementById(`cs${slot}`).textContent=sym.replace(/USDT$/,'');
+  setCoinIcon(`ci${slot}`,sym);
   const cb=document.getElementById(`cb${slot}`);
   if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
   initLCChart(slot);
@@ -906,6 +922,7 @@ async function fetchOrderBook(sym){
     // Convert to [price, USDT value] — Fix #1: in dollars, not coin qty
     const toUsd=levels=>levels.map(([p,q])=>[+p,+p*+q]);
     OB_CACHE[sym]={bids:toUsd(data.bids),asks:toUsd(data.asks),ts:Date.now()};
+    _densityCache.delete(sym); // invalidate density cache
     if(S.showDensity)[...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
   }catch(e){console.warn('OB fetch',sym,e);}
 }
@@ -961,10 +978,18 @@ function computeDensities(ch){
     }));
 }
 
+const _densityCache=new Map(); // sym → {ts, zones}
+const _DENSITY_CACHE_TTL=30000; // recompute every 30s max
+
 function drawDensities(ctx,ch,W,H){
   if(!ch.cs||!ch.lc)return;
   const sym=ch.sym||S.fsSym;if(!sym)return;
-  const zones=computeDensities(ch);
+  // Use cached zones if fresh
+  const now=Date.now();
+  const cached=_densityCache.get(sym);
+  let zones;
+  if(cached&&now-cached.ts<_DENSITY_CACHE_TTL){zones=cached.zones;}
+  else{zones=computeDensities(ch);_densityCache.set(sym,{ts:now,zones});}
   if(!zones.length)return;
   ctx.save();
   for(const z of zones){
@@ -1091,9 +1116,11 @@ function drawCustomCrosshair(ctx,ch,W,H){
       if(x1!=null&&x2!=null&&Math.abs(x2-x1)>0){const spp=(t2-t1)/(x2-x1);time=Math.round(t2+(dx-x2)*spp);}
     }
     if(time){
+      // time is in "local chart seconds" (UTC + TZ_OFFSET_S). Convert to real UTC ms for Date constructor.
       const d=new Date((time-TZ_OFFSET_S)*1000);
       const pad=n=>n.toString().padStart(2,'0');
-      const tStr=`${pad(d.getUTCDate())}.${pad(d.getUTCMonth()+1)} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+      // Use LOCAL timezone methods (getDate/getHours) — browser converts automatically
+      const tStr=`${pad(d.getDate())}.${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       ctx.save();ctx.font='9px JetBrains Mono,monospace';
       const tw=ctx.measureText(tStr).width+8;
       const lx=Math.min(Math.max(dx-tw/2,0),W-tw);
@@ -1259,10 +1286,9 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   const x2=timeToCoordX(ch,d.p2.time);
   if(x1==null||x2==null)return;
 
-  // p1 = entry (left click), p2 sets SL (price distance sets scale)
-  const slPrice=d.p2.price;
-  const slDist=Math.abs(entryPrice-slPrice);
+  const slDist=Math.abs(entryPrice-d.p2.price);
   const rr=d.rr??2;
+  // Long: TP above, SL below. Short: TP below, SL above.
   const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
   const slFinal=isLong?entryPrice-slDist:entryPrice+slDist;
 
@@ -1272,44 +1298,45 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   if(yEntry==null||yTp==null||ySl==null)return;
 
   const lx=Math.min(x1,x2),rx=Math.max(x1,x2);
-  const tpCol=isLong?'#1fa891':'#e04040';
-  const slCol=isLong?'#e04040':'#1fa891';
+  // TP is always green (profit), SL always red (loss) — regardless of direction
+  const tpCol='#1fa891';
+  const slCol='#e04040';
+  const dirCol=isLong?'#1fa891':'#e04040'; // for border/label
   const alpha=preview?0.4:(hov?0.7:0.5);
 
   ctx.save();
-  // TP zone
-  ctx.fillStyle=tpCol;ctx.globalAlpha=alpha*0.35;
+  // TP zone (profit direction)
+  ctx.fillStyle=tpCol;ctx.globalAlpha=alpha*0.3;
   ctx.fillRect(lx,Math.min(yEntry,yTp),rx-lx,Math.abs(yTp-yEntry));
-  // SL zone
-  ctx.fillStyle=slCol;ctx.globalAlpha=alpha*0.25;
+  // SL zone (loss direction)
+  ctx.fillStyle=slCol;ctx.globalAlpha=alpha*0.2;
   ctx.fillRect(lx,Math.min(yEntry,ySl),rx-lx,Math.abs(ySl-yEntry));
   ctx.globalAlpha=1;
 
   // Entry line
-  ctx.beginPath();ctx.strokeStyle='#ffffff88';ctx.lineWidth=hov?1.5:1;
-  ctx.moveTo(lx,yEntry);ctx.lineTo(rx,yEntry);ctx.stroke();
+  ctx.beginPath();ctx.strokeStyle='#ffffffaa';ctx.lineWidth=hov?1.5:1;
+  ctx.setLineDash([4,2]);ctx.moveTo(lx,yEntry);ctx.lineTo(rx,yEntry);ctx.stroke();ctx.setLineDash([]);
   // TP line
-  ctx.beginPath();ctx.strokeStyle=tpCol+'cc';ctx.lineWidth=hov?2:1.2;
-  ctx.setLineDash([5,3]);ctx.moveTo(lx,yTp);ctx.lineTo(rx,yTp);ctx.stroke();ctx.setLineDash([]);
+  ctx.beginPath();ctx.strokeStyle=tpCol+'cc';ctx.lineWidth=hov?2:1.3;
+  ctx.moveTo(lx,yTp);ctx.lineTo(rx,yTp);ctx.stroke();
   // SL line
-  ctx.beginPath();ctx.strokeStyle=slCol+'cc';ctx.lineWidth=hov?2:1.2;
-  ctx.setLineDash([3,3]);ctx.moveTo(lx,ySl);ctx.lineTo(rx,ySl);ctx.stroke();ctx.setLineDash([]);
-  // Border
-  ctx.strokeStyle=tpCol+'66';ctx.lineWidth=1;
+  ctx.beginPath();ctx.strokeStyle=slCol+'cc';ctx.lineWidth=hov?2:1.3;
+  ctx.setLineDash([3,2]);ctx.moveTo(lx,ySl);ctx.lineTo(rx,ySl);ctx.stroke();ctx.setLineDash([]);
+  // Outer border
+  ctx.strokeStyle=dirCol+'44';ctx.lineWidth=1;
   ctx.strokeRect(lx,Math.min(yTp,ySl),rx-lx,Math.abs(yTp-ySl));
 
-  // Labels
-  ctx.font='bold 9px JetBrains Mono,monospace';ctx.textAlign='left';
+  // Labels (outside right)
+  ctx.font='bold 9px JetBrains Mono,monospace';
   const pctTp=((tpPrice-entryPrice)/entryPrice*100);
   const pctSl=((slFinal-entryPrice)/entryPrice*100);
-  ctx.fillStyle=tpCol;ctx.globalAlpha=0.9;
+  ctx.fillStyle=tpCol;ctx.globalAlpha=0.9;ctx.textAlign='left';
   ctx.fillText(`TP ${fmtPrice(tpPrice)} (${pctTp>=0?'+':''}${pctTp.toFixed(2)}%)`,rx+4,yTp+3);
   ctx.fillStyle=slCol;
   ctx.fillText(`SL ${fmtPrice(slFinal)} (${pctSl>=0?'+':''}${pctSl.toFixed(2)}%)`,rx+4,ySl+3);
-  ctx.fillStyle='#ffffff99';ctx.font='9px JetBrains Mono,monospace';
+  ctx.fillStyle='#ffffff88';ctx.font='9px JetBrains Mono,monospace';
   ctx.fillText(`Вход ${fmtPrice(entryPrice)} · R:R ${rr}:1`,lx+3,yEntry-4);
-  // Direction label
-  ctx.fillStyle=tpCol;ctx.font='bold 10px JetBrains Mono,monospace';ctx.textAlign='center';
+  ctx.fillStyle=dirCol;ctx.font='bold 10px JetBrains Mono,monospace';ctx.textAlign='center';
   ctx.fillText(isLong?'▲ ЛОНГ':'▼ ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
   ctx.globalAlpha=1;ctx.restore();
 }
@@ -1335,13 +1362,26 @@ function calcEMA(candles,period){
   return result;
 }
 
+// EMA cache: keyed by "lastCandleTime_period"
+const _emaCache=new Map();
+function calcEMACached(candles,period){
+  if(!candles||!candles.length)return[];
+  const key=`${candles[candles.length-1].t}_${candles.length}_${period}`;
+  if(_emaCache.has(key))return _emaCache.get(key);
+  const result=calcEMA(candles,period);
+  // Cap cache size
+  if(_emaCache.size>200)_emaCache.clear();
+  _emaCache.set(key,result);
+  return result;
+}
+
 function drawEMAs(ctx,ch,W,H){
   if(!S.emaVisible||!ch.cs||!ch.lc||!ch.candles.length)return;
   const settings=S.emaSettings;
   ctx.save();
   for(const cfg of settings){
     if(!cfg.visible)continue;
-    const vals=calcEMA(ch.candles,cfg.period);
+    const vals=calcEMACached(ch.candles,cfg.period);
     if(!vals.length)continue;
     ctx.beginPath();ctx.strokeStyle=cfg.color;ctx.lineWidth=1.2;ctx.globalAlpha=0.85;
     let started=false;
@@ -1352,7 +1392,6 @@ function drawEMAs(ctx,ch,W,H){
       if(!started){ctx.moveTo(px,py);started=true;}else ctx.lineTo(px,py);
     }
     ctx.stroke();
-    // Label
     if(vals.length>0){
       const last=vals[vals.length-1];
       const py=ch.cs.priceToCoordinate(last.v);
@@ -1411,6 +1450,8 @@ function checkAlerts(ch,drawing){
     // Flash alert badge
     const badge=document.getElementById('alertBadge');
     if(badge){badge.textContent=S.alertLog.length;badge.style.display='inline';}
+    const fsBadge=document.getElementById('fsAlertBadge');
+    if(fsBadge){fsBadge.textContent=S.alertLog.length;fsBadge.style.display='inline';}
   }
 }
 
@@ -1505,7 +1546,37 @@ function onInteractDblClick(ch,e,container){
   if(idx>=0){
     const d=ch.drawings[idx];
     if(d.type==='aray'||d.type==='atline')showAlertPctInput(ch,d,container);
+    if(d.type==='long'||d.type==='short')showTradeRRInput(ch,d,container);
   }
+}
+
+function showTradeRRInput(ch,d,container){
+  const old=document.getElementById('tradeRROverlay');if(old)old.remove();
+  if(!ch.cs)return;
+  const y=ch.cs.priceToCoordinate(d.p1.price)??100;
+  const x=timeToCoordX(ch,d.p1.time)??100;
+  const r=container.getBoundingClientRect();
+  const wrap=document.createElement('div');wrap.id='tradeRROverlay';
+  wrap.style.cssText=`position:fixed;z-index:500;left:${r.left+x+10}px;top:${r.top+y-20}px;
+    background:var(--bg3);border:1px solid var(--border2);border-radius:5px;padding:6px 8px;
+    display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text);font-family:inherit;box-shadow:0 4px 16px rgba(0,0,0,.6)`;
+  wrap.innerHTML=`<span style="color:var(--text3);font-size:9px">R:R</span>
+    <input id="rrInp" type="number" min="0.5" max="20" step="0.5" value="${d.rr??2}"
+      style="width:46px;background:var(--bg4);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+    <span style="color:var(--text3);font-size:9px">:1</span>
+    <button style="background:var(--accent);border:none;border-radius:3px;color:#fff;font:inherit;font-size:9px;padding:2px 6px;cursor:pointer">OK</button>`;
+  document.body.appendChild(wrap);
+  const inp=document.getElementById('rrInp');
+  inp.focus();inp.select();
+  const confirm=()=>{
+    const v=parseFloat(inp.value);
+    if(!isNaN(v)&&v>0)d.rr=v;
+    wrap.remove();
+    [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
+  };
+  wrap.querySelector('button').onclick=confirm;
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')confirm();if(e.key==='Escape')wrap.remove();});
+  setTimeout(()=>document.addEventListener('mousedown',function h(e){if(!wrap.contains(e.target)){confirm();document.removeEventListener('mousedown',h);}},true),100);
 }
 
 function onInteractClick(ch,e,container){
@@ -1535,8 +1606,9 @@ function onInteractClick(ch,e,container){
   }else if(S.drawMode==='long'||S.drawMode==='short'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
-      ch.drawings.push({id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,rr:2});
-      ch.pendingP1=null;rCanvas(ch);
+      const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,rr:2};
+      ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
+      showTradeRRInput(ch,d,container);
     }
   }
 }
@@ -1576,10 +1648,89 @@ function setDrawMode(mode){
 }
 
 function toggleEMA(){
+  // If no EMAs set, open add dialog immediately; otherwise toggle visibility
+  if(!S.emaSettings.length){openEMAEditor();return;}
   S.emaVisible=!S.emaVisible;
   const btn=document.getElementById('emaBtn');if(btn)btn.classList.toggle('on',S.emaVisible);
+  const fsBtn=document.getElementById('fsEmaBtn');if(fsBtn)fsBtn.classList.toggle('on',S.emaVisible);
+  _emaCache.clear();
   [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
 }
+
+function openEMAEditor(){
+  const old=document.getElementById('emaEditorModal');if(old)old.remove();
+  const modal=document.createElement('div');modal.id='emaEditorModal';
+  modal.style.cssText='position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;';
+  const box=document.createElement('div');
+  box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:300px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.8)';
+
+  const EMA_COLORS=['#f97316','#3b82f6','#a855f7','#e04040','#1fa891','#eab308','#ec4899','#22c55e'];
+
+  const render=()=>{
+    box.innerHTML=`
+      <div style="display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
+        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA линии</span>
+        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('emaEditorModal').remove()">✕</button>
+      </div>
+      <div id="emaList" style="flex:1;overflow-y:auto;padding:8px 14px;display:flex;flex-direction:column;gap:6px;min-height:0"></div>
+      <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
+        <button class="tbtn" style="flex:1" id="addEmaBtn">＋ Добавить EMA</button>
+        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();S.emaVisible=true;[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));document.getElementById('emaBtn')?.classList.add('on');document.getElementById('fsEmaBtn')?.classList.add('on')">✓ Применить</button>
+      </div>`;
+
+    const list=box.querySelector('#emaList');
+    S.emaSettings.forEach((cfg,i)=>{
+      const row=document.createElement('div');
+      row.style.cssText='display:flex;align-items:center;gap:6px;background:var(--bg3);border-radius:4px;padding:5px 8px;';
+      // Color picker dots
+      const colorPicker=document.createElement('div');colorPicker.style.cssText='display:flex;gap:3px;flex-wrap:wrap;';
+      EMA_COLORS.forEach(col=>{
+        const dot=document.createElement('div');
+        dot.style.cssText=`width:10px;height:10px;border-radius:50%;background:${col};cursor:pointer;border:2px solid ${cfg.color===col?'#fff':'transparent'};transition:transform .1s`;
+        dot.onmouseenter=()=>dot.style.transform='scale(1.3)';
+        dot.onmouseleave=()=>dot.style.transform='scale(1)';
+        dot.onclick=()=>{cfg.color=col;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
+        colorPicker.appendChild(dot);
+      });
+      row.appendChild(colorPicker);
+      // Period input
+      const pInp=document.createElement('input');
+      pInp.type='number';pInp.min='2';pInp.max='500';pInp.value=cfg.period;
+      pInp.style.cssText='width:50px;background:var(--bg4);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 4px;text-align:center';
+      pInp.onchange=()=>{const v=parseInt(pInp.value);if(v>=2){cfg.period=v;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));}};
+      row.appendChild(pInp);
+      // Visible toggle
+      const visBtn=document.createElement('button');
+      visBtn.style.cssText=`background:${cfg.visible?cfg.color+'22':'transparent'};border:1px solid ${cfg.visible?cfg.color:'var(--border2)'};border-radius:3px;color:${cfg.visible?cfg.color:'var(--text3)'};font:inherit;font-size:9px;padding:2px 5px;cursor:pointer`;
+      visBtn.textContent=cfg.visible?'Вкл':'Выкл';
+      visBtn.onclick=()=>{cfg.visible=!cfg.visible;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
+      row.appendChild(visBtn);
+      // Delete
+      const delBtn=document.createElement('button');
+      delBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0 2px;margin-left:auto';
+      delBtn.textContent='✕';delBtn.title='Удалить';
+      delBtn.onclick=()=>{S.emaSettings.splice(i,1);_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
+      row.appendChild(delBtn);
+      list.appendChild(row);
+    });
+
+    if(!S.emaSettings.length){
+      list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">Нет EMA линий. Нажми ＋ чтобы добавить.</div>';
+    }
+
+    box.querySelector('#addEmaBtn').onclick=()=>{
+      const used=S.emaSettings.map(c=>c.color);
+      const col=EMA_COLORS.find(c=>!used.includes(c))||'#f97316';
+      S.emaSettings.push({period:9,color:col,visible:true});
+      _emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();
+    };
+  };
+  render();
+  modal.appendChild(box);document.body.appendChild(modal);
+  modal.addEventListener('mousedown',e=>{if(e.target===modal)modal.remove();});
+}
+
+window.openEMAEditor=openEMAEditor;
 
 // ── Ruler ──────────────────────────────────────────────────────
 function onRulerStart(ch,e,container){
@@ -2104,10 +2255,10 @@ function getDensitySettings(sym){
 function renderSettingsDensity(body){
   const sym=S.fsSym||S.charts.find(c=>c.sym)?.sym||'';
   const ds=getDensitySettings(sym);
+  body.dataset.densitySym=sym; // store so inputs always reference correct sym
   body.innerHTML=`
   <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.6">
-    Плотности — горизонтальные лучи на уровнях, где накоплен значимый объём.<br>
-    Луч начинается с момента первого появления плотности.<br>
+    Плотности — горизонтальные лучи на уровнях с крупными стенками.<br>
     <span style="color:#e04040">█</span> крупная &nbsp;<span style="color:#e8a020">█</span> средняя &nbsp;<span style="color:#606080">█</span> малая
   </div>
   <div class="smodal-row">
@@ -2120,28 +2271,25 @@ function renderSettingsDensity(body){
   ${sym?`
   <div style="font-size:9px;color:var(--text2);margin:10px 0 4px">Пороги для: <b style="color:#fff">${sym.replace(/USDT$/,'')}</b></div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Крупная (×σ от среднего)</span>
-    <input id="dLarge" type="number" step="0.1" min="1" max="10" value="${ds.largeMult}"
-      onchange="setDensityMult('${sym}','largeMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;
-             color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+    <span class="smodal-lbl">Крупная (×σ)</span>
+    <input id="dLarge" type="number" step="0.1" min="0.5" max="20" value="${ds.largeMult}"
+      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'largeMult',this.value)"
+      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
   </div>
   <div class="smodal-row">
     <span class="smodal-lbl">Средняя (×σ)</span>
-    <input id="dMed" type="number" step="0.1" min="0.5" max="10" value="${ds.medMult}"
-      onchange="setDensityMult('${sym}','medMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;
-             color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+    <input id="dMed" type="number" step="0.1" min="0.5" max="20" value="${ds.medMult}"
+      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'medMult',this.value)"
+      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
   </div>
   <div class="smodal-row">
     <span class="smodal-lbl">Малая (×σ)</span>
-    <input id="dSmall" type="number" step="0.1" min="0.1" max="10" value="${ds.smallMult}"
-      onchange="setDensityMult('${sym}','smallMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;
-             color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
+    <input id="dSmall" type="number" step="0.1" min="0.1" max="20" value="${ds.smallMult}"
+      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'smallMult',this.value)"
+      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
   </div>
   <div style="margin-top:8px">
-    <button class="tbtn" onclick="resetDensitySettings('${sym}')">⟳ Авто-калибровка</button>
+    <button class="tbtn" onclick="resetDensitySettings(document.getElementById('smodal-body').dataset.densitySym)">⟳ Сброс</button>
   </div>`:'<div style="font-size:9px;color:var(--text3);margin-top:8px">Откройте монету для настройки порогов</div>'}
   `;
 }
@@ -2154,12 +2302,16 @@ function setDensityVisible(on){
 }
 
 function setDensityMult(sym,key,val){
-  getDensitySettings(sym)[key]=Math.max(0.1,parseFloat(val)||1);
+  const v=parseFloat(val);
+  if(isNaN(v)||v<0.1)return; // ignore invalid
+  getDensitySettings(sym)[key]=v;
+  _densityCache.delete(sym); // MUST invalidate cache so new value takes effect
   [...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
 }
 
 function resetDensitySettings(sym){
   S.densitySettings[sym]={largeMult:3.5,medMult:2.2,smallMult:1.5};
+  _densityCache.delete(sym);
   renderSettingsDensity(document.getElementById('smodal-body'));
   [...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
 }
@@ -2698,6 +2850,7 @@ function openFullscreenBySym(sym){
   S.fsSym=sym;S.fsOpen=true;
   document.getElementById('fsView').classList.add('open');
   document.getElementById('fsSym').textContent=sym.replace(/USDT$/,'');
+  setCoinIcon('fsSymIcon',sym);
   // Update FS color dot
   const fsCgDot=document.getElementById('fsCgDot');
   if(fsCgDot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
@@ -3151,6 +3304,8 @@ window.clearPotentialMatches= clearPotentialMatches;
 window.setBrushColor        = setBrushColor;
 window.setBrushWidth        = setBrushWidth;
 window.toggleEMA            = toggleEMA;
+window.openEMAEditor        = openEMAEditor;
+window.showTradeRRInput     = showTradeRRInput;
 
 
 main();

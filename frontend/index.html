@@ -41,13 +41,15 @@
       <span id="fsHtime" style="font-size:10px;color:var(--text3);min-width:65px;text-align:right"></span>
     </div>
     <div class="hsep"></div>
+    <img id="fsSymIcon" src="" alt="" style="display:none;width:18px;height:18px;border-radius:50%;margin-right:2px;flex-shrink:0">
     <span id="fsSym"></span>
     <span id="fsPrc" style="margin-left:6px"></span>
     <span id="fsChg" style="margin-left:4px"></span>
     <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
     <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
     <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
-    <span id="fsCgDot" class="cg-dot chart-cg-dot" style="margin-left:8px;cursor:pointer" title="Цветовая группа" onclick="showChartGroupPicker(S.fsSym,this)"></span>
+    <span id="fsCgDot" class="cg-dot chart-cg-dot" style="margin-left:8px;cursor:pointer;width:14px;height:14px" title="Цветовая группа — нажать" onclick="showChartGroupPicker(S.fsSym,this)"></span>
+    <button class="tbtn" style="margin-left:4px;font-size:10px" onclick="toggleAlertLog()" title="История алертов">🔔<span id="fsAlertBadge" style="display:none;background:#a855f7;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;margin-left:2px"></span></button>
     <div class="hsep"></div>
     <!-- TF -->
     <span style="font-size:9px;color:var(--text3)">ТФ</span>
@@ -64,6 +66,8 @@
     <button class="tbtn" id="fs-draw-long" onclick="setDrawMode('long')" title="Лонг">▲Л</button>
     <button class="tbtn" id="fs-draw-short" onclick="setDrawMode('short')" title="Шорт">▼Ш</button>
     <button class="tbtn" id="fsClearDrawBtn" onclick="clearFsDrawings()" title="Двойное нажатие — удалить все рисунки текущей монеты" style="color:var(--text3)">✕✕</button>
+    <div class="tsep"></div>
+    <button class="tbtn" id="fsEmaBtn" onclick="openEMAEditor()" title="EMA линии">EMA</button>
     <div class="tsep"></div>
     <!-- Pagination -->
     <span style="font-size:9px;color:var(--text3)">СТР</span>
