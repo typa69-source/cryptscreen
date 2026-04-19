@@ -390,3 +390,13 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 /* will-change hints for frequently animated elements */
 .chart-canvas{will-change:contents}
 #rulerTooltip{will-change:transform}
+
+/* Trade simulation rect label overflow */
+.chart-canvas{overflow:visible}
+
+/* EMA button active */
+#emaBtn.on{background:rgba(168,85,247,.15);border-color:#a855f7;color:#a855f7}
+
+/* Long/Short draw buttons */
+#draw-long.on,#fs-draw-long.on{background:rgba(31,168,145,.15);border-color:#1fa891;color:#1fa891}
+#draw-short.on,#fs-draw-short.on{background:rgba(224,64,64,.15);border-color:#e04040;color:#e04040}

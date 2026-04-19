@@ -61,6 +61,8 @@
     <button class="tbtn" id="fs-draw-brush" onclick="setDrawMode('brush')" title="Кисть">✏</button>
     <button class="tbtn" id="fs-draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч">🔔─</button>
     <button class="tbtn" id="fs-draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия">🔔╱</button>
+    <button class="tbtn" id="fs-draw-long" onclick="setDrawMode('long')" title="Лонг">▲Л</button>
+    <button class="tbtn" id="fs-draw-short" onclick="setDrawMode('short')" title="Шорт">▼Ш</button>
     <button class="tbtn" id="fsClearDrawBtn" onclick="clearFsDrawings()" title="Двойное нажатие — удалить все рисунки текущей монеты" style="color:var(--text3)">✕✕</button>
     <div class="tsep"></div>
     <!-- Pagination -->
@@ -200,6 +202,10 @@
     </div>
     <button class="tbtn" id="draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч (звук при достижении %)">🔔─</button>
     <button class="tbtn" id="draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия (звук при достижении %)">🔔╱</button>
+    <button class="tbtn" id="draw-long" onclick="setDrawMode('long')" title="Лонг: вход → СЛ → ТП 2:1">▲Л</button>
+    <button class="tbtn" id="draw-short" onclick="setDrawMode('short')" title="Шорт: вход → СЛ → ТП 2:1">▼Ш</button>
+    <div class="tsep"></div>
+    <button class="tbtn" id="emaBtn" onclick="toggleEMA()" title="EMA 9/21/50/200">EMA</button>
     <div class="tsep"></div>
     <span id="sinfo" style="font-size:9px;color:var(--text3);flex-shrink:0"></span>
     <div class="tsep"></div>

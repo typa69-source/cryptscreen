@@ -254,6 +254,14 @@ const S = {
   potentialPresets:[],   // [{id,name,conditions:[{field,min,max}],matches:{},alerted:{},enabled}]
   _potInterval:null,
   _potNextId:1,
+  // EMA overlay settings
+  emaSettings:[
+    {period:9, color:'#f97316',visible:true},
+    {period:21,color:'#3b82f6',visible:true},
+    {period:50,color:'#a855f7',visible:false},
+    {period:200,color:'#e04040',visible:false},
+  ],
+  emaVisible:false,
 };
 
 function mkChart(){
@@ -434,14 +442,16 @@ function getPriceMinMove(p){
 function formatDuration(s){s=Math.abs(s);if(s<60)return Math.round(s)+'с';if(s<3600)return Math.floor(s/60)+'м '+Math.round(s%60)+'с';if(s<86400)return Math.floor(s/3600)+'ч '+Math.floor((s%3600)/60)+'м';return Math.floor(s/86400)+'д '+Math.floor((s%86400)/3600)+'ч';}
 
 function copyTicker(sym){
+  // Accept short name (ETH) or full (ETHUSDT) — always copy full USDT form
   if(!sym||sym==='—')return;
-  navigator.clipboard.writeText(sym).then(()=>{
+  const full=sym.endsWith('USDT')?sym:sym+'USDT';
+  navigator.clipboard.writeText(full).then(()=>{
     // Brief visual toast
     let t=document.getElementById('copyToast');
     if(!t){t=document.createElement('div');t.id='copyToast';
       t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg4);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:5px 14px;font-size:10px;z-index:9999;pointer-events:none;transition:opacity .3s';
       document.body.appendChild(t);}
-    t.textContent=`📋 ${sym} скопировано`;t.style.opacity='1';
+    t.textContent=`📋 ${full} скопировано`;t.style.opacity='1';
     clearTimeout(t._to);t._to=setTimeout(()=>{t.style.opacity='0';},1200);
   }).catch(()=>{});
 }
@@ -821,6 +831,40 @@ function drawingDist(ch,d,px,py){
     const t=Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/len2));
     return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
   }
+  if(d.type==='brush'){
+    // Check distance to any segment of the stroke
+    if(!d.pts||d.pts.length<2)return Infinity;
+    let best=Infinity;
+    for(let i=1;i<d.pts.length;i++){
+      const ax=timeToCoordX(ch,d.pts[i-1].time),ay=ch.cs.priceToCoordinate(d.pts[i-1].price);
+      const bx=timeToCoordX(ch,d.pts[i].time),by=ch.cs.priceToCoordinate(d.pts[i].price);
+      if(ax==null||ay==null||bx==null||by==null)continue;
+      const dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy;
+      let dist;
+      if(len2===0){dist=Math.hypot(px-ax,py-ay);}
+      else{const t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/len2));dist=Math.hypot(px-(ax+t*dx),py-(ay+t*dy));}
+      if(dist<best)best=dist;
+    }
+    return best;
+  }
+  if(d.type==='traderect'||d.type==='ema'){
+    // rect: check border; ema: check line
+    if(d.type==='ema')return Infinity; // EMA not deletable by RMB (auto-drawn)
+    if(!d.p1||!d.p2)return Infinity;
+    const x1=timeToCoordX(ch,d.p1.time),y1=ch.cs.priceToCoordinate(d.p1.price);
+    const x2=timeToCoordX(ch,d.p2.time),y2=ch.cs.priceToCoordinate(d.p2.price);
+    if(x1==null||y1==null||x2==null||y2==null)return Infinity;
+    const lx=Math.min(x1,x2),rx=Math.max(x1,x2);
+    const ty=Math.min(y1,y2),by=Math.max(y1,y2);
+    // near any edge?
+    const edges=[
+      Math.abs(px-lx)*(py>=ty&&py<=by?1:Infinity),
+      Math.abs(px-rx)*(py>=ty&&py<=by?1:Infinity),
+      Math.abs(py-ty)*(px>=lx&&px<=rx?1:Infinity),
+      Math.abs(py-by)*(px>=lx&&px<=rx?1:Infinity),
+    ];
+    return Math.min(...edges);
+  }
   return Infinity;
 }
 
@@ -875,23 +919,22 @@ function getOrFetchOB(sym){
 function computeDensities(ch){
   const sym=ch.sym||S.fsSym;if(!sym)return[];
   const ob=getOrFetchOB(sym);if(!ob)return[];
-  // Merge bids+asks, sort by price
   const all=[...ob.bids,...ob.asks].sort((a,b)=>a[0]-b[0]);
   if(all.length<5)return[];
-  // Find current price range from candles (or use all OB range)
   let pMin=Infinity,pMax=-Infinity;
-  if(ch.candles.length>0){pMin=ch.candles[ch.candles.length-1].c*0.5;pMax=ch.candles[ch.candles.length-1].c*1.5;}
-  else{all.forEach(([p])=>{pMin=Math.min(pMin,p);pMax=Math.max(pMax,p);});}
-  // Filter to relevant range
+  if(ch.candles.length>0){
+    const cp=ch.candles[ch.candles.length-1].c;
+    pMin=cp*0.7;pMax=cp*1.3; // ±30% from current price — narrower, more relevant
+  }else{all.forEach(([p])=>{pMin=Math.min(pMin,p);pMax=Math.max(pMax,p);});}
   const relevant=all.filter(([p])=>p>=pMin&&p<=pMax);
   if(relevant.length<3)return[];
-  // Cluster: group levels within 0.2% of each other (fixed, not zoom-dependent — Fix #1 merging)
-  const CLUSTER_PCT=0.002;
+  // Cluster: 0.3% width — slightly larger clusters = fewer, more meaningful
+  const CLUSTER_PCT=0.003;
   const clusters=[];let cur=null;
   for(const[price,usdVal]of relevant){
     if(!cur||price>cur.centerPrice*(1+CLUSTER_PCT)){
       if(cur)clusters.push(cur);
-      cur={centerPrice:price,totalUsd:usdVal,count:1,minPrice:price};
+      cur={centerPrice:price,totalUsd:usdVal,count:1};
     }else{
       cur.totalUsd+=usdVal;cur.count++;
       cur.centerPrice=(cur.centerPrice*(cur.count-1)+price)/cur.count;
@@ -899,21 +942,22 @@ function computeDensities(ch){
   }
   if(cur)clusters.push(cur);
   if(!clusters.length)return[];
-  // Statistics for tier classification
   const vols=clusters.map(c=>c.totalUsd).sort((a,b)=>a-b);
   const mean=vols.reduce((s,v)=>s+v,0)/vols.length;
   const std=Math.sqrt(vols.reduce((s,v)=>s+(v-mean)**2,0)/vols.length);
-  const ds=S.densitySettings[sym]||{};
-  const largeMult=ds.largeMult??2.5,medMult=ds.medMult??1.6,smallMult=ds.smallMult??1.0;
-  // Return only significant clusters
-  const startTime=ch.candles.length?Math.floor(ch.candles[0].t/1000):Math.floor(Date.now()/1000)-86400;
+  // Use persisted settings if available
+  const ds=getDensitySettings(sym);
+  const largeMult=ds.largeMult,medMult=ds.medMult,smallMult=ds.smallMult;
+  // Density start time = NOW (not chart start) — lines appear at current candle
+  const nowSec=Math.floor(Date.now()/1000)+TZ_OFFSET_S;
+  // Only show top-tier clusters to avoid noise
   return clusters
     .filter(c=>c.totalUsd>=mean+std*smallMult)
     .map(c=>({
       price:c.centerPrice,
-      vol:c.totalUsd, // USDT — Fix #1
+      vol:c.totalUsd,
       tier:c.totalUsd>=mean+std*largeMult?'large':c.totalUsd>=mean+std*medMult?'medium':'small',
-      time:startTime, // draw from chart start
+      time:nowSec,
     }));
 }
 
@@ -972,16 +1016,29 @@ function rCanvas(ch){
     else if(d.type==='aray')drawAlertRay(ctx,ch,d,drawW,hov);
     else if(d.type==='atline')drawAlertTLine(ctx,ch,d,hov);
     else if(d.type==='brush')drawBrushStroke(ctx,ch,d,hov);
+    else if(d.type==='long'||d.type==='short')drawTradeRect(ctx,ch,d,hov);
   });
-  if(ch.pendingP1&&(S.drawMode==='tline'||S.drawMode==='atline')){
+  // Draw live preview of traderect/tline pendingP1
+  if(ch.pendingP1&&(S.drawMode==='tline'||S.drawMode==='atline'||S.drawMode==='long'||S.drawMode==='short')){
     const x1=timeToCoordX(ch,ch.pendingP1.time);
     const y1=ch.cs.priceToCoordinate(ch.pendingP1.price);
     if(x1!==null&&y1!==null){
-      ctx.save();ctx.beginPath();ctx.strokeStyle='#3b82f680';ctx.lineWidth=1;ctx.setLineDash([4,3]);
-      ctx.moveTo(x1,y1);ctx.lineTo(ch.hoverX,ch.hoverY);ctx.stroke();ctx.setLineDash([]);
-      ctx.beginPath();ctx.fillStyle='#3b82f6';ctx.arc(x1,y1,3,0,Math.PI*2);ctx.fill();ctx.restore();
+      if(S.drawMode==='long'||S.drawMode==='short'){
+        // Live preview of trade rect
+        const previewPt=pixelToPoint(ch,ch.hoverX,ch.hoverY);
+        if(previewPt){
+          const previewD={type:S.drawMode,p1:ch.pendingP1,p2:previewPt,rr:2};
+          drawTradeRect(ctx,ch,previewD,false,true);
+        }
+      } else {
+        ctx.save();ctx.beginPath();ctx.strokeStyle='#3b82f680';ctx.lineWidth=1;ctx.setLineDash([4,3]);
+        ctx.moveTo(x1,y1);ctx.lineTo(ch.hoverX,ch.hoverY);ctx.stroke();ctx.setLineDash([]);
+        ctx.beginPath();ctx.fillStyle='#3b82f6';ctx.arc(x1,y1,3,0,Math.PI*2);ctx.fill();ctx.restore();
+      }
     }
   }
+  // EMA overlay (drawn on top of candles, below crosshair)
+  drawEMAs(ctx,ch,drawW,H);
   if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
   // Custom crosshair: always visible when cursor is on chart
@@ -1036,7 +1093,7 @@ function drawCustomCrosshair(ctx,ch,W,H){
     if(time){
       const d=new Date((time-TZ_OFFSET_S)*1000);
       const pad=n=>n.toString().padStart(2,'0');
-      const tStr=`${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+      const tStr=`${pad(d.getUTCDate())}.${pad(d.getUTCMonth()+1)} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
       ctx.save();ctx.font='9px JetBrains Mono,monospace';
       const tw=ctx.measureText(tStr).width+8;
       const lx=Math.min(Math.max(dx-tw/2,0),W-tw);
@@ -1193,6 +1250,122 @@ function drawBrushStroke(ctx,ch,d,hov){
 let _brushColor='#f97316';
 let _brushWidth=2;
 
+// ── Trade Rectangle (Long / Short simulation) ──────────────────
+function drawTradeRect(ctx,ch,d,hov,preview=false){
+  if(!d.p1||!d.p2||!ch.cs||!ch.lc)return;
+  const isLong=d.type==='long';
+  const entryPrice=d.p1.price;
+  const x1=timeToCoordX(ch,d.p1.time);
+  const x2=timeToCoordX(ch,d.p2.time);
+  if(x1==null||x2==null)return;
+
+  // p1 = entry (left click), p2 sets SL (price distance sets scale)
+  const slPrice=d.p2.price;
+  const slDist=Math.abs(entryPrice-slPrice);
+  const rr=d.rr??2;
+  const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
+  const slFinal=isLong?entryPrice-slDist:entryPrice+slDist;
+
+  const yEntry=ch.cs.priceToCoordinate(entryPrice);
+  const yTp=ch.cs.priceToCoordinate(tpPrice);
+  const ySl=ch.cs.priceToCoordinate(slFinal);
+  if(yEntry==null||yTp==null||ySl==null)return;
+
+  const lx=Math.min(x1,x2),rx=Math.max(x1,x2);
+  const tpCol=isLong?'#1fa891':'#e04040';
+  const slCol=isLong?'#e04040':'#1fa891';
+  const alpha=preview?0.4:(hov?0.7:0.5);
+
+  ctx.save();
+  // TP zone
+  ctx.fillStyle=tpCol;ctx.globalAlpha=alpha*0.35;
+  ctx.fillRect(lx,Math.min(yEntry,yTp),rx-lx,Math.abs(yTp-yEntry));
+  // SL zone
+  ctx.fillStyle=slCol;ctx.globalAlpha=alpha*0.25;
+  ctx.fillRect(lx,Math.min(yEntry,ySl),rx-lx,Math.abs(ySl-yEntry));
+  ctx.globalAlpha=1;
+
+  // Entry line
+  ctx.beginPath();ctx.strokeStyle='#ffffff88';ctx.lineWidth=hov?1.5:1;
+  ctx.moveTo(lx,yEntry);ctx.lineTo(rx,yEntry);ctx.stroke();
+  // TP line
+  ctx.beginPath();ctx.strokeStyle=tpCol+'cc';ctx.lineWidth=hov?2:1.2;
+  ctx.setLineDash([5,3]);ctx.moveTo(lx,yTp);ctx.lineTo(rx,yTp);ctx.stroke();ctx.setLineDash([]);
+  // SL line
+  ctx.beginPath();ctx.strokeStyle=slCol+'cc';ctx.lineWidth=hov?2:1.2;
+  ctx.setLineDash([3,3]);ctx.moveTo(lx,ySl);ctx.lineTo(rx,ySl);ctx.stroke();ctx.setLineDash([]);
+  // Border
+  ctx.strokeStyle=tpCol+'66';ctx.lineWidth=1;
+  ctx.strokeRect(lx,Math.min(yTp,ySl),rx-lx,Math.abs(yTp-ySl));
+
+  // Labels
+  ctx.font='bold 9px JetBrains Mono,monospace';ctx.textAlign='left';
+  const pctTp=((tpPrice-entryPrice)/entryPrice*100);
+  const pctSl=((slFinal-entryPrice)/entryPrice*100);
+  ctx.fillStyle=tpCol;ctx.globalAlpha=0.9;
+  ctx.fillText(`TP ${fmtPrice(tpPrice)} (${pctTp>=0?'+':''}${pctTp.toFixed(2)}%)`,rx+4,yTp+3);
+  ctx.fillStyle=slCol;
+  ctx.fillText(`SL ${fmtPrice(slFinal)} (${pctSl>=0?'+':''}${pctSl.toFixed(2)}%)`,rx+4,ySl+3);
+  ctx.fillStyle='#ffffff99';ctx.font='9px JetBrains Mono,monospace';
+  ctx.fillText(`Вход ${fmtPrice(entryPrice)} · R:R ${rr}:1`,lx+3,yEntry-4);
+  // Direction label
+  ctx.fillStyle=tpCol;ctx.font='bold 10px JetBrains Mono,monospace';ctx.textAlign='center';
+  ctx.fillText(isLong?'▲ ЛОНГ':'▼ ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
+  ctx.globalAlpha=1;ctx.restore();
+}
+
+// ── EMA overlay ────────────────────────────────────────────────
+// EMA settings per chart (shared via S.emaSettings)
+const EMA_DEFAULTS=[
+  {period:9, color:'#f97316',visible:true},
+  {period:21,color:'#3b82f6',visible:true},
+  {period:50,color:'#a855f7',visible:false},
+  {period:200,color:'#e04040',visible:false},
+];
+
+function calcEMA(candles,period){
+  if(!candles||candles.length<period)return[];
+  const k=2/(period+1);
+  const result=[];
+  let ema=candles.slice(0,period).reduce((s,c)=>s+c.c,0)/period;
+  for(let i=period;i<candles.length;i++){
+    ema=candles[i].c*k+ema*(1-k);
+    result.push({t:candles[i].t,v:ema});
+  }
+  return result;
+}
+
+function drawEMAs(ctx,ch,W,H){
+  if(!S.emaVisible||!ch.cs||!ch.lc||!ch.candles.length)return;
+  const settings=S.emaSettings;
+  ctx.save();
+  for(const cfg of settings){
+    if(!cfg.visible)continue;
+    const vals=calcEMA(ch.candles,cfg.period);
+    if(!vals.length)continue;
+    ctx.beginPath();ctx.strokeStyle=cfg.color;ctx.lineWidth=1.2;ctx.globalAlpha=0.85;
+    let started=false;
+    for(const{t,v}of vals){
+      const px=timeToCoordX(ch,toChartTime(t));
+      const py=ch.cs.priceToCoordinate(v);
+      if(px==null||py==null||py<0||py>H)continue;
+      if(!started){ctx.moveTo(px,py);started=true;}else ctx.lineTo(px,py);
+    }
+    ctx.stroke();
+    // Label
+    if(vals.length>0){
+      const last=vals[vals.length-1];
+      const py=ch.cs.priceToCoordinate(last.v);
+      if(py!=null&&py>0&&py<H){
+        ctx.font='8px JetBrains Mono,monospace';ctx.fillStyle=cfg.color;
+        ctx.globalAlpha=0.9;ctx.textAlign='left';
+        ctx.fillText(`EMA${cfg.period}`,W-PRICE_AXIS_W+3,py-2);
+      }
+    }
+  }
+  ctx.globalAlpha=1;ctx.restore();
+}
+
 // ── Alert Sound ────────────────────────────────────────────────
 let _alertCtx=null;
 function playAlert(freq=880){
@@ -1248,6 +1421,15 @@ function renderAlertLog(){
     const t=new Date(a.ts);const pad=n=>n.toString().padStart(2,'0');
     const tStr=`${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
     const symShort=a.sym.replace(/USDT$/,'');
+    if(a.type==='potential'){
+      return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="Открыть ${symShort}">
+        <span style="color:var(--text3);font-size:9px">${tStr}</span>
+        <span style="color:#f97316;font-size:9px;margin:0 4px">⚡</span>
+        <span style="color:#fff;font-weight:600;margin-right:5px">${symShort}</span>
+        <span style="color:#f97316;font-size:9px">${a.presetName||'Потенциал'}</span>
+        <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(a.curPrice)}</span>
+      </div>`;
+    }
     const dir=a.curPrice>=a.linePrice?'↑':'↓';
     return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="Открыть ${symShort}">
       <span style="color:var(--text3);font-size:9px">${tStr}</span>
@@ -1350,13 +1532,23 @@ function onInteractClick(ch,e,container){
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       showAlertPctInput(ch,d,container);
     }
+  }else if(S.drawMode==='long'||S.drawMode==='short'){
+    if(!ch.pendingP1)ch.pendingP1=pt;
+    else{
+      ch.drawings.push({id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,rr:2});
+      ch.pendingP1=null;rCanvas(ch);
+    }
   }
 }
 
 function setDrawMode(mode){
   S.drawMode=mode;
-  [['draw-none',null],['draw-hray','hray'],['draw-tline','tline'],['draw-brush','brush'],['draw-aray','aray'],['draw-atline','atline'],
-   ['fs-draw-none',null],['fs-draw-hray','hray'],['fs-draw-tline','tline'],['fs-draw-brush','brush'],['fs-draw-aray','aray'],['fs-draw-atline','atline']].forEach(([id,m])=>{
+  [['draw-none',null],['draw-hray','hray'],['draw-tline','tline'],['draw-brush','brush'],
+   ['draw-long','long'],['draw-short','short'],
+   ['draw-aray','aray'],['draw-atline','atline'],
+   ['fs-draw-none',null],['fs-draw-hray','hray'],['fs-draw-tline','tline'],['fs-draw-brush','brush'],
+   ['fs-draw-long','long'],['fs-draw-short','short'],
+   ['fs-draw-aray','aray'],['fs-draw-atline','atline']].forEach(([id,m])=>{
     const el=document.getElementById(id);if(el)el.classList.toggle('on',m===mode);
   });
   // Show/hide brush palette
@@ -1371,14 +1563,22 @@ function setDrawMode(mode){
   if(hint){
     const h={
       null:'Топ-9 · колёсико=линейка · ПКМ=удалить нарисованное · Ctrl=магнит · ЛКМ на точке=перетащить · ДблКлик=редактировать%',
-      hray:'Горизонтальный луч: клик · ПКМ=выйти в курсор · Ctrl+клик=магнит · ДблКлик на линии=% алерта',
+      hray:'Горизонтальный луч: клик · ПКМ=выйти в курсор · Ctrl+клик=магнит',
       tline:'Трендовая линия: 2 клика · ПКМ=выйти в курсор · Ctrl+клик=магнит',
       brush:'Кисть: зажми и веди · ПКМ=выйти в курсор · выбери цвет и толщину ниже',
+      long:'Лонг: 1й клик=вход, 2й=стоп-лосс · R:R 2:1 · ПКМ=выйти',
+      short:'Шорт: 1й клик=вход, 2й=стоп-лосс · R:R 2:1 · ПКМ=выйти',
       aray:'Алерт-луч: клик → введите % · ПКМ=выйти в курсор · ДблКлик на линии=изменить%',
       atline:'Алерт-линия: 2 клика → введите % · ПКМ=выйти в курсор'
     };
     hint.textContent=h[mode]??h[null];
   }
+}
+
+function toggleEMA(){
+  S.emaVisible=!S.emaVisible;
+  const btn=document.getElementById('emaBtn');if(btn)btn.classList.toggle('on',S.emaVisible);
+  [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
 }
 
 // ── Ruler ──────────────────────────────────────────────────────
@@ -1575,35 +1775,53 @@ function startChartWS(){
   S.wsCharts=ws;
 }
 
+// Throttle screener WS updates: parse data immediately but batch DOM renders
+let _wsBatchTimer=null;
+let _wsPendingUpdate=false;
+
 function startScreenerWS(){
   const ws=new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
   ws.onmessage=(evt)=>{
-    // Parse off the main thread tick to avoid jank
     const raw=evt.data;
+    // Parse on next microtask to avoid blocking WS message handler
     queueMicrotask(()=>{
-      const arr=JSON.parse(raw);
+      let arr;
+      try{arr=JSON.parse(raw);}catch(e){return;}
+      let changed=false;
       for(const t of arr){
         if(!t.s.endsWith('USDT'))continue;
-        if(S.tk[t.s]){S.tk[t.s].p=+t.c;S.tk[t.s].c24=+t.P;S.tk[t.s].qv=+t.q;S.tk[t.s].tr=+t.n||S.tk[t.s].tr;}
-        if(S.mx[t.s]){S.mx[t.s].price=+t.c;S.mx[t.s].ch24=+t.P;S.mx[t.s].vol24=+t.q;S.mx[t.s].trd24=+t.n||S.mx[t.s].trd24;}
+        const tk=S.tk[t.s];const mx=S.mx[t.s];
+        if(!tk)continue;
+        const newP=+t.c,newC=+t.P,newQ=+t.q,newN=+t.n||tk.tr;
+        if(tk.p!==newP||tk.c24!==newC){tk.p=newP;tk.c24=newC;tk.qv=newQ;tk.tr=newN;changed=true;}
+        if(mx){mx.price=newP;mx.ch24=newC;mx.vol24=newQ;mx.trd24=newN;}
       }
-      scheduleRender();updTime();
-      if(document.hidden)return; // skip heavy DOM work when tab not visible
-    if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym]){
-      const t=S.tk[S.fsSym];const m=S.mx[S.fsSym]||{};
-      document.getElementById('fsPrc').textContent=fmtPrice(t.p);
-      const ce=document.getElementById('fsChg');ce.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';ce.className='cchg '+(t.c24>=0?'p':'n');
-      const fv=document.getElementById('fsVol');if(fv)fv.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
-      const ft=document.getElementById('fsTrd');if(ft)ft.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
-      const corVal=m.corr14??m.corr;const fc=document.getElementById('fsCorr');
-      if(fc)fc.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
-      const fhc=document.getElementById('fsHcount');if(fhc)fhc.textContent=document.getElementById('hcount').textContent;
-    }
-      checkAllAlerts();
-    }); // end queueMicrotask
+      if(!changed)return;
+      // Debounce renders: max 2/sec for screener
+      if(!_wsBatchTimer){
+        _wsBatchTimer=setTimeout(()=>{
+          _wsBatchTimer=null;
+          updTime();
+          if(!document.hidden&&!_scrolling)renderTable();
+          if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
+          checkAllAlerts();
+        },500);
+      }
+    });
   };
   ws.onclose=()=>setTimeout(startScreenerWS,3000);
   S.wsScreener=ws;
+}
+
+function updateFsHeaderValues(){
+  const t=S.tk[S.fsSym];const m=S.mx[S.fsSym]||{};
+  document.getElementById('fsPrc').textContent=fmtPrice(t.p);
+  const ce=document.getElementById('fsChg');ce.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';ce.className='cchg '+(t.c24>=0?'p':'n');
+  const fv=document.getElementById('fsVol');if(fv)fv.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
+  const ft=document.getElementById('fsTrd');if(ft)ft.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
+  const corVal=m.corr14??m.corr;const fc=document.getElementById('fsCorr');
+  if(fc)fc.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+  const fhc=document.getElementById('fsHcount');if(fhc)fhc.textContent=document.getElementById('hcount').textContent;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1879,7 +2097,7 @@ function toggleDensity(){
 }
 
 function getDensitySettings(sym){
-  if(!S.densitySettings[sym])S.densitySettings[sym]={largeMult:2.5,medMult:1.6,smallMult:1.1};
+  if(!S.densitySettings[sym])S.densitySettings[sym]={largeMult:3.5,medMult:2.2,smallMult:1.5};
   return S.densitySettings[sym];
 }
 
@@ -1941,7 +2159,7 @@ function setDensityMult(sym,key,val){
 }
 
 function resetDensitySettings(sym){
-  delete S.densitySettings[sym];
+  S.densitySettings[sym]={largeMult:3.5,medMult:2.2,smallMult:1.5};
   renderSettingsDensity(document.getElementById('smodal-body'));
   [...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
 }
@@ -2842,7 +3060,17 @@ function runPotentialCheck(){
       if(!pr.matches[sym]){
         const lastAlert=pr.alerted[sym]||0;
         const coolMs=(pr.cooldown||60)*1000;
-        if(now-lastAlert>coolMs){pr.alerted[sym]=now;playAlert(660);}
+        if(now-lastAlert>coolMs){
+          pr.alerted[sym]=now;
+          playAlert(660);
+          // Add to alert history log
+          const m=S.mx[sym]||{};
+          S.alertLog.unshift({ts:now,sym,curPrice:m.price,linePrice:m.price,distPct:0,type:'potential',alertPct:0,presetName:pr.name});
+          if(S.alertLog.length>50)S.alertLog.pop();
+          renderAlertLog();
+          const badge=document.getElementById('alertBadge');
+          if(badge){badge.textContent=S.alertLog.length;badge.style.display='inline';}
+        }
       }
     }
     pr.matches=newMatches;
@@ -2922,6 +3150,7 @@ window.deletePotPreset      = deletePotPreset;
 window.clearPotentialMatches= clearPotentialMatches;
 window.setBrushColor        = setBrushColor;
 window.setBrushWidth        = setBrushWidth;
+window.toggleEMA            = toggleEMA;
 
 
 main();
