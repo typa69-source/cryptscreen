@@ -487,17 +487,25 @@ function buildChartGrid(){
   }
 }
 
-// Coin icon cache and loader
+// Coin icon cache and loader — uses Binance CDN (covers all futures coins)
 const _iconCache={};
 function setCoinIcon(elId,sym){
   const base=sym.replace(/USDT$/,'').toUpperCase();
   const el=document.getElementById(elId);if(!el)return;
   if(_iconCache[base]===false){el.style.display='none';return;}
   if(_iconCache[base]){el.src=_iconCache[base];el.style.display='';return;}
-  const url=`https://assets.coincap.io/assets/icons/${base.toLowerCase()}@2x.png`;
+  // Try Binance's own asset CDN — covers virtually all listed coins
+  const url=`https://bin.bnbstatic.com/static/assets/logos/${base}.png`;
   const img=new Image();
   img.onload=()=>{_iconCache[base]=url;el.src=url;el.style.display='';};
-  img.onerror=()=>{_iconCache[base]=false;el.style.display='none';};
+  img.onerror=()=>{
+    // Fallback: CoinCap
+    const url2=`https://assets.coincap.io/assets/icons/${base.toLowerCase()}@2x.png`;
+    const img2=new Image();
+    img2.onload=()=>{_iconCache[base]=url2;el.src=url2;el.style.display='';};
+    img2.onerror=()=>{_iconCache[base]=false;el.style.display='none';};
+    img2.src=url2;
+  };
   img.src=url;
 }
 
@@ -1379,30 +1387,71 @@ function drawEMAs(ctx,ch,W,H){
   if(!S.emaVisible||!ch.cs||!ch.lc||!ch.candles.length)return;
   const settings=S.emaSettings;
   ctx.save();
+  // Clip EMA to chart area so it goes under axis labels
+  ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();
   for(const cfg of settings){
     if(!cfg.visible)continue;
     const vals=calcEMACached(ch.candles,cfg.period);
     if(!vals.length)continue;
-    ctx.beginPath();ctx.strokeStyle=cfg.color;ctx.lineWidth=1.2;ctx.globalAlpha=0.85;
-    let started=false;
+    ctx.beginPath();ctx.strokeStyle=cfg.color;ctx.lineWidth=1.5;ctx.globalAlpha=0.9;
+    let started=false,lastPx=null,lastPy=null;
     for(const{t,v}of vals){
+      // t is raw candle milliseconds — toChartTime converts to local-adjusted seconds for LW Charts
       const px=timeToCoordX(ch,toChartTime(t));
       const py=ch.cs.priceToCoordinate(v);
-      if(px==null||py==null||py<0||py>H)continue;
-      if(!started){ctx.moveTo(px,py);started=true;}else ctx.lineTo(px,py);
+      if(px==null||py==null){started=false;continue;}
+      // Break line if EMA would fly way out of visible chart (e.g. after zoom)
+      if(py<-200||py>H+200){started=false;continue;}
+      if(!started){ctx.moveTo(px,py);started=true;}
+      else ctx.lineTo(px,py);
+      lastPx=px;lastPy=py;
     }
     ctx.stroke();
-    if(vals.length>0){
-      const last=vals[vals.length-1];
-      const py=ch.cs.priceToCoordinate(last.v);
-      if(py!=null&&py>0&&py<H){
-        ctx.font='8px JetBrains Mono,monospace';ctx.fillStyle=cfg.color;
-        ctx.globalAlpha=0.9;ctx.textAlign='left';
-        ctx.fillText(`EMA${cfg.period}`,W-PRICE_AXIS_W+3,py-2);
-      }
+    // Label near right edge of last visible point
+    if(lastPy!=null&&lastPy>5&&lastPy<H-5){
+      ctx.font='bold 8px JetBrains Mono,monospace';ctx.fillStyle=cfg.color;
+      ctx.globalAlpha=0.95;ctx.textAlign='left';
+      ctx.fillText(`EMA${cfg.period}`,4,lastPy-3);
     }
   }
   ctx.globalAlpha=1;ctx.restore();
+}
+
+// ── EMA Crossover alerts ────────────────────────────────────────
+// Check last 2 EMA values: if they cross, fire alert
+let _emaCrossAlerted={}; // key="sym_aXb" → last alert ts
+function checkEMACrossovers(ch){
+  if(!S.emaVisible||!S.emaSettings.length||!ch.candles.length)return;
+  const sym=ch.sym||S.fsSym;if(!sym)return;
+  const visible=S.emaSettings.filter(c=>c.visible);
+  if(visible.length<2)return;
+  const now=Date.now();
+  for(let i=0;i<visible.length;i++){
+    for(let j=i+1;j<visible.length;j++){
+      const a=visible[i],b=visible[j];
+      const va=calcEMACached(ch.candles,a.period);
+      const vb=calcEMACached(ch.candles,b.period);
+      if(va.length<2||vb.length<2)continue;
+      const a1=va[va.length-1].v,a2=va[va.length-2].v;
+      const b1=vb[vb.length-1].v,b2=vb[vb.length-2].v;
+      const waAbove=a2>b2,isAbove=a1>b1;
+      if(waAbove===isAbove)continue; // no cross
+      const key=`${sym}_${a.period}x${b.period}`;
+      const lastAlert=_emaCrossAlerted[key]||0;
+      if(now-lastAlert<60000)continue; // 1 min cooldown
+      _emaCrossAlerted[key]=now;
+      const dir=isAbove?'↑':'↓';
+      const label=isAbove?'Бычье пересечение':'Медвежье пересечение';
+      playAlert(isAbove?880:440);
+      S.alertLog.unshift({ts:now,sym,curPrice:a1,linePrice:b1,distPct:0,
+        type:'ema_cross',alertPct:0,
+        presetName:`EMA${a.period} ${dir} EMA${b.period} — ${label}`});
+      if(S.alertLog.length>50)S.alertLog.pop();
+      renderAlertLog();
+      const badge=document.getElementById('alertBadge');
+      if(badge){badge.textContent=S.alertLog.length;badge.style.display='inline';}
+    }
+  }
 }
 
 // ── Alert Sound ────────────────────────────────────────────────
@@ -1623,9 +1672,11 @@ function setDrawMode(mode){
    ['fs-draw-aray','aray'],['fs-draw-atline','atline']].forEach(([id,m])=>{
     const el=document.getElementById(id);if(el)el.classList.toggle('on',m===mode);
   });
-  // Show/hide brush palette
+  // Show/hide brush palette (main and FS toolbars)
   const bp=document.getElementById('brushPalette');
   if(bp)bp.classList.toggle('visible',mode==='brush');
+  const fbp=document.getElementById('fsBrushPalette');
+  if(fbp){fbp.style.display=mode==='brush'?'flex':'none';}
   const allCharts=[...S.charts,...S.fsCharts];
   allCharts.forEach(ch=>{
     ch.pendingP1=null;
@@ -1888,32 +1939,42 @@ document.addEventListener('visibilitychange',()=>{
 });
 
 // ═══════════════════════════════════════════════════════════════
-//  WEBSOCKETS
+//  WEBSOCKETS — generation counter pattern prevents reconnect storms
 // ═══════════════════════════════════════════════════════════════
+let _wsChartsGen=0; // increment on each start to invalidate old callbacks
+let _wsScreenerGen=0;
+let _wsChartsReconnectTimer=null;
+let _wsScreenerReconnectTimer=null;
+
 function startChartWS(){
+  // Cancel any pending reconnect
+  if(_wsChartsReconnectTimer){clearTimeout(_wsChartsReconnectTimer);_wsChartsReconnectTimer=null;}
+  // Close old WS
   if(S.wsCharts){try{S.wsCharts.close();}catch(e){}S.wsCharts=null;}
   const syms=S.charts.map(c=>c.sym).filter(Boolean);if(!syms.length||!S.LC)return;
+  const gen=++_wsChartsGen; // this generation's ID
   const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${syms.map(s=>`${s.toLowerCase()}@kline_${S.tf}`).join('/')}`);
-  let closed=false;
   ws.onmessage=(evt)=>{
+    if(gen!==_wsChartsGen)return; // stale, discard
     const k=JSON.parse(evt.data).data?.k;if(!k)return;
     const slot=S.charts.findIndex(c=>c.sym===k.s);if(slot===-1)return;
     const ch=S.charts[slot];if(!ch.cs)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
     if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
     else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)ch.candles.push(candle);
-    // Batch updates in RAF to avoid blocking main thread mid-paint
     ch._pendingCandle=candle;
     if(!ch._rafPending){
       ch._rafPending=true;
       requestAnimationFrame(()=>{
         ch._rafPending=false;
+        if(gen!==_wsChartsGen)return; // stale
         const c=ch._pendingCandle;if(!c||!ch.cs)return;
         try{
           ch.cs.update({time:toChartTime(c.t),open:c.o,high:c.h,low:c.l,close:c.c});
           ch.vs.update({time:toChartTime(c.t),value:c.qv,color:c.c>=c.o?'#1fa89122':'#e0404022'});
         }catch(e){}
         ch.drawings.forEach(d=>{if(d.type==='aray'||d.type==='atline')checkAlerts(ch,d);});
+        if(S.emaVisible)checkEMACrossovers(ch);
         const cpEl=document.getElementById(`cp${slot}`);if(cpEl)cpEl.textContent=fmtPrice(c.c);
         const t=S.tk[k.s];const cg=document.getElementById(`cg${slot}`);
         if(t?.c24!=null&&cg){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
@@ -1921,21 +1982,29 @@ function startChartWS(){
       });
     }
   };
-  ws.onclose=()=>{if(!closed)setTimeout(startChartWS,3000);};
-  ws.onerror=()=>{closed=true;ws.close();setTimeout(startChartWS,3000);};
+  const schedReconnect=()=>{
+    if(gen!==_wsChartsGen)return; // stale, don't reconnect
+    _wsChartsReconnectTimer=setTimeout(startChartWS,4000);
+  };
+  ws.onclose=()=>schedReconnect();
+  ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
   S.wsCharts=ws;
 }
 
-// Throttle screener WS updates: parse data immediately but batch DOM renders
+// Throttle screener WS updates
 let _wsBatchTimer=null;
-let _wsPendingUpdate=false;
 
 function startScreenerWS(){
+  if(_wsScreenerReconnectTimer){clearTimeout(_wsScreenerReconnectTimer);_wsScreenerReconnectTimer=null;}
+  if(S.wsScreener){try{S.wsScreener.close();}catch(e){}S.wsScreener=null;}
+  const gen=++_wsScreenerGen;
   const ws=new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
   ws.onmessage=(evt)=>{
+    if(gen!==_wsScreenerGen)return;
     const raw=evt.data;
     // Parse on next microtask to avoid blocking WS message handler
     queueMicrotask(()=>{
+      if(gen!==_wsScreenerGen)return;
       let arr;
       try{arr=JSON.parse(raw);}catch(e){return;}
       let changed=false;
@@ -1948,10 +2017,10 @@ function startScreenerWS(){
         if(mx){mx.price=newP;mx.ch24=newC;mx.vol24=newQ;mx.trd24=newN;}
       }
       if(!changed)return;
-      // Debounce renders: max 2/sec for screener
       if(!_wsBatchTimer){
         _wsBatchTimer=setTimeout(()=>{
           _wsBatchTimer=null;
+          if(gen!==_wsScreenerGen)return;
           updTime();
           if(!document.hidden&&!_scrolling)renderTable();
           if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
@@ -1960,7 +2029,12 @@ function startScreenerWS(){
       }
     });
   };
-  ws.onclose=()=>setTimeout(startScreenerWS,3000);
+  const schedReconnect=()=>{
+    if(gen!==_wsScreenerGen)return;
+    _wsScreenerReconnectTimer=setTimeout(startScreenerWS,4000);
+  };
+  ws.onclose=()=>schedReconnect();
+  ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
   S.wsScreener=ws;
 }
 
@@ -2208,9 +2282,8 @@ function onVolFilter(val){
 function updTime(){
   const d=new Date();const pad=n=>n.toString().padStart(2,'0');
   const timeStr=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  document.getElementById('htime').textContent=timeStr;
-  document.getElementById('hstatus').textContent='Онлайн';
-  // Sync to FS header if open
+  const ht=document.getElementById('htime');if(ht)ht.textContent=timeStr;
+  const hs=document.getElementById('hstatus');if(hs)hs.textContent='Онлайн';
   if(S.fsOpen){
     const fshtime=document.getElementById('fsHtime');if(fshtime)fshtime.textContent=timeStr;
     const fshstatus=document.getElementById('fsHstatus');if(fshstatus)fshstatus.textContent='Онлайн';
@@ -2463,6 +2536,14 @@ function buildGroupFilterBar(){
       }
     };
     bar.appendChild(delAll);
+    // Potential button in filter bar
+    const potBtn2=document.createElement('button');
+    potBtn2.style.cssText='background:none;border:1px solid var(--border2);border-radius:3px;color:var(--text3);cursor:pointer;font:inherit;font-size:9px;padding:2px 6px;margin-left:4px;transition:all .1s;';
+    potBtn2.innerHTML='⚡';potBtn2.title='Потенциал';
+    potBtn2.onmouseenter=()=>potBtn2.style.color='#f97316';
+    potBtn2.onmouseleave=()=>potBtn2.style.color='';
+    potBtn2.onclick=()=>togglePotentialPanel();
+    bar.appendChild(potBtn2);
   });
 }
 
@@ -2907,13 +2988,18 @@ async function setFsTf(idx,tf){
   initFsChart(idx);await loadFsChart(idx);startFsWs();
 }
 
+let _wsFsGen=0;
+let _wsFsReconnectTimer=null;
 function startFsWs(){
+  if(_wsFsReconnectTimer){clearTimeout(_wsFsReconnectTimer);_wsFsReconnectTimer=null;}
   if(S.fsWs){try{S.fsWs.close();}catch(e){}S.fsWs=null;}
   if(!S.fsSym||!S.fsOpen)return;
+  const gen=++_wsFsGen;
   const tfs=[...new Set(S.fsCharts.map(c=>c.tf))];
   const streams=tfs.map(tf=>`${S.fsSym.toLowerCase()}@kline_${tf}`).join('/');
   const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
   ws.onmessage=(evt)=>{
+    if(gen!==_wsFsGen)return;
     const k=JSON.parse(evt.data).data?.k;if(!k)return;
     const tf=k.i;
     S.fsCharts.forEach(fch=>{
@@ -2928,8 +3014,12 @@ function startFsWs(){
       rCanvas(fch);
     });
   };
-  ws.onclose=()=>{if(S.fsOpen)setTimeout(startFsWs,3000);};
-  ws.onerror=()=>{ws.close();};
+  const schedReconnect=()=>{
+    if(gen!==_wsFsGen)return;
+    if(S.fsOpen)_wsFsReconnectTimer=setTimeout(startFsWs,4000);
+  };
+  ws.onclose=()=>schedReconnect();
+  ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
   S.fsWs=ws;
 }
 

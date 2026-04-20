@@ -61,6 +61,16 @@
     <button class="tbtn" id="fs-draw-hray" onclick="setDrawMode('hray')">─▷</button>
     <button class="tbtn" id="fs-draw-tline" onclick="setDrawMode('tline')">╱</button>
     <button class="tbtn" id="fs-draw-brush" onclick="setDrawMode('brush')" title="Кисть">✏</button>
+    <div id="fsBrushPalette" style="display:none;align-items:center;gap:3px">
+      <div class="brush-color active" style="background:#f97316" onclick="setBrushColor('#f97316',this)"></div>
+      <div class="brush-color" style="background:#ef4444" onclick="setBrushColor('#ef4444',this)"></div>
+      <div class="brush-color" style="background:#eab308" onclick="setBrushColor('#eab308',this)"></div>
+      <div class="brush-color" style="background:#22c55e" onclick="setBrushColor('#22c55e',this)"></div>
+      <div class="brush-color" style="background:#3b82f6" onclick="setBrushColor('#3b82f6',this)"></div>
+      <div class="brush-color" style="background:#a855f7" onclick="setBrushColor('#a855f7',this)"></div>
+      <div class="brush-color" style="background:#e2e8f0" onclick="setBrushColor('#e2e8f0',this)"></div>
+      <input type="number" class="brush-size" min="1" max="12" value="2" title="Толщина" onchange="setBrushWidth(+this.value)">
+    </div>
     <button class="tbtn" id="fs-draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч">🔔─</button>
     <button class="tbtn" id="fs-draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия">🔔╱</button>
     <button class="tbtn" id="fs-draw-long" onclick="setDrawMode('long')" title="Лонг">▲Л</button>
