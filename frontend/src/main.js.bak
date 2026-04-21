@@ -271,13 +271,13 @@ function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _crosshairRaf:false, _brushStroke:null, _panRaf:false, _rCanvasRaf:false, _rafPending:false};
+    _crosshairRaf:false, _brushStroke:null, _panRaf:false};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _crosshairRaf:false, _brushStroke:null, _panRaf:false, _rCanvasRaf:false, _rafPending:false};
+    _crosshairRaf:false, _brushStroke:null, _panRaf:false};
 }
 
 function activeCols(){
@@ -490,33 +490,26 @@ function buildChartGrid(){
   }
 }
 
-// Coin icon cache and loader — multi-CDN with fallback chain
+// Coin icon cache and loader — uses Binance CDN (covers all futures coins)
 const _iconCache={};
 function setCoinIcon(elId,sym){
-  const rawBase=sym.replace(/USDT$/,'').toUpperCase();
-  // Handle 1000X prefix tokens (e.g. 1000SHIB→SHIB, 1000BONK→BONK)
-  const base=rawBase.replace(/^1000(?=[A-Z])/,'').replace(/^100(?=[A-Z])/,'');
+  const base=sym.replace(/USDT$/,'').toUpperCase();
   const el=document.getElementById(elId);if(!el)return;
   if(_iconCache[base]===false){el.style.display='none';return;}
   if(_iconCache[base]){el.src=_iconCache[base];el.style.display='';return;}
-  // CDN priority list — try each in order
-  const cdns=[
-    `https://bin.bnbstatic.com/static/assets/logos/${base}.png`,
-    `https://assets.coincap.io/assets/icons/${base.toLowerCase()}@2x.png`,
-    `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${base.toLowerCase()}.png`,
-    `https://lcw.nyc3.cdn.digitaloceanspaces.com/production/currencies/64/${base.toLowerCase()}.webp`,
-    rawBase!==base?`https://assets.coincap.io/assets/icons/${rawBase.toLowerCase()}@2x.png`:null,
-  ].filter(Boolean);
-  let idx=0;
-  const tryNext=()=>{
-    if(idx>=cdns.length){_iconCache[base]=false;el.style.display='none';return;}
-    const url=cdns[idx++];
-    const img=new Image();
-    img.onload=()=>{_iconCache[base]=url;el.src=url;el.style.display='';};
-    img.onerror=tryNext;
-    img.src=url;
+  // Try Binance's own asset CDN — covers virtually all listed coins
+  const url=`https://bin.bnbstatic.com/static/assets/logos/${base}.png`;
+  const img=new Image();
+  img.onload=()=>{_iconCache[base]=url;el.src=url;el.style.display='';};
+  img.onerror=()=>{
+    // Fallback: CoinCap
+    const url2=`https://assets.coincap.io/assets/icons/${base.toLowerCase()}@2x.png`;
+    const img2=new Image();
+    img2.onload=()=>{_iconCache[base]=url2;el.src=url2;el.style.display='';};
+    img2.onerror=()=>{_iconCache[base]=false;el.style.display='none';};
+    img2.src=url2;
   };
-  tryNext();
+  img.src=url;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -605,7 +598,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     ch.hoverX=x;ch.hoverY=y;
     const prev=ch.hoveredIdx;
     ch.hoveredIdx=findDrawingNear(ch,x,y);
-    if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;_rCanvasImmediate(ch);});}
+    if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;rCanvas(ch);});}
   },{signal:sig});
   container.addEventListener('mouseleave',()=>{
     ch.hoveredIdx=-1;
@@ -657,33 +650,24 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       const d=ch.drawings[i];
       if(d.type!=='long'&&d.type!=='short')continue;
       if(!d.p1||!d.p2||!ch.cs)continue;
-      const{isLong,entryPrice,tpPrice,slPrice}=getTradeParams(d);
+      const isLong=d.type==='long';
+      const entryP=d.p1.price,slDist=Math.abs(entryP-d.p2.price),rr=d.rr??2;
+      const tpP=isLong?entryP+slDist*rr:entryP-slDist*rr;
+      const slP=isLong?entryP-slDist:entryP+slDist;
       const x1=timeToCoordX(ch,d.p1.time),x2=timeToCoordX(ch,d.p2.time);
       if(x1==null||x2==null)continue;
-      const lx=Math.min(x1,x2),rx=Math.max(x1,x2);
+      const lx=Math.min(x1,x2),rx=Math.max(x1,x2)+80;
       if(x<lx-10||x>rx+10)continue;
-      const yE=ch.cs.priceToCoordinate(entryPrice);
-      const yT=ch.cs.priceToCoordinate(tpPrice);
-      const yS=ch.cs.priceToCoordinate(slPrice);
+      const yE=ch.cs.priceToCoordinate(entryP);
+      const yT=ch.cs.priceToCoordinate(tpP);
+      const yS=ch.cs.priceToCoordinate(slP);
       if(yE==null||yT==null||yS==null)continue;
       const hitEntry=Math.abs(y-yE)<DRAW_HIT*1.5;
       const hitTp=Math.abs(y-yT)<DRAW_HIT*1.5;
       const hitSl=Math.abs(y-yS)<DRAW_HIT*1.5;
-      const yTop=Math.min(yT,yS)-8,yBot=Math.max(yT,yS)+8;
-      const inBounds=y>=yTop&&y<=yBot;
-      const hitLeft=Math.abs(x-lx)<8&&inBounds;
-      const hitRight=Math.abs(x-rx)<8&&inBounds;
-      const hitBody=inBounds&&x>lx+8&&x<rx-8&&!hitEntry&&!hitTp&&!hitSl;
-      if(hitEntry||hitTp||hitSl||hitLeft||hitRight||hitBody){
+      if(hitEntry||hitTp||hitSl){
         e.preventDefault();e.stopPropagation();
-        let tradePart='body';
-        if(hitEntry)tradePart='entry';
-        else if(hitTp)tradePart='tp';
-        else if(hitSl)tradePart='sl';
-        else if(hitLeft)tradePart='left';
-        else if(hitRight)tradePart='right';
-        ch.draggingDraw={drawIdx:i,pointKey:'trade',tradePart,
-          dragStartX:x,orig_p1_time:d.p1.time,orig_p2_time:d.p2.time};
+        ch.draggingDraw={drawIdx:i,pointKey:'trade',tradePart:hitEntry?'entry':hitTp?'tp':'sl'};
         if(ch.interact)ch.interact.style.pointerEvents='auto';
         return;
       }
@@ -709,43 +693,29 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.addEventListener('mousemove',e=>{
     if(!ch.draggingDraw)return;
     const{x,y}=getCoords(container,e.clientX,e.clientY);
+    const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
+    if(!pt)return;
     const d=ch.drawings[ch.draggingDraw.drawIdx];
     if(!d)return;
     if(ch.draggingDraw.pointKey==='trade'){
-      const{isLong}=getTradeParams(d);
+      const isLong=d.type==='long';
       const part=ch.draggingDraw.tradePart;
-      // Horizontal drags — use raw X coordinate
-      if(part==='left'||part==='right'||part==='body'){
-        const timePerPx=getTimePerPx(ch);
-        const dx=x-ch.draggingDraw.dragStartX;
-        const dt=Math.round(dx*timePerPx);
-        if(part==='left'){
-          d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt};
-        } else if(part==='right'){
-          d.p2={...d.p2,time:ch.draggingDraw.orig_p2_time+dt};
-        } else { // body — move whole rect horizontally
-          d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt};
-          d.p2={...d.p2,time:ch.draggingDraw.orig_p2_time+dt};
-        }
-        rCanvas(ch);return;
-      }
-      // Vertical drags — use price coordinate
-      const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
-      if(!pt)return;
+      const entryP=d.p1.price,slDist=Math.abs(entryP-d.p2.price),rr=d.rr??2;
+      const tpP=isLong?entryP+slDist*rr:entryP-slDist*rr;
+      const slP=isLong?entryP-slDist:entryP+slDist;
       if(part==='entry'){
-        const slDist=Math.abs(d.slPrice-d.p1.price);
-        const tpDist=Math.abs(d.tpPrice-d.p1.price);
+        // Move entry: shift whole block keeping SL distance
+        const slDistCur=Math.abs(slP-entryP);
+        const newSl=isLong?pt.price-slDistCur:pt.price+slDistCur;
         d.p1={...d.p1,price:pt.price};
-        d.slPrice=isLong?pt.price-slDist:pt.price+slDist;
-        d.tpPrice=isLong?pt.price+tpDist:pt.price-tpDist;
+        d.p2={...d.p2,price:newSl};
       } else if(part==='sl'){
-        d.slPrice=pt.price; // SL moves independently
+        d.p2={...d.p2,price:pt.price};
       } else if(part==='tp'){
-        d.tpPrice=pt.price; // TP moves independently
+        const slDistCur=Math.abs(slP-entryP);
+        if(slDistCur>0){const newTpDist=Math.abs(pt.price-entryP);d.rr=Math.max(0.1,newTpDist/slDistCur);}
       }
     } else {
-      const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
-      if(!pt)return;
       d[ch.draggingDraw.pointKey]=pt;checkAlerts(ch,d);
     }
     rCanvas(ch);
@@ -770,7 +740,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(range&&range.from<HIST_TRIGGER){
       if(isFs)loadMoreFsHistory(fsIdx);else loadMoreHistory(slot);
     }
-    if(!ch._panRaf){ch._panRaf=true;requestAnimationFrame(()=>{ch._panRaf=false;_rCanvasImmediate(ch);});}
+    if(!ch._panRaf){ch._panRaf=true;requestAnimationFrame(()=>{ch._panRaf=false;rCanvas(ch);});}
   });
 
   ch.lc=lc;ch.cs=cs;ch.vs=vs;
@@ -853,18 +823,9 @@ async function loadMoreHistory(slot){
     const nc=parseKlines(raw);if(!ch.cs||!ch.lc)return;
     const vr=ch.lc.timeScale().getVisibleRange();
     ch.candles=[...nc,...ch.candles];
-    // Schedule heavy setData on idle to avoid blocking pan interaction
-    const merged=ch.candles;
-    const doSet=()=>{
-      if(!ch.cs||!ch.lc)return;
-      try{
-        ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-        ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-        if(vr)try{ch.lc.timeScale().setVisibleRange(vr);}catch(e){}
-      }catch(e){}
-    };
-    if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(doSet,{timeout:2000});}
-    else{setTimeout(doSet,0);}
+    ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
+    ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+    if(vr)try{ch.lc.timeScale().setVisibleRange(vr);}catch(e){}
   }catch(e){}finally{ch.histLoading=false;}
 }
 
@@ -965,14 +926,17 @@ function drawingDist(ch,d,px,py){
   }
   if(d.type==='long'||d.type==='short'){
     if(!d.p1||!d.p2||!ch.cs||!ch.lc)return Infinity;
-    const{entryPrice,tpPrice,slPrice}=getTradeParams(d);
+    const isLong=d.type==='long';
+    const entryP=d.p1.price,slDist=Math.abs(entryP-d.p2.price),rr=d.rr??2;
+    const tpP=isLong?entryP+slDist*rr:entryP-slDist*rr;
+    const slP=isLong?entryP-slDist:entryP+slDist;
     const lrx1=timeToCoordX(ch,d.p1.time),lrx2=timeToCoordX(ch,d.p2.time);
     if(lrx1==null||lrx2==null)return Infinity;
-    const yE=ch.cs.priceToCoordinate(entryPrice);
-    const yT=ch.cs.priceToCoordinate(tpPrice);
-    const yS=ch.cs.priceToCoordinate(slPrice);
+    const yE=ch.cs.priceToCoordinate(entryP);
+    const yT=ch.cs.priceToCoordinate(tpP);
+    const yS=ch.cs.priceToCoordinate(slP);
     if(yE==null||yT==null||yS==null)return Infinity;
-    const lx=Math.min(lrx1,lrx2),rx=Math.max(lrx1,lrx2);
+    const lx=Math.min(lrx1,lrx2),rx=Math.max(lrx1,lrx2)+80;
     if(px<lx-8||px>rx+8)return Infinity;
     return Math.min(Math.abs(py-yE),Math.abs(py-yT),Math.abs(py-yS));
   }
@@ -1120,17 +1084,7 @@ document.addEventListener('keyup',e=>{if(e.key==='Control'||e.key==='Meta')_ctrl
 const PRICE_AXIS_W=65;
 
 // ── Render canvas ──────────────────────────────────────────────
-// Per-chart RAF guard: only one pending rCanvas per chart at a time
 function rCanvas(ch){
-  if(ch._rCanvasRaf)return; // already scheduled
-  ch._rCanvasRaf=true;
-  requestAnimationFrame(()=>{
-    ch._rCanvasRaf=false;
-    _rCanvasImmediate(ch);
-  });
-}
-
-function _rCanvasImmediate(ch){
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
@@ -1157,13 +1111,7 @@ function _rCanvasImmediate(ch){
         // Live preview of trade rect
         const previewPt=pixelToPoint(ch,ch.hoverX,ch.hoverY);
         if(previewPt){
-          const isLong=S.drawMode==='long';
-          const entryPrice=ch.pendingP1.price;
-          const slDist=Math.abs(entryPrice-previewPt.price);
-          const rr=2;
-          const previewD={type:S.drawMode,p1:ch.pendingP1,p2:previewPt,
-            slPrice:isLong?entryPrice-slDist:entryPrice+slDist,
-            tpPrice:isLong?entryPrice+slDist*rr:entryPrice-slDist*rr};
+          const previewD={type:S.drawMode,p1:ch.pendingP1,p2:previewPt,rr:2};
           drawTradeRect(ctx,ch,previewD,false,true);
         }
       } else {
@@ -1388,56 +1336,38 @@ function drawBrushStroke(ctx,ch,d,hov){
 let _brushColor='#f97316';
 let _brushWidth=2;
 
-// ── Trade helpers ──────────────────────────────────────────────
-// Returns entry/tp/sl as absolute prices (migrates old rr-based format)
-function getTradeParams(d){
-  const isLong=d.type==='long';
-  const entryPrice=d.p1.price;
-  if(d.slPrice==null){
-    const slDist=Math.abs(entryPrice-(d.p2?.price??entryPrice));
-    const rr=d.rr??2;
-    d.slPrice=isLong?entryPrice-slDist:entryPrice+slDist;
-    d.tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
-  }
-  return{isLong,entryPrice,tpPrice:d.tpPrice,slPrice:d.slPrice};
-}
-// Seconds per canvas pixel (for horizontal time drag)
-function getTimePerPx(ch){
-  if(!ch.lc||ch.candles.length<2)return 60;
-  const ts=ch.lc.timeScale();
-  const last=ch.candles[ch.candles.length-1];
-  const prev=ch.candles[ch.candles.length-2];
-  const t1=toChartTime(prev.t),t2=toChartTime(last.t);
-  const x1=ts.timeToCoordinate(t1),x2=ts.timeToCoordinate(t2);
-  if(x1==null||x2==null||Math.abs(x2-x1)<0.1)return 60;
-  return(t2-t1)/(x2-x1);
-}
-
 // ── Trade Rectangle (Long / Short simulation) ──────────────────
 function drawTradeRect(ctx,ch,d,hov,preview=false){
   if(!d.p1||!d.p2||!ch.cs||!ch.lc)return;
-  const{isLong,entryPrice,tpPrice,slPrice}=getTradeParams(d);
+  const isLong=d.type==='long';
+  const entryPrice=d.p1.price;
   const x1=timeToCoordX(ch,d.p1.time);
   const x2=timeToCoordX(ch,d.p2.time);
   if(x1==null||x2==null)return;
 
+  const slDist=Math.abs(entryPrice-d.p2.price);
+  const rr=d.rr??2;
+  // Long: TP above, SL below. Short: TP below, SL above.
+  const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
+  const slFinal=isLong?entryPrice-slDist:entryPrice+slDist;
+
   const yEntry=ch.cs.priceToCoordinate(entryPrice);
   const yTp=ch.cs.priceToCoordinate(tpPrice);
-  const ySl=ch.cs.priceToCoordinate(slPrice);
+  const ySl=ch.cs.priceToCoordinate(slFinal);
   if(yEntry==null||yTp==null||ySl==null)return;
 
   const lx=Math.min(x1,x2),rx=Math.max(x1,x2);
+  // TP is always green (profit), SL always red (loss) — regardless of direction
   const tpCol='#1fa891';
   const slCol='#e04040';
-  const dirCol=isLong?'#1fa891':'#e04040';
+  const dirCol=isLong?'#1fa891':'#e04040'; // for border/label
   const alpha=preview?0.4:(hov?0.7:0.5);
-  const rr=Math.abs(tpPrice-entryPrice)/Math.max(0.000001,Math.abs(slPrice-entryPrice));
 
   ctx.save();
-  // TP zone
+  // TP zone (profit direction)
   ctx.fillStyle=tpCol;ctx.globalAlpha=alpha*0.3;
   ctx.fillRect(lx,Math.min(yEntry,yTp),rx-lx,Math.abs(yTp-yEntry));
-  // SL zone
+  // SL zone (loss direction)
   ctx.fillStyle=slCol;ctx.globalAlpha=alpha*0.2;
   ctx.fillRect(lx,Math.min(yEntry,ySl),rx-lx,Math.abs(ySl-yEntry));
   ctx.globalAlpha=1;
@@ -1445,43 +1375,26 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   // Entry line
   ctx.beginPath();ctx.strokeStyle='#ffffffaa';ctx.lineWidth=hov?1.5:1;
   ctx.setLineDash([4,2]);ctx.moveTo(lx,yEntry);ctx.lineTo(rx,yEntry);ctx.stroke();ctx.setLineDash([]);
-  // TP line (independent)
+  // TP line
   ctx.beginPath();ctx.strokeStyle=tpCol+'cc';ctx.lineWidth=hov?2:1.3;
   ctx.moveTo(lx,yTp);ctx.lineTo(rx,yTp);ctx.stroke();
-  // SL line (independent)
+  // SL line
   ctx.beginPath();ctx.strokeStyle=slCol+'cc';ctx.lineWidth=hov?2:1.3;
   ctx.setLineDash([3,2]);ctx.moveTo(lx,ySl);ctx.lineTo(rx,ySl);ctx.stroke();ctx.setLineDash([]);
   // Outer border
   ctx.strokeStyle=dirCol+'44';ctx.lineWidth=1;
   ctx.strokeRect(lx,Math.min(yTp,ySl),rx-lx,Math.abs(yTp-ySl));
 
-  // Horizontal resize/move handles (show on hover)
-  if(hov&&!preview){
-    const handleH=Math.abs(yTp-ySl);
-    const handleY=Math.min(yTp,ySl)+handleH*0.35;
-    const handleH2=handleH*0.3;
-    ctx.fillStyle=dirCol;ctx.globalAlpha=0.7;
-    // Left handle (resize left edge)
-    ctx.fillRect(lx-4,handleY,7,handleH2);
-    ctx.fillRect(rx-3,handleY,7,handleH2);
-    // Move indicator in centre
-    ctx.globalAlpha=0.4;
-    ctx.font='10px JetBrains Mono,monospace';ctx.textAlign='center';
-    ctx.fillStyle='#fff';
-    ctx.fillText('⟺',(lx+rx)/2,Math.min(yTp,ySl)+handleH*0.75);
-    ctx.globalAlpha=1;
-  }
-
-  // Labels
+  // Labels (outside right)
   ctx.font='bold 9px JetBrains Mono,monospace';
   const pctTp=((tpPrice-entryPrice)/entryPrice*100);
-  const pctSl=((slPrice-entryPrice)/entryPrice*100);
+  const pctSl=((slFinal-entryPrice)/entryPrice*100);
   ctx.fillStyle=tpCol;ctx.globalAlpha=0.9;ctx.textAlign='left';
   ctx.fillText(`TP ${fmtPrice(tpPrice)} (${pctTp>=0?'+':''}${pctTp.toFixed(2)}%)`,rx+4,yTp+3);
   ctx.fillStyle=slCol;
-  ctx.fillText(`SL ${fmtPrice(slPrice)} (${pctSl>=0?'+':''}${pctSl.toFixed(2)}%)`,rx+4,ySl+3);
+  ctx.fillText(`SL ${fmtPrice(slFinal)} (${pctSl>=0?'+':''}${pctSl.toFixed(2)}%)`,rx+4,ySl+3);
   ctx.fillStyle='#ffffff88';ctx.font='9px JetBrains Mono,monospace';
-  ctx.fillText(`Вход ${fmtPrice(entryPrice)} · R:R ${rr.toFixed(1)}:1`,lx+3,yEntry-4);
+  ctx.fillText(`Вход ${fmtPrice(entryPrice)} · R:R ${rr}:1`,lx+3,yEntry-4);
   ctx.fillStyle=dirCol;ctx.font='bold 10px JetBrains Mono,monospace';ctx.textAlign='center';
   ctx.fillText(isLong?'▲ ЛОНГ':'▼ ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
   ctx.globalAlpha=1;ctx.restore();
@@ -1526,21 +1439,21 @@ function drawEMAs(ctx,ch,W,H){
   const sym=ch.sym||S.fsSym;
   const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
   ctx.save();
+  // Clip EMA to chart area so it goes under axis labels
   ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();
   for(const cfg of settings){
     if(!cfg.visible)continue;
     const vals=calcEMACached(ch.candles,cfg.period);
     if(!vals.length)continue;
-    // Find the visible time range to avoid drawing invisible segments
-    const vr=ch.lc.timeScale().getVisibleLogicalRange();
     ctx.beginPath();ctx.strokeStyle=cfg.color;ctx.lineWidth=1.5;ctx.globalAlpha=0.9;
     let started=false,lastPx=null,lastPy=null;
     for(const{t,v}of vals){
+      // t is raw candle milliseconds — toChartTime converts to local-adjusted seconds for LW Charts
       const px=timeToCoordX(ch,toChartTime(t));
       const py=ch.cs.priceToCoordinate(v);
       if(px==null||py==null){started=false;continue;}
-      // Only break line if px is wildly out of range (prevents single disconnected segment)
-      if(px<-W*2||px>W*3){started=false;continue;}
+      // Break line if EMA would fly way out of visible chart (e.g. after zoom)
+      if(py<-200||py>H+200){started=false;continue;}
       if(!started){ctx.moveTo(px,py);started=true;}
       else ctx.lineTo(px,py);
       lastPx=px;lastPy=py;
@@ -1725,7 +1638,7 @@ function showAlertPctInput(ch,drawing,container){
 function onInteractMove(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   ch.hoverX=x;ch.hoverY=y;
-  if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;_rCanvasImmediate(ch);});}
+  if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;rCanvas(ch);});}
 }
 
 // #6: dblclick in draw mode on an existing alert → edit %
@@ -1759,12 +1672,7 @@ function showTradeRRInput(ch,d,container){
   inp.focus();inp.select();
   const confirm=()=>{
     const v=parseFloat(inp.value);
-    if(!isNaN(v)&&v>0){
-      const{isLong,entryPrice,slPrice}=getTradeParams(d);
-      const slDist=Math.abs(slPrice-entryPrice);
-      d.tpPrice=isLong?entryPrice+slDist*v:entryPrice-slDist*v;
-      d.rr=v;
-    }
+    if(!isNaN(v)&&v>0)d.rr=v;
     wrap.remove();
     [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
   };
@@ -1800,13 +1708,7 @@ function onInteractClick(ch,e,container){
   }else if(S.drawMode==='long'||S.drawMode==='short'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
-      const isLong=S.drawMode==='long';
-      const entryPrice=ch.pendingP1.price;
-      const slDist=Math.abs(entryPrice-pt.price);
-      const rr=2;
-      const slPrice=isLong?entryPrice-slDist:entryPrice+slDist;
-      const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
-      const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice};
+      const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,rr:2};
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       showTradeRRInput(ch,d,container);
     }
@@ -1936,14 +1838,6 @@ function openEMAEditor(){
       _activeSettings.push({period:9,color:col,visible:true});
       _emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();
     };
-    // Fix: bind closures via addEventListener (inline onclick can't access local `render` / `_editSym`)
-    const soundBtn=box.querySelector('#emaSoundBtn');
-    if(soundBtn)soundBtn.onclick=()=>{S.emaCrossSound=!S.emaCrossSound;render();};
-    const symBtn=box.querySelector('#emaSymBtn');
-    if(symBtn)symBtn.onclick=()=>{
-      _editSym=_editSym?null:(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);
-      render();
-    };
   };
   render();
   modal.appendChild(box);document.body.appendChild(modal);
@@ -1977,7 +1871,7 @@ function onRulerMove(ch,e,container){
       requestAnimationFrame(()=>rCanvas(fc));
     });
   }
-  requestAnimationFrame(()=>{_rCanvasImmediate(ch);updateRulerTooltip(ch);});
+  requestAnimationFrame(()=>{rCanvas(ch);updateRulerTooltip(ch);});
 }
 function onRulerEnd(ch){
   if(!ch.ruler)return;
@@ -2147,7 +2041,7 @@ function startChartWS(){
         const cpEl=document.getElementById(`cp${slot}`);if(cpEl)cpEl.textContent=fmtPrice(c.c);
         const t=S.tk[k.s];const cg=document.getElementById(`cg${slot}`);
         if(t?.c24!=null&&cg){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
-        _rCanvasImmediate(ch);
+        rCanvas(ch);
       });
     }
   };
@@ -2160,32 +2054,6 @@ function startChartWS(){
   S.wsCharts=ws;
 }
 
-// ── Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) ──
-const _tickerWorkerCode=`
-self.onmessage=function(e){
-  try{
-    const arr=JSON.parse(e.data);
-    const out=[];
-    for(let i=0;i<arr.length;i++){
-      const t=arr[i];
-      if(!t.s||t.s.charAt(t.s.length-4)!=='U'||t.s.charAt(t.s.length-3)!=='S'||t.s.charAt(t.s.length-2)!=='D'||t.s.charAt(t.s.length-1)!=='T')continue;
-      out.push({s:t.s,c:+t.c,P:+t.P,q:+t.q,n:+t.n});
-    }
-    self.postMessage(out);
-  }catch(err){self.postMessage([]);}
-};
-`;
-let _tickerWorker=null;
-function getTickerWorker(){
-  if(_tickerWorker)return _tickerWorker;
-  try{
-    const blob=new Blob([_tickerWorkerCode],{type:'application/javascript'});
-    const url=URL.createObjectURL(blob);
-    _tickerWorker=new Worker(url);
-  }catch(e){_tickerWorker=null;}
-  return _tickerWorker;
-}
-
 // Throttle screener WS updates
 let _wsBatchTimer=null;
 
@@ -2194,24 +2062,35 @@ function startScreenerWS(){
   if(S.wsScreener){try{S.wsScreener.close();}catch(e){}S.wsScreener=null;}
   const gen=++_wsScreenerGen;
   const ws=new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
-  const worker=getTickerWorker();
   ws.onmessage=(evt)=>{
     if(gen!==_wsScreenerGen)return;
     const raw=evt.data;
-    if(worker){
-      // Off-load JSON parsing to worker thread — zero main thread cost
-      worker.onmessage=(we)=>{
-        if(gen!==_wsScreenerGen)return;
-        _applyTickerUpdate(we.data,gen);
-      };
-      worker.postMessage(raw);
-    } else {
-      // Fallback: parse on next idle frame (no worker support)
-      requestIdleCallback?.(()=>{
-        if(gen!==_wsScreenerGen)return;
-        try{_applyTickerUpdate(JSON.parse(raw).filter(t=>t.s?.endsWith('USDT')).map(t=>({s:t.s,c:+t.c,P:+t.P,q:+t.q,n:+t.n})),gen);}catch(e){}
-      },{timeout:800});
-    }
+    // Parse on next microtask to avoid blocking WS message handler
+    queueMicrotask(()=>{
+      if(gen!==_wsScreenerGen)return;
+      let arr;
+      try{arr=JSON.parse(raw);}catch(e){return;}
+      let changed=false;
+      for(const t of arr){
+        if(!t.s.endsWith('USDT'))continue;
+        const tk=S.tk[t.s];const mx=S.mx[t.s];
+        if(!tk)continue;
+        const newP=+t.c,newC=+t.P,newQ=+t.q,newN=+t.n||tk.tr;
+        if(tk.p!==newP||tk.c24!==newC){tk.p=newP;tk.c24=newC;tk.qv=newQ;tk.tr=newN;changed=true;}
+        if(mx){mx.price=newP;mx.ch24=newC;mx.vol24=newQ;mx.trd24=newN;}
+      }
+      if(!changed)return;
+      if(!_wsBatchTimer){
+        _wsBatchTimer=setTimeout(()=>{
+          _wsBatchTimer=null;
+          if(gen!==_wsScreenerGen)return;
+          updTime();
+          if(!document.hidden&&!_scrolling)renderTable();
+          if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
+          checkAllAlerts();
+        },500);
+      }
+    });
   };
   const schedReconnect=()=>{
     if(gen!==_wsScreenerGen)return;
@@ -2220,27 +2099,6 @@ function startScreenerWS(){
   ws.onclose=()=>schedReconnect();
   ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
   S.wsScreener=ws;
-}
-
-function _applyTickerUpdate(arr,gen){
-  let changed=false;
-  for(const t of arr){
-    const tk=S.tk[t.s];const mx=S.mx[t.s];
-    if(!tk)continue;
-    if(tk.p!==t.c||tk.c24!==t.P){tk.p=t.c;tk.c24=t.P;tk.qv=t.q;tk.tr=t.n||tk.tr;changed=true;}
-    if(mx){mx.price=t.c;mx.ch24=t.P;mx.vol24=t.q;mx.trd24=t.n||mx.trd24;}
-  }
-  if(!changed)return;
-  if(!_wsBatchTimer){
-    _wsBatchTimer=setTimeout(()=>{
-      _wsBatchTimer=null;
-      if(gen!==_wsScreenerGen)return;
-      updTime();
-      if(!document.hidden&&!_scrolling)renderTable();
-      if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
-      checkAllAlerts();
-    },500);
-  }
 }
 
 function updateFsHeaderValues(){
@@ -2708,9 +2566,6 @@ function buildGroupFilterBar(){
     allBtn.textContent='Все';allBtn.onclick=()=>{S.activeGroupFilter=0;renderTable();updateCharts();buildGroupFilterBar();};
     bar.appendChild(allBtn);
     for(let g=1;g<=7;g++){
-      const cnt=Object.values(S.symGroups).filter(v=>v===g).length;
-      // Hide group button if no coins assigned AND it's not the active filter
-      if(cnt===0&&S.activeGroupFilter!==g)continue;
       const wrap=document.createElement('div');wrap.style.cssText='position:relative;display:flex;align-items:center;';
       const btn=document.createElement('div');
       btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'');
@@ -3148,17 +3003,9 @@ async function loadMoreFsHistory(idx){
     const nc=parseKlines(raw);if(!fch.cs||!fch.lc)return;
     const vr=fch.lc.timeScale().getVisibleRange();
     fch.candles=[...nc,...fch.candles];
-    const merged=fch.candles;
-    const doSet=()=>{
-      if(!fch.cs||!fch.lc)return;
-      try{
-        fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-        fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-        if(vr)try{fch.lc.timeScale().setVisibleRange(vr);}catch(e){}
-      }catch(e){}
-    };
-    if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(doSet,{timeout:2000});}
-    else{setTimeout(doSet,0);}
+    fch.cs.setData(fch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
+    fch.vs.setData(fch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+    if(vr)try{fch.lc.timeScale().setVisibleRange(vr);}catch(e){}
   }catch(e){}finally{fch.histLoading=false;}
 }
 
