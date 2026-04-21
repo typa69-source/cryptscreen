@@ -2085,7 +2085,7 @@ function startScreenerWS(){
           _wsBatchTimer=null;
           if(gen!==_wsScreenerGen)return;
           updTime();
-          if(!document.hidden&&!_scrolling)renderTable();
+          if(!document.hidden&&!_scrolling)scheduleRender();
           if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
           checkAllAlerts();
         },500);
@@ -2265,7 +2265,7 @@ function scheduleRender(){
 let _scrolling=false,_scrollEnd=null;
 document.addEventListener('DOMContentLoaded',()=>{
   const sb=document.getElementById('sbody');
-  if(sb){sb.addEventListener('scroll',()=>{_scrolling=true;clearTimeout(_scrollEnd);_scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);});}
+  if(sb){sb.addEventListener('scroll',()=>{_scrolling=true;clearTimeout(_scrollEnd);_scrollEnd=setTimeout(()=>{_scrolling=false;scheduleRender();},150);});}
 });
 
 function renderTable(){
@@ -3405,11 +3405,9 @@ function runPotentialCheck(){
   const totalMatches=S.potentialPresets.reduce((s,p)=>s+Object.keys(p.matches||{}).length,0);
   const badge=document.getElementById('potBadge');
   if(badge){badge.textContent=totalMatches;badge.style.display=totalMatches?'inline':'none';}
-  // Re-render panel if open
+  // Re-render panel only if it is currently visible
   const panel=document.getElementById('potentialPanel');
   if(panel&&panel.style.display!=='none')renderPotentialPanel();
-  // Rebuild group/potential filter bar to show updated counts
-  buildGroupFilterBar();
   if(!anyEnabled&&S._potInterval){clearInterval(S._potInterval);S._potInterval=null;}
 }
 
