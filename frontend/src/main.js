@@ -925,22 +925,18 @@ function drawingDist(ch,d,px,py){
     return best;
   }
   if(d.type==='long'||d.type==='short'){
-    // rect: check border; ema: check line
     if(!d.p1||!d.p2||!ch.cs||!ch.lc)return Infinity;
-    const x1=timeToCoordX(ch,d.p1.time),y1=ch.cs.priceToCoordinate(d.p1.price);
-    const x2=timeToCoordX(ch,d.p2.time),y2=ch.cs.priceToCoordinate(d.p2.price);
-    if(x1==null||y1==null||x2==null||y2==null)return Infinity;
     const isLong=d.type==='long';
     const entryP=d.p1.price,slDist=Math.abs(entryP-d.p2.price),rr=d.rr??2;
     const tpP=isLong?entryP+slDist*rr:entryP-slDist*rr;
     const slP=isLong?entryP-slDist:entryP+slDist;
-    const x1=timeToCoordX(ch,d.p1.time),x2=timeToCoordX(ch,d.p2.time);
-    if(x1==null||x2==null)return Infinity;
+    const lrx1=timeToCoordX(ch,d.p1.time),lrx2=timeToCoordX(ch,d.p2.time);
+    if(lrx1==null||lrx2==null)return Infinity;
     const yE=ch.cs.priceToCoordinate(entryP);
     const yT=ch.cs.priceToCoordinate(tpP);
     const yS=ch.cs.priceToCoordinate(slP);
     if(yE==null||yT==null||yS==null)return Infinity;
-    const lx=Math.min(x1,x2),rx=Math.max(x1,x2)+80;
+    const lx=Math.min(lrx1,lrx2),rx=Math.max(lrx1,lrx2)+80;
     if(px<lx-8||px>rx+8)return Infinity;
     return Math.min(Math.abs(py-yE),Math.abs(py-yT),Math.abs(py-yS));
   }
