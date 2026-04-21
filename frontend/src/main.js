@@ -251,7 +251,8 @@ const S = {
   lastGroupUsed:1,    // last group assigned by user
   _savedCpW:'',_savedFsCaW:'',
   // Potential monitor — multi-preset system
-  potentialPresets:[],   // [{id,name,conditions:[{field,min,max}],matches:{},alerted:{},enabled}]
+  potentialPresets:[],
+  _potFilterPreset:null, // id of preset being used as screener filter
   _potInterval:null,
   _potNextId:1,
   // EMA overlay settings
@@ -262,19 +263,21 @@ const S = {
     {period:200,color:'#e04040',visible:false},
   ],
   emaVisible:false,
+  emaCrossSound:true,
+  emaSymOverrides:{},
 };
 
 function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _crosshairRaf:false, _brushStroke:null};
+    _crosshairRaf:false, _brushStroke:null, _panRaf:false};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _crosshairRaf:false, _brushStroke:null};
+    _crosshairRaf:false, _brushStroke:null, _panRaf:false};
 }
 
 function activeCols(){
@@ -637,16 +640,46 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     }
   },{signal:sig});
 
-  // Drag drawing points (LMB, cursor mode) — Fix #2: use timeToCoordX for future points
+  // Drag drawing points — cursor mode
+  // For long/short: drag entry, TP, or SL line independently
   container.addEventListener('mousedown',e=>{
     if(e.button!==0||S.drawMode)return;
     const{x,y}=getCoords(container,e.clientX,e.clientY);
+    // Check long/short drag handles
     for(let i=0;i<ch.drawings.length;i++){
       const d=ch.drawings[i];
+      if(d.type!=='long'&&d.type!=='short')continue;
+      if(!d.p1||!d.p2||!ch.cs)continue;
+      const isLong=d.type==='long';
+      const entryP=d.p1.price,slDist=Math.abs(entryP-d.p2.price),rr=d.rr??2;
+      const tpP=isLong?entryP+slDist*rr:entryP-slDist*rr;
+      const slP=isLong?entryP-slDist:entryP+slDist;
+      const x1=timeToCoordX(ch,d.p1.time),x2=timeToCoordX(ch,d.p2.time);
+      if(x1==null||x2==null)continue;
+      const lx=Math.min(x1,x2),rx=Math.max(x1,x2)+80;
+      if(x<lx-10||x>rx+10)continue;
+      const yE=ch.cs.priceToCoordinate(entryP);
+      const yT=ch.cs.priceToCoordinate(tpP);
+      const yS=ch.cs.priceToCoordinate(slP);
+      if(yE==null||yT==null||yS==null)continue;
+      const hitEntry=Math.abs(y-yE)<DRAW_HIT*1.5;
+      const hitTp=Math.abs(y-yT)<DRAW_HIT*1.5;
+      const hitSl=Math.abs(y-yS)<DRAW_HIT*1.5;
+      if(hitEntry||hitTp||hitSl){
+        e.preventDefault();e.stopPropagation();
+        ch.draggingDraw={drawIdx:i,pointKey:'trade',tradePart:hitEntry?'entry':hitTp?'tp':'sl'};
+        if(ch.interact)ch.interact.style.pointerEvents='auto';
+        return;
+      }
+    }
+    // Standard point drag for other drawings
+    for(let i=0;i<ch.drawings.length;i++){
+      const d=ch.drawings[i];
+      if(d.type==='long'||d.type==='short'||d.type==='brush')continue;
       const pts=d.type==='hray'||d.type==='aray'?{p1:d.p1}:{p1:d.p1,p2:d.p2};
       for(const[key,pt]of Object.entries(pts)){
         if(!pt)continue;
-        const px=timeToCoordX(ch,pt.time); // Fix #2: was lc.timeScale().timeToCoordinate(pt.time)
+        const px=timeToCoordX(ch,pt.time);
         const py=ch.cs.priceToCoordinate(pt.price);
         if(px!=null&&py!=null&&Math.hypot(x-px,y-py)<10){
           e.preventDefault();e.stopPropagation();
@@ -660,11 +693,31 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.addEventListener('mousemove',e=>{
     if(!ch.draggingDraw)return;
     const{x,y}=getCoords(container,e.clientX,e.clientY);
-    // Fix #5: Ctrl snaps during drag too
     const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
     if(!pt)return;
     const d=ch.drawings[ch.draggingDraw.drawIdx];
-    if(d){d[ch.draggingDraw.pointKey]=pt;checkAlerts(ch,d);}
+    if(!d)return;
+    if(ch.draggingDraw.pointKey==='trade'){
+      const isLong=d.type==='long';
+      const part=ch.draggingDraw.tradePart;
+      const entryP=d.p1.price,slDist=Math.abs(entryP-d.p2.price),rr=d.rr??2;
+      const tpP=isLong?entryP+slDist*rr:entryP-slDist*rr;
+      const slP=isLong?entryP-slDist:entryP+slDist;
+      if(part==='entry'){
+        // Move entry: shift whole block keeping SL distance
+        const slDistCur=Math.abs(slP-entryP);
+        const newSl=isLong?pt.price-slDistCur:pt.price+slDistCur;
+        d.p1={...d.p1,price:pt.price};
+        d.p2={...d.p2,price:newSl};
+      } else if(part==='sl'){
+        d.p2={...d.p2,price:pt.price};
+      } else if(part==='tp'){
+        const slDistCur=Math.abs(slP-entryP);
+        if(slDistCur>0){const newTpDist=Math.abs(pt.price-entryP);d.rr=Math.max(0.1,newTpDist/slDistCur);}
+      }
+    } else {
+      d[ch.draggingDraw.pointKey]=pt;checkAlerts(ch,d);
+    }
     rCanvas(ch);
   },{capture:true,signal:sig});
   container.addEventListener('mouseup',e=>{
@@ -687,7 +740,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(range&&range.from<HIST_TRIGGER){
       if(isFs)loadMoreFsHistory(fsIdx);else loadMoreHistory(slot);
     }
-    requestAnimationFrame(()=>rCanvas(ch));
+    if(!ch._panRaf){ch._panRaf=true;requestAnimationFrame(()=>{ch._panRaf=false;rCanvas(ch);});}
   });
 
   ch.lc=lc;ch.cs=cs;ch.vs=vs;
@@ -871,23 +924,25 @@ function drawingDist(ch,d,px,py){
     }
     return best;
   }
-  if(d.type==='traderect'||d.type==='ema'){
+  if(d.type==='long'||d.type==='short'){
     // rect: check border; ema: check line
-    if(d.type==='ema')return Infinity; // EMA not deletable by RMB (auto-drawn)
-    if(!d.p1||!d.p2)return Infinity;
+    if(!d.p1||!d.p2||!ch.cs||!ch.lc)return Infinity;
     const x1=timeToCoordX(ch,d.p1.time),y1=ch.cs.priceToCoordinate(d.p1.price);
     const x2=timeToCoordX(ch,d.p2.time),y2=ch.cs.priceToCoordinate(d.p2.price);
     if(x1==null||y1==null||x2==null||y2==null)return Infinity;
-    const lx=Math.min(x1,x2),rx=Math.max(x1,x2);
-    const ty=Math.min(y1,y2),by=Math.max(y1,y2);
-    // near any edge?
-    const edges=[
-      Math.abs(px-lx)*(py>=ty&&py<=by?1:Infinity),
-      Math.abs(px-rx)*(py>=ty&&py<=by?1:Infinity),
-      Math.abs(py-ty)*(px>=lx&&px<=rx?1:Infinity),
-      Math.abs(py-by)*(px>=lx&&px<=rx?1:Infinity),
-    ];
-    return Math.min(...edges);
+    const isLong=d.type==='long';
+    const entryP=d.p1.price,slDist=Math.abs(entryP-d.p2.price),rr=d.rr??2;
+    const tpP=isLong?entryP+slDist*rr:entryP-slDist*rr;
+    const slP=isLong?entryP-slDist:entryP+slDist;
+    const x1=timeToCoordX(ch,d.p1.time),x2=timeToCoordX(ch,d.p2.time);
+    if(x1==null||x2==null)return Infinity;
+    const yE=ch.cs.priceToCoordinate(entryP);
+    const yT=ch.cs.priceToCoordinate(tpP);
+    const yS=ch.cs.priceToCoordinate(slP);
+    if(yE==null||yT==null||yS==null)return Infinity;
+    const lx=Math.min(x1,x2),rx=Math.max(x1,x2)+80;
+    if(px<lx-8||px>rx+8)return Infinity;
+    return Math.min(Math.abs(py-yE),Math.abs(py-yT),Math.abs(py-yS));
   }
   return Infinity;
 }
@@ -1385,7 +1440,8 @@ function calcEMACached(candles,period){
 
 function drawEMAs(ctx,ch,W,H){
   if(!S.emaVisible||!ch.cs||!ch.lc||!ch.candles.length)return;
-  const settings=S.emaSettings;
+  const sym=ch.sym||S.fsSym;
+  const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
   ctx.save();
   // Clip EMA to chart area so it goes under axis labels
   ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();
@@ -1421,9 +1477,10 @@ function drawEMAs(ctx,ch,W,H){
 // Check last 2 EMA values: if they cross, fire alert
 let _emaCrossAlerted={}; // key="sym_aXb" → last alert ts
 function checkEMACrossovers(ch){
-  if(!S.emaVisible||!S.emaSettings.length||!ch.candles.length)return;
+  if(!S.emaVisible||!ch.candles.length)return;
   const sym=ch.sym||S.fsSym;if(!sym)return;
-  const visible=S.emaSettings.filter(c=>c.visible);
+  const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
+  const visible=settings.filter(c=>c.visible);
   if(visible.length<2)return;
   const now=Date.now();
   for(let i=0;i<visible.length;i++){
@@ -1442,7 +1499,7 @@ function checkEMACrossovers(ch){
       _emaCrossAlerted[key]=now;
       const dir=isAbove?'↑':'↓';
       const label=isAbove?'Бычье пересечение':'Медвежье пересечение';
-      playAlert(isAbove?880:440);
+      if(S.emaCrossSound)playAlert(isAbove?880:440);
       S.alertLog.unshift({ts:now,sym,curPrice:a1,linePrice:b1,distPct:0,
         type:'ema_cross',alertPct:0,
         presetName:`EMA${a.period} ${dir} EMA${b.period} — ${label}`});
@@ -1716,6 +1773,7 @@ function openEMAEditor(){
   box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:300px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.8)';
 
   const EMA_COLORS=['#f97316','#3b82f6','#a855f7','#e04040','#1fa891','#eab308','#ec4899','#22c55e'];
+  let _editSym=null; // null=global, string=per-symbol
 
   const render=()=>{
     box.innerHTML=`
@@ -1724,13 +1782,22 @@ function openEMAEditor(){
         <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('emaEditorModal').remove()">✕</button>
       </div>
       <div id="emaList" style="flex:1;overflow-y:auto;padding:8px 14px;display:flex;flex-direction:column;gap:6px;min-height:0"></div>
+      <div style="padding:6px 14px;border-top:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <label style="font-size:9px;color:var(--text3)">Звук при пересечении:</label>
+        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}" onclick="S.emaCrossSound=!S.emaCrossSound;render()">${S.emaCrossSound?'● Вкл':'○ Выкл'}</button>
+        <span style="flex:1"></span>
+        <label style="font-size:9px;color:var(--text3)" title="Задать отдельные EMA для текущей монеты">Режим:</label>
+        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}" onclick="_editSym=_editSym?null:(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);render()">${_editSym?'📌 '+_editSym.replace(/USDT$/,''):'🌍 Глобал'}</button>
+      </div>
       <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
         <button class="tbtn" style="flex:1" id="addEmaBtn">＋ Добавить EMA</button>
         <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();S.emaVisible=true;[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));document.getElementById('emaBtn')?.classList.add('on');document.getElementById('fsEmaBtn')?.classList.add('on')">✓ Применить</button>
       </div>`;
 
     const list=box.querySelector('#emaList');
-    S.emaSettings.forEach((cfg,i)=>{
+    if(_editSym&&!S.emaSymOverrides[_editSym])S.emaSymOverrides[_editSym]=[...S.emaSettings.map(c=>({...c}))];
+    const _activeSettings=_editSym?S.emaSymOverrides[_editSym]:S.emaSettings;
+    _activeSettings.forEach((cfg,i)=>{
       const row=document.createElement('div');
       row.style.cssText='display:flex;align-items:center;gap:6px;background:var(--bg3);border-radius:4px;padding:5px 8px;';
       // Color picker dots
@@ -1770,9 +1837,9 @@ function openEMAEditor(){
     }
 
     box.querySelector('#addEmaBtn').onclick=()=>{
-      const used=S.emaSettings.map(c=>c.color);
+      const used=_activeSettings.map(c=>c.color);
       const col=EMA_COLORS.find(c=>!used.includes(c))||'#f97316';
-      S.emaSettings.push({period:9,color:col,visible:true});
+      _activeSettings.push({period:9,color:col,visible:true});
       _emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();
     };
   };
@@ -2077,8 +2144,14 @@ function sortedRows(){
   let rows=Object.values(S.mx);
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
-  // #9: group filter
+  // Group filter
   if(S.activeGroupFilter>0)rows=rows.filter(r=>getSymGroup(r.sym)===S.activeGroupFilter);
+  // Potential preset tab filter
+  if(S._potFilterPreset){
+    const pr=S.potentialPresets.find(p=>p.id===S._potFilterPreset);
+    if(pr&&Object.keys(pr.matches||{}).length>0)rows=rows.filter(r=>pr.matches[r.sym]);
+    else S._potFilterPreset=null; // preset has no matches, clear filter
+  }
   rows.sort((a,b)=>{
     if(S.sortAlpha){
       const r=a.sym.localeCompare(b.sym);return S.sortDir==='asc'?r:-r;
@@ -2536,14 +2609,28 @@ function buildGroupFilterBar(){
       }
     };
     bar.appendChild(delAll);
-    // Potential button in filter bar
-    const potBtn2=document.createElement('button');
-    potBtn2.style.cssText='background:none;border:1px solid var(--border2);border-radius:3px;color:var(--text3);cursor:pointer;font:inherit;font-size:9px;padding:2px 6px;margin-left:4px;transition:all .1s;';
-    potBtn2.innerHTML='⚡';potBtn2.title='Потенциал';
-    potBtn2.onmouseenter=()=>potBtn2.style.color='#f97316';
-    potBtn2.onmouseleave=()=>potBtn2.style.color='';
-    potBtn2.onclick=()=>togglePotentialPanel();
-    bar.appendChild(potBtn2);
+    // Potential preset tabs — appear as filter tabs alongside color groups
+    S.potentialPresets.forEach(pr=>{
+      const cnt=Object.keys(pr.matches||{}).length;
+      const tab=document.createElement('button');
+      tab.style.cssText=`background:${pr.enabled?(cnt?'rgba(249,115,22,.18)':'rgba(255,255,255,.05)'):'transparent'};border:1px solid ${pr.enabled?'#f97316':'var(--border2)'};border-radius:3px;color:${pr.enabled?(cnt?'#f97316':'var(--text2)'):'var(--text3)'};cursor:pointer;font:inherit;font-size:9px;padding:2px 7px;margin-left:2px;transition:all .1s;white-space:nowrap;display:flex;align-items:center;gap:3px;`;
+      tab.innerHTML=`⚡${pr.name}${cnt?` <span style="background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;line-height:1.5">${cnt}</span>`:''}`;
+      tab.title=`${pr.name}: ${cnt} монет. ЛКМ — фильтр, ПКМ — настройка`;
+      tab.onclick=()=>{
+        // Toggle filter: show only coins in this preset
+        S._potFilterPreset=(S._potFilterPreset===pr.id?null:pr.id);
+        renderTable();buildGroupFilterBar();
+      };
+      tab.oncontextmenu=ev=>{ev.preventDefault();openPotPresetEditor(pr.id);};
+      if(S._potFilterPreset===pr.id)tab.style.outline='1px solid #f97316';
+      bar.appendChild(tab);
+    });
+    // "+" to add new preset
+    const addPotBtn=document.createElement('button');
+    addPotBtn.style.cssText='background:none;border:1px solid var(--border2);border-radius:3px;color:var(--text3);cursor:pointer;font:inherit;font-size:10px;padding:2px 6px;margin-left:2px;';
+    addPotBtn.textContent='⚡＋';addPotBtn.title='Добавить пресет Потенциала';
+    addPotBtn.onclick=()=>openPotPresetEditor(null);
+    bar.appendChild(addPotBtn);
   });
 }
 
@@ -3325,6 +3412,8 @@ function runPotentialCheck(){
   // Re-render panel if open
   const panel=document.getElementById('potentialPanel');
   if(panel&&panel.style.display!=='none')renderPotentialPanel();
+  // Rebuild group/potential filter bar to show updated counts
+  buildGroupFilterBar();
   if(!anyEnabled&&S._potInterval){clearInterval(S._potInterval);S._potInterval=null;}
 }
 
@@ -3352,6 +3441,8 @@ function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 
 // ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
+window.rCanvas            = rCanvas;
+window.setDensityMult     = setDensityMult;
 window.setTf              = setTf;
 window.changePage         = changePage;
 window.setDrawMode        = setDrawMode;
