@@ -2715,7 +2715,6 @@ function buildGroupFilterBar(){
       const btn=document.createElement('div');
       btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'');
       btn.style.background=GROUP_COLORS[g];
-      const cnt=Object.values(S.symGroups).filter(v=>v===g).length;
       btn.title=`Группа ${g} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
       btn.onclick=()=>{S.activeGroupFilter=S.activeGroupFilter===g?0:g;renderTable();updateCharts();buildGroupFilterBar();};
       btn.oncontextmenu=ev=>{ev.preventDefault();ev.stopPropagation();
