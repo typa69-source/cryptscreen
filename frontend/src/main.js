@@ -501,7 +501,6 @@ function buildChartGrid(){
           <span class="ctrd" id="ctd${i}"></span>
           <span class="ccorr" id="cco${i}"></span>
           <span class="chead-gap"></span>
-          <button class="clear-draw-btn" onclick="clearDrawingsSlot(${i})" title="Двойное нажатие — удалить все рисунки">✕✕</button>
           <button class="fs-open-btn" onclick="openFullscreen(${i})" title="На весь экран">⤡</button>
         </div>
         <div class="cbody" id="cb${i}">
@@ -628,8 +627,10 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.addEventListener('mousemove',e=>{
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     ch.hoverX=x;ch.hoverY=y;
-    const prev=ch.hoveredIdx;
-    ch.hoveredIdx=findDrawingNear(ch,x,y);
+    // Skip expensive hit-testing while panning — no hover highlights needed during drag
+    if(!_anyChartPanning&&!ch.draggingDraw){
+      ch.hoveredIdx=findDrawingNear(ch,x,y);
+    }
     rCanvas(ch);
   },{signal:sig});
   container.addEventListener('mouseleave',()=>{
@@ -2284,13 +2285,18 @@ function _applyTickerUpdate(arr,gen){
           // User is dragging — defer heavy DOM work until after pan ends
           _deferredRenderNeeded=true;
         } else {
-          scheduleRender();
+          // Use requestIdleCallback so table render never blocks click events
+          if(typeof requestIdleCallback!=='undefined'){
+            requestIdleCallback(()=>renderTable(),{timeout:900});
+          } else {
+            setTimeout(renderTable,0); // yield to event loop first
+          }
         }
       }
       if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
       // Only run alert checks when not panning — they also touch DOM
       if(!_anyChartPanning)checkAllAlerts();
-    },500);
+    },1000);
   }
 }
 
@@ -2376,22 +2382,22 @@ function renderScreenerInto(bodyEl,rows){
       // Update row class
       const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
       if(row.className!==newCls)row.className=newCls;
-      // Update color dot in screener (Fix #5)
-      const gdot=row.querySelector('.cg-dot');
+      // Update color dot in screener — use cached ref to avoid DOM query
+      const gdot=row._gdot||(row._gdot=row.querySelector('.cg-dot'));
       if(gdot){
         const nc=grpCol||'var(--bg4)';
         const nb=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
         if(gdot.style.background!==nc)gdot.style.background=nc;
         if(gdot.style.borderColor!==nb)gdot.style.borderColor=nb;
       }
-      // Update color stripe
-      let stripe=row.querySelector('.cg-badge');
+      // Update color stripe — cached ref
+      let stripe=row._stripe!==undefined?row._stripe:(row._stripe=row.querySelector('.cg-badge'));
       if(grpCol){
-        if(!stripe){stripe=document.createElement('div');stripe.className='cg-badge';row.prepend(stripe);}
+        if(!stripe){stripe=document.createElement('div');stripe.className='cg-badge';row.prepend(stripe);row._stripe=stripe;}
         stripe.style.background=grpCol;stripe.style.opacity='0.7';
-      } else if(stripe){stripe.remove();}
-      // Update metric cells
-      const cells=row.querySelectorAll('.mc');
+      } else if(stripe){stripe.remove();row._stripe=null;}
+      // Update metric cells — use cached array (avoids querySelectorAll on every update)
+      const cells=row._cells||row.querySelectorAll('.mc');
       cols.forEach((c,ci)=>{
         const cell=cells[ci];if(!cell)return;
         const v=m[c.id];
@@ -2434,10 +2440,13 @@ function renderScreenerInto(bodyEl,rows){
     if(pgNum){const pg=document.createElement('span');pg.className='tpg';pg.textContent=`·${S.page+1}`;rt.appendChild(pg);}
     row.appendChild(rt);
     const rg=document.createElement('div');rg.className='rmgrid';
+    const cellArr=[];
     for(const c of cols){
       const v=m[c.id];const cell=document.createElement('div');
-      cell.className=`mc ${fc(v,c.id)} ${fh(v,c.id)}`;cell.textContent=fv(v,c.id);rg.appendChild(cell);
+      cell.className=`mc ${fc(v,c.id)} ${fh(v,c.id)}`;cell.textContent=fv(v,c.id);
+      rg.appendChild(cell);cellArr.push(cell);
     }
+    row._cells=cellArr; // cache direct refs to avoid querySelectorAll on each update
     row.appendChild(rg);frag.appendChild(row);
   }
   bodyEl.innerHTML='';bodyEl.appendChild(frag);
@@ -3328,22 +3337,6 @@ async function loadKlinesBackground(){
 
 function loadScript(url){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
 
-function yieldToMainThread(){
-  return new Promise(res=>{
-    if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>res());
-    else setTimeout(res,0);
-  });
-}
-
-async function initChartsProgressive(){
-  if(!S.LC)return;
-  for(let i=0;i<S.gridSize;i++){
-    initLCChart(i);
-    // Yield every 2 charts so the browser can keep UI responsive.
-    if(i%2===1)await yieldToMainThread();
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════
 //  MAIN
 // ═══════════════════════════════════════════════════════════════
@@ -3358,8 +3351,7 @@ async function main(){
     buildChartGrid();
     buildScreenerHeader(document.getElementById('shdr'));
     updSortHdr();
-    await initChartsProgressive();
-    await yieldToMainThread();
+    if(S.LC)for(let i=0;i<S.gridSize;i++)initLCChart(i);
 
     ldSet('Получение списка фьючерсов Binance…',18);
     let info;
@@ -3372,9 +3364,7 @@ async function main(){
     for(const t of rawTk)if(t.symbol.endsWith('USDT'))
       S.tk[t.symbol]={p:+t.lastPrice,c24:+t.priceChangePercent,h24:+t.highPrice,l24:+t.lowPrice,qv:+t.quoteVolume,tr:+t.count};
 
-    await yieldToMainThread();
     ldSet('Вычисление метрик…',70);calcAll();
-    await yieldToMainThread();
     ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();
     setTimeout(ldHide,150);
