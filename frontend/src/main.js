@@ -271,13 +271,13 @@ function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _brushStroke:null, _rCanvasRaf:false, _rafPending:false};
+    _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _brushStroke:null, _rCanvasRaf:false, _rafPending:false};
+    _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0};
 }
 
 function activeCols(){
@@ -501,7 +501,6 @@ function buildChartGrid(){
           <span class="ctrd" id="ctd${i}"></span>
           <span class="ccorr" id="cco${i}"></span>
           <span class="chead-gap"></span>
-          <button class="clear-draw-btn" onclick="clearDrawingsSlot(${i})" title="Двойное нажатие — удалить все рисунки">✕✕</button>
           <button class="fs-open-btn" onclick="openFullscreen(${i})" title="На весь экран">⤡</button>
         </div>
         <div class="cbody" id="cb${i}">
@@ -628,8 +627,16 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.addEventListener('mousemove',e=>{
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     ch.hoverX=x;ch.hoverY=y;
-    const prev=ch.hoveredIdx;
-    ch.hoveredIdx=findDrawingNear(ch,x,y);
+    // During pan, skip heavy hover/hit-test work to keep drag smooth.
+    if(_anyChartPanning&&!ch.draggingDraw&&!ch.ruler?.active)return;
+    // Hit-testing drawings is expensive (especially brush strokes), throttle to ~30 FPS.
+    if(!_anyChartPanning&&!ch.draggingDraw){
+      const now=performance.now();
+      if(now-ch._lastHoverCheckTs>32){
+        ch.hoveredIdx=findDrawingNear(ch,x,y);
+        ch._lastHoverCheckTs=now;
+      }
+    }
     rCanvas(ch);
   },{signal:sig});
   container.addEventListener('mouseleave',()=>{
@@ -1165,6 +1172,8 @@ function _rCanvasImmediate(ch){
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
+  const isPanFrame=_anyChartPanning&&!ch.draggingDraw&&!ch.ruler?.active;
+  if(isPanFrame)return;
   // #3: clip drawing area so we don't overdraw the price axis
   const drawW=Math.max(1,W-PRICE_AXIS_W);
   ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,H);ctx.clip();
@@ -2284,13 +2293,18 @@ function _applyTickerUpdate(arr,gen){
           // User is dragging — defer heavy DOM work until after pan ends
           _deferredRenderNeeded=true;
         } else {
-          renderTable();
+          // Use requestIdleCallback so table render never blocks click events
+          if(typeof requestIdleCallback!=='undefined'){
+            requestIdleCallback(()=>renderTable(),{timeout:900});
+          } else {
+            setTimeout(renderTable,0); // yield to event loop first
+          }
         }
       }
       if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
       // Only run alert checks when not panning — they also touch DOM
       if(!_anyChartPanning)checkAllAlerts();
-    },500);
+    },1000);
   }
 }
 
@@ -2376,22 +2390,22 @@ function renderScreenerInto(bodyEl,rows){
       // Update row class
       const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
       if(row.className!==newCls)row.className=newCls;
-      // Update color dot in screener (Fix #5)
-      const gdot=row.querySelector('.cg-dot');
+      // Update color dot in screener — use cached ref to avoid DOM query
+      const gdot=row._gdot||(row._gdot=row.querySelector('.cg-dot'));
       if(gdot){
         const nc=grpCol||'var(--bg4)';
         const nb=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
         if(gdot.style.background!==nc)gdot.style.background=nc;
         if(gdot.style.borderColor!==nb)gdot.style.borderColor=nb;
       }
-      // Update color stripe
-      let stripe=row.querySelector('.cg-badge');
+      // Update color stripe — cached ref
+      let stripe=row._stripe!==undefined?row._stripe:(row._stripe=row.querySelector('.cg-badge'));
       if(grpCol){
-        if(!stripe){stripe=document.createElement('div');stripe.className='cg-badge';row.prepend(stripe);}
+        if(!stripe){stripe=document.createElement('div');stripe.className='cg-badge';row.prepend(stripe);row._stripe=stripe;}
         stripe.style.background=grpCol;stripe.style.opacity='0.7';
-      } else if(stripe){stripe.remove();}
-      // Update metric cells
-      const cells=row.querySelectorAll('.mc');
+      } else if(stripe){stripe.remove();row._stripe=null;}
+      // Update metric cells — use cached array (avoids querySelectorAll on every update)
+      const cells=row._cells||row.querySelectorAll('.mc');
       cols.forEach((c,ci)=>{
         const cell=cells[ci];if(!cell)return;
         const v=m[c.id];
@@ -2434,10 +2448,13 @@ function renderScreenerInto(bodyEl,rows){
     if(pgNum){const pg=document.createElement('span');pg.className='tpg';pg.textContent=`·${S.page+1}`;rt.appendChild(pg);}
     row.appendChild(rt);
     const rg=document.createElement('div');rg.className='rmgrid';
+    const cellArr=[];
     for(const c of cols){
       const v=m[c.id];const cell=document.createElement('div');
-      cell.className=`mc ${fc(v,c.id)} ${fh(v,c.id)}`;cell.textContent=fv(v,c.id);rg.appendChild(cell);
+      cell.className=`mc ${fc(v,c.id)} ${fh(v,c.id)}`;cell.textContent=fv(v,c.id);
+      rg.appendChild(cell);cellArr.push(cell);
     }
+    row._cells=cellArr; // cache direct refs to avoid querySelectorAll on each update
     row.appendChild(rg);frag.appendChild(row);
   }
   bodyEl.innerHTML='';bodyEl.appendChild(frag);
