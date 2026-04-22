@@ -2284,7 +2284,7 @@ function _applyTickerUpdate(arr,gen){
           // User is dragging — defer heavy DOM work until after pan ends
           _deferredRenderNeeded=true;
         } else {
-          renderTable();
+          scheduleRender();
         }
       }
       if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
@@ -3328,6 +3328,22 @@ async function loadKlinesBackground(){
 
 function loadScript(url){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
 
+function yieldToMainThread(){
+  return new Promise(res=>{
+    if(typeof requestAnimationFrame==='function')requestAnimationFrame(()=>res());
+    else setTimeout(res,0);
+  });
+}
+
+async function initChartsProgressive(){
+  if(!S.LC)return;
+  for(let i=0;i<S.gridSize;i++){
+    initLCChart(i);
+    // Yield every 2 charts so the browser can keep UI responsive.
+    if(i%2===1)await yieldToMainThread();
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  MAIN
 // ═══════════════════════════════════════════════════════════════
@@ -3342,7 +3358,8 @@ async function main(){
     buildChartGrid();
     buildScreenerHeader(document.getElementById('shdr'));
     updSortHdr();
-    if(S.LC)for(let i=0;i<S.gridSize;i++)initLCChart(i);
+    await initChartsProgressive();
+    await yieldToMainThread();
 
     ldSet('Получение списка фьючерсов Binance…',18);
     let info;
@@ -3355,7 +3372,9 @@ async function main(){
     for(const t of rawTk)if(t.symbol.endsWith('USDT'))
       S.tk[t.symbol]={p:+t.lastPrice,c24:+t.priceChangePercent,h24:+t.highPrice,l24:+t.lowPrice,qv:+t.quoteVolume,tr:+t.count};
 
+    await yieldToMainThread();
     ldSet('Вычисление метрик…',70);calcAll();
+    await yieldToMainThread();
     ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();
     setTimeout(ldHide,150);
