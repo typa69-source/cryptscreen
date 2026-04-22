@@ -271,13 +271,13 @@ function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _crosshairRaf:false, _brushStroke:null, _panRaf:false, _rCanvasRaf:false, _rafPending:false};
+    _brushStroke:null, _rCanvasRaf:false, _rafPending:false};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _crosshairRaf:false, _brushStroke:null, _panRaf:false, _rCanvasRaf:false, _rafPending:false};
+    _brushStroke:null, _rCanvasRaf:false, _rafPending:false};
 }
 
 function activeCols(){
@@ -302,6 +302,27 @@ function ldHide(){const el=document.getElementById('ld');document.getElementById
 // Global rate limiter — track if we're banned
 let _bnBannedUntil = 0;
 const _reqQueue = []; let _reqRunning = 0; const _reqMax = 8;
+
+// ── Pan state tracking — skip heavy DOM work while user is dragging charts ──
+let _anyChartPanning = false;
+let _panEndTimer = null;
+let _deferredRenderNeeded = false;
+function _onPanStart() {
+  _anyChartPanning = true;
+  if (_panEndTimer) clearTimeout(_panEndTimer);
+  _panEndTimer = setTimeout(() => {
+    _anyChartPanning = false;
+    _panEndTimer = null;
+    if (_deferredRenderNeeded && !document.hidden) {
+      _deferredRenderNeeded = false;
+      if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(() => renderTable(), { timeout: 400 });
+      } else {
+        setTimeout(renderTable, 0);
+      }
+    }
+  }, 180);
+}
 function _runQueue(){
   while(_reqRunning < _reqMax && _reqQueue.length){
     const {fn,res,rej} = _reqQueue.shift();
@@ -600,12 +621,16 @@ function initLCChart(slot,isFs=false,fsIdx=null){
 
   // Container-level listeners (always active regardless of draw mode)
   const ab=new AbortController();const sig=ab.signal;ch._ab=ab;
+  // Track LMB press on the chart container to flag pan state immediately
+  container.addEventListener('mousedown',e=>{
+    if(e.button===0&&!S.drawMode&&!ch.draggingDraw)_onPanStart();
+  },{signal:sig});
   container.addEventListener('mousemove',e=>{
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     ch.hoverX=x;ch.hoverY=y;
     const prev=ch.hoveredIdx;
     ch.hoveredIdx=findDrawingNear(ch,x,y);
-    if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;_rCanvasImmediate(ch);});}
+    rCanvas(ch);
   },{signal:sig});
   container.addEventListener('mouseleave',()=>{
     ch.hoveredIdx=-1;
@@ -770,7 +795,8 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(range&&range.from<HIST_TRIGGER){
       if(isFs)loadMoreFsHistory(fsIdx);else loadMoreHistory(slot);
     }
-    if(!ch._panRaf){ch._panRaf=true;requestAnimationFrame(()=>{ch._panRaf=false;_rCanvasImmediate(ch);});}
+    _onPanStart();
+    rCanvas(ch);
   });
 
   ch.lc=lc;ch.cs=cs;ch.vs=vs;
@@ -863,8 +889,13 @@ async function loadMoreHistory(slot){
         if(vr)try{ch.lc.timeScale().setVisibleRange(vr);}catch(e){}
       }catch(e){}
     };
-    if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(doSet,{timeout:2000});}
-    else{setTimeout(doSet,0);}
+    // Wait for pan to finish before doing expensive setData so we don't freeze a drag in progress
+    const scheduleSet=()=>{
+      if(_anyChartPanning){setTimeout(scheduleSet,100);return;}
+      if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(doSet,{timeout:2000});}
+      else{setTimeout(doSet,0);}
+    };
+    scheduleSet();
   }catch(e){}finally{ch.histLoading=false;}
 }
 
@@ -1527,26 +1558,38 @@ function drawEMAs(ctx,ch,W,H){
   const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
   ctx.save();
   ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();
+
+  // Get visible time range so we only draw visible EMA points
+  const vr=ch.lc.timeScale().getVisibleLogicalRange();
+  // Add generous padding (50 candles each side) so lines connect smoothly at edges
+  const PAD=50;
+  const fromIdx=vr?Math.max(0,Math.floor(vr.from)-PAD):0;
+  const toIdx=vr?Math.min(ch.candles.length-1,Math.ceil(vr.to)+PAD):ch.candles.length-1;
+
   for(const cfg of settings){
     if(!cfg.visible)continue;
     const vals=calcEMACached(ch.candles,cfg.period);
     if(!vals.length)continue;
-    // Find the visible time range to avoid drawing invisible segments
-    const vr=ch.lc.timeScale().getVisibleLogicalRange();
+    // vals has (candles.length - period) entries starting at index=period
+    const period=cfg.period;
+    const startVal=Math.max(0,fromIdx-period);
+    const endVal=Math.min(vals.length-1,toIdx-period+10);
     ctx.beginPath();ctx.strokeStyle=cfg.color;ctx.lineWidth=1.5;ctx.globalAlpha=0.9;
-    let started=false,lastPx=null,lastPy=null;
-    for(const{t,v}of vals){
+    let started=false;
+    let lastPy=null;
+    for(let i=startVal;i<=endVal;i++){
+      if(i<0||i>=vals.length)continue;
+      const{t,v}=vals[i];
       const px=timeToCoordX(ch,toChartTime(t));
       const py=ch.cs.priceToCoordinate(v);
       if(px==null||py==null){started=false;continue;}
-      // Only break line if px is wildly out of range (prevents single disconnected segment)
-      if(px<-W*2||px>W*3){started=false;continue;}
+      if(px<-W||px>W*2){started=false;continue;}
       if(!started){ctx.moveTo(px,py);started=true;}
       else ctx.lineTo(px,py);
-      lastPx=px;lastPy=py;
+      lastPy=py;
     }
     ctx.stroke();
-    // Label near right edge of last visible point
+    // Label near right edge
     if(lastPy!=null&&lastPy>5&&lastPy<H-5){
       ctx.font='bold 8px JetBrains Mono,monospace';ctx.fillStyle=cfg.color;
       ctx.globalAlpha=0.95;ctx.textAlign='left';
@@ -1725,7 +1768,7 @@ function showAlertPctInput(ch,drawing,container){
 function onInteractMove(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   ch.hoverX=x;ch.hoverY=y;
-  if(!ch._crosshairRaf){ch._crosshairRaf=true;requestAnimationFrame(()=>{ch._crosshairRaf=false;_rCanvasImmediate(ch);});}
+  rCanvas(ch);
 }
 
 // #6: dblclick in draw mode on an existing alert → edit %
@@ -2147,7 +2190,7 @@ function startChartWS(){
         const cpEl=document.getElementById(`cp${slot}`);if(cpEl)cpEl.textContent=fmtPrice(c.c);
         const t=S.tk[k.s];const cg=document.getElementById(`cg${slot}`);
         if(t?.c24!=null&&cg){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
-        _rCanvasImmediate(ch);
+        rCanvas(ch);
       });
     }
   };
@@ -2236,9 +2279,17 @@ function _applyTickerUpdate(arr,gen){
       _wsBatchTimer=null;
       if(gen!==_wsScreenerGen)return;
       updTime();
-      if(!document.hidden&&!_scrolling)renderTable();
+      if(!document.hidden){
+        if(_anyChartPanning||_scrolling){
+          // User is dragging — defer heavy DOM work until after pan ends
+          _deferredRenderNeeded=true;
+        } else {
+          renderTable();
+        }
+      }
       if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
-      checkAllAlerts();
+      // Only run alert checks when not panning — they also touch DOM
+      if(!_anyChartPanning)checkAllAlerts();
     },500);
   }
 }
@@ -2401,7 +2452,11 @@ let _renderScheduled=false;
 function scheduleRender(){
   if(_renderScheduled)return;
   _renderScheduled=true;
-  _schedFn(()=>{_renderScheduled=false;if(!_scrolling&&!document.hidden)renderTable();});
+  _schedFn(()=>{
+    _renderScheduled=false;
+    if(_anyChartPanning){_deferredRenderNeeded=true;return;} // defer until pan ends
+    if(!_scrolling&&!document.hidden)renderTable();
+  });
 }
 // Skip DOM rebuild while user is scrolling the screener
 let _scrolling=false,_scrollEnd=null;
