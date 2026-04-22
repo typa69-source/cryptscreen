@@ -698,14 +698,14 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       const yT=ch.cs.priceToCoordinate(tpPrice);
       const yS=ch.cs.priceToCoordinate(slPrice);
       if(yE==null||yT==null||yS==null)continue;
-      const hitEntry=Math.abs(y-yE)<DRAW_HIT*1.5;
-      const hitTp=Math.abs(y-yT)<DRAW_HIT*1.5;
-      const hitSl=Math.abs(y-yS)<DRAW_HIT*1.5;
-      const yTop=Math.min(yT,yS)-8,yBot=Math.max(yT,yS)+8;
+      const hitEntry=Math.abs(y-yE)<DRAW_HIT*2.2;
+      const hitTp=Math.abs(y-yT)<DRAW_HIT*2.2;
+      const hitSl=Math.abs(y-yS)<DRAW_HIT*2.2;
+      const yTop=Math.min(yT,yS)-12,yBot=Math.max(yT,yS)+12;
       const inBounds=y>=yTop&&y<=yBot;
-      const hitLeft=Math.abs(x-lx)<8&&inBounds;
-      const hitRight=Math.abs(x-rx)<8&&inBounds;
-      const hitBody=inBounds&&x>lx+8&&x<rx-8&&!hitEntry&&!hitTp&&!hitSl;
+      const hitLeft=Math.abs(x-lx)<12&&inBounds;
+      const hitRight=Math.abs(x-rx)<12&&inBounds;
+      const hitBody=inBounds&&x>lx+10&&x<rx-10&&!hitEntry&&!hitTp&&!hitSl;
       if(hitEntry||hitTp||hitSl||hitLeft||hitRight||hitBody){
         e.preventDefault();e.stopPropagation();
         let tradePart='body';
@@ -714,8 +714,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
         else if(hitSl)tradePart='sl';
         else if(hitLeft)tradePart='left';
         else if(hitRight)tradePart='right';
+        const startPrice=ch.cs.coordinateToPrice(y);
         ch.draggingDraw={drawIdx:i,pointKey:'trade',tradePart,
-          dragStartX:x,orig_p1_time:d.p1.time,orig_p2_time:d.p2.time};
+          dragStartX:x,dragStartY:y,startPrice,
+          orig_p1_time:d.p1.time,orig_p2_time:d.p2.time,
+          orig_entry:entryPrice,orig_tp:tpPrice,orig_sl:slPrice};
         if(ch.interact)ch.interact.style.pointerEvents='auto';
         return;
       }
@@ -751,13 +754,18 @@ function initLCChart(slot,isFs=false,fsIdx=null){
         const timePerPx=getTimePerPx(ch);
         const dx=x-ch.draggingDraw.dragStartX;
         const dt=Math.round(dx*timePerPx);
+        const curPrice=ch.cs.coordinateToPrice(y);
+        const basePrice=ch.draggingDraw.startPrice;
+        const dPrice=(curPrice!=null&&basePrice!=null)?(curPrice-basePrice):0;
         if(part==='left'){
           d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt};
         } else if(part==='right'){
           d.p2={...d.p2,time:ch.draggingDraw.orig_p2_time+dt};
         } else { // body — move whole rect horizontally
-          d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt};
+          d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt,price:ch.draggingDraw.orig_entry+dPrice};
           d.p2={...d.p2,time:ch.draggingDraw.orig_p2_time+dt};
+          d.slPrice=ch.draggingDraw.orig_sl+dPrice;
+          d.tpPrice=ch.draggingDraw.orig_tp+dPrice;
         }
         rCanvas(ch);return;
       }
@@ -765,8 +773,8 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
       if(!pt)return;
       if(part==='entry'){
-        const slDist=Math.abs(d.slPrice-d.p1.price);
-        const tpDist=Math.abs(d.tpPrice-d.p1.price);
+        const slDist=Math.abs(ch.draggingDraw.orig_sl-ch.draggingDraw.orig_entry);
+        const tpDist=Math.abs(ch.draggingDraw.orig_tp-ch.draggingDraw.orig_entry);
         d.p1={...d.p1,price:pt.price};
         d.slPrice=isLong?pt.price-slDist:pt.price+slDist;
         d.tpPrice=isLong?pt.price+tpDist:pt.price-tpDist;
@@ -1048,6 +1056,7 @@ function removeDrawingAtCursor(ch){
 // ═══════════════════════════════════════════════════════════════
 const OB_CACHE={}; // sym → {bids:[[price,usdVal],...], asks:[[...]], ts}
 const OB_TTL=45000; // refresh every 45s
+const _densityFirstSeen=new Map(); // key: "sym:tier:bucket" -> first seen chart time (sec)
 
 async function fetchOrderBook(sym){
   try{
@@ -1098,17 +1107,29 @@ function computeDensities(ch){
   // Use persisted settings if available
   const ds=getDensitySettings(sym);
   const largeMult=ds.largeMult,medMult=ds.medMult,smallMult=ds.smallMult;
-  // Density start time = NOW (not chart start) — lines appear at current candle
   const nowSec=Math.floor(Date.now()/1000)+TZ_OFFSET_S;
+  const baseStep=Math.max(1e-8,(ch.candles[ch.candles.length-1]?.c||1)*0.0015); // 0.15% bucket
+  const activeKeys=new Set();
   // Only show top-tier clusters to avoid noise
-  return clusters
+  const zones=clusters
     .filter(c=>c.totalUsd>=mean+std*smallMult)
     .map(c=>({
+      _bucket:Math.round(c.centerPrice/baseStep),
       price:c.centerPrice,
       vol:c.totalUsd,
       tier:c.totalUsd>=mean+std*largeMult?'large':c.totalUsd>=mean+std*medMult?'medium':'small',
-      time:nowSec,
     }));
+  for(const z of zones){
+    const key=`${sym}:${z.tier}:${z._bucket}`;
+    activeKeys.add(key);
+    if(!_densityFirstSeen.has(key))_densityFirstSeen.set(key,nowSec);
+    z.time=_densityFirstSeen.get(key);
+  }
+  // Trim stale keys for this symbol so map does not grow forever.
+  for(const k of _densityFirstSeen.keys()){
+    if(k.startsWith(sym+':')&&!activeKeys.has(k))_densityFirstSeen.delete(k);
+  }
+  return zones;
 }
 
 const _densityCache=new Map(); // sym → {ts, zones}
@@ -1552,7 +1573,14 @@ function calcEMA(candles,period){
 const _emaCache=new Map();
 function calcEMACached(candles,period){
   if(!candles||!candles.length)return[];
-  const key=`${candles[candles.length-1].t}_${candles.length}_${period}`;
+  // Include candle identity to avoid cache collisions between different symbols/TFs.
+  const first=candles[0],last=candles[candles.length-1];
+  const key=[
+    period,
+    candles.length,
+    first.t,first.c,
+    last.t,last.c,
+  ].join('_');
   if(_emaCache.has(key))return _emaCache.get(key);
   const result=calcEMA(candles,period);
   // Cap cache size
