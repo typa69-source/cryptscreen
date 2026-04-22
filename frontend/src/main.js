@@ -271,13 +271,13 @@ function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _brushStroke:null, _rCanvasRaf:false, _rafPending:false};
+    _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _brushStroke:null, _rCanvasRaf:false, _rafPending:false};
+    _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0};
 }
 
 function activeCols(){
@@ -627,9 +627,15 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.addEventListener('mousemove',e=>{
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     ch.hoverX=x;ch.hoverY=y;
-    // Skip expensive hit-testing while panning — no hover highlights needed during drag
+    // During pan, skip heavy hover/hit-test work to keep drag smooth.
+    if(_anyChartPanning&&!ch.draggingDraw&&!ch.ruler?.active)return;
+    // Hit-testing drawings is expensive (especially brush strokes), throttle to ~30 FPS.
     if(!_anyChartPanning&&!ch.draggingDraw){
-      ch.hoveredIdx=findDrawingNear(ch,x,y);
+      const now=performance.now();
+      if(now-ch._lastHoverCheckTs>32){
+        ch.hoveredIdx=findDrawingNear(ch,x,y);
+        ch._lastHoverCheckTs=now;
+      }
     }
     rCanvas(ch);
   },{signal:sig});
@@ -1166,6 +1172,8 @@ function _rCanvasImmediate(ch){
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
+  const isPanFrame=_anyChartPanning&&!ch.draggingDraw&&!ch.ruler?.active;
+  if(isPanFrame)return;
   // #3: clip drawing area so we don't overdraw the price axis
   const drawW=Math.max(1,W-PRICE_AXIS_W);
   ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,H);ctx.clip();
