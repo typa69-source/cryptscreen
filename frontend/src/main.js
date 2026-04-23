@@ -451,17 +451,14 @@ function fc(v,id){
 }
 function fh(v,id){if(!['tr5','tr1h','vr5','vr1h'].includes(id)||v==null||isNaN(v))return'';if(v>4)return'hv3';if(v>2.5)return'hv2';if(v>1.5)return'hv1';if(v<0.3)return'hr3';if(v<0.5)return'hr2';if(v<0.7)return'hr1';return'';}
 
-function fmtTrimmed(p,d){
-  const s=p.toFixed(d).replace(/\.?0+$/,'');
-  return s==='-0'?'0':s;
-}
-
 function fmtPrice(p){
   if(p==null||isNaN(p)||p===0)return'—';
   const a=Math.abs(p);
-  if(a<0.0001)return fmtTrimmed(p,8);if(a<0.001)return fmtTrimmed(p,7);if(a<0.01)return fmtTrimmed(p,6);
-  if(a<0.1)return fmtTrimmed(p,5);if(a<1)return fmtTrimmed(p,4);if(a<100)return fmtTrimmed(p,3);
-  if(a<10000)return fmtTrimmed(p,2);return fmtTrimmed(p,0);
+  let s='—';
+  if(a<0.0001)s=p.toFixed(8);else if(a<0.001)s=p.toFixed(7);else if(a<0.01)s=p.toFixed(6);
+  else if(a<0.1)s=p.toFixed(5);else if(a<1)s=p.toFixed(4);else if(a<100)s=p.toFixed(3);
+  else if(a<10000)s=p.toFixed(2);else s=p.toFixed(0);
+  return Number(s)===0?'0':s;
 }
 function getPriceMinMove(p){
   if(!p||p<=0)return 0.00001;if(p<0.0001)return 1e-8;if(p<0.001)return 1e-7;
@@ -1227,8 +1224,6 @@ function _rCanvasImmediate(ch){
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
-  const isPanFrame=_anyChartPanning&&!ch.draggingDraw&&!ch.ruler?.active;
-  if(isPanFrame)return;
   // #3: clip drawing area so we don't overdraw the price axis
   const drawW=Math.max(1,W-PRICE_AXIS_W);
   ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,H);ctx.clip();
@@ -1849,42 +1844,7 @@ function onInteractDblClick(ch,e,container){
   if(idx>=0){
     const d=ch.drawings[idx];
     if(d.type==='aray'||d.type==='atline')showAlertPctInput(ch,d,container);
-    if(d.type==='long'||d.type==='short')showTradeRRInput(ch,d,container);
   }
-}
-
-function showTradeRRInput(ch,d,container){
-  const old=document.getElementById('tradeRROverlay');if(old)old.remove();
-  if(!ch.cs)return;
-  const y=ch.cs.priceToCoordinate(d.p1.price)??100;
-  const x=timeToCoordX(ch,d.p1.time)??100;
-  const r=container.getBoundingClientRect();
-  const wrap=document.createElement('div');wrap.id='tradeRROverlay';
-  wrap.style.cssText=`position:fixed;z-index:500;left:${r.left+x+10}px;top:${r.top+y-20}px;
-    background:var(--bg3);border:1px solid var(--border2);border-radius:5px;padding:6px 8px;
-    display:flex;align-items:center;gap:6px;font-size:10px;color:var(--text);font-family:inherit;box-shadow:0 4px 16px rgba(0,0,0,.6)`;
-  wrap.innerHTML=`<span style="color:var(--text3);font-size:9px">R:R</span>
-    <input id="rrInp" type="number" min="0.5" max="20" step="0.5" value="${d.rr??2}"
-      style="width:46px;background:var(--bg4);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
-    <span style="color:var(--text3);font-size:9px">:1</span>
-    <button style="background:var(--accent);border:none;border-radius:3px;color:#fff;font:inherit;font-size:9px;padding:2px 6px;cursor:pointer">OK</button>`;
-  document.body.appendChild(wrap);
-  const inp=document.getElementById('rrInp');
-  inp.focus();inp.select();
-  const confirm=()=>{
-    const v=parseFloat(inp.value);
-    if(!isNaN(v)&&v>0){
-      const{isLong,entryPrice,slPrice}=getTradeParams(d);
-      const slDist=Math.abs(slPrice-entryPrice);
-      d.tpPrice=isLong?entryPrice+slDist*v:entryPrice-slDist*v;
-      d.rr=v;
-    }
-    wrap.remove();
-    [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
-  };
-  wrap.querySelector('button').onclick=confirm;
-  inp.addEventListener('keydown',e=>{if(e.key==='Enter')confirm();if(e.key==='Escape')wrap.remove();});
-  setTimeout(()=>document.addEventListener('mousedown',function h(e){if(!wrap.contains(e.target)){confirm();document.removeEventListener('mousedown',h);}},true),100);
 }
 
 function onInteractClick(ch,e,container){
@@ -1922,7 +1882,6 @@ function onInteractClick(ch,e,container){
       const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
       const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice};
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
-      showTradeRRInput(ch,d,container);
     }
   }
 }
@@ -2432,94 +2391,106 @@ function sortedRows(){
 }
 
 function renderScreenerInto(bodyEl,rows){
+  if(!bodyEl)return;
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
   const start=S.page*S.charts.length;
   const pageSyms=new Set(rows.slice(start,start+S.charts.length).map(r=>r.sym));
   const cols=activeCols();
-
-  // Fast-path: update cells in-place only when sym order AND cols unchanged
-  const existingRows=bodyEl.querySelectorAll('.srow');
   const colsKey=cols.map(c=>c.id).join(',');
-  const symOrder=rows.map(r=>r.sym).join(',');
-  if(existingRows.length===rows.length
-    && bodyEl.dataset.colsKey===colsKey
-    && bodyEl.dataset.symOrder===symOrder){
-    rows.forEach((m,idx)=>{
-      const row=existingRows[idx];
-      if(!row)return;
-      const grp=getSymGroup(m.sym);
-      const grpCol=GROUP_COLORS[grp]||'';
-      // Update row class
-      const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
-      if(row.className!==newCls)row.className=newCls;
-      // Update color dot in screener — use cached ref to avoid DOM query
-      const gdot=row._gdot||(row._gdot=row.querySelector('.cg-dot'));
-      if(gdot){
-        const nc=grpCol||'var(--bg4)';
-        const nb=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
-        if(gdot.style.background!==nc)gdot.style.background=nc;
-        if(gdot.style.borderColor!==nb)gdot.style.borderColor=nb;
-      }
-      // Update color stripe — cached ref
-      let stripe=row._stripe!==undefined?row._stripe:(row._stripe=row.querySelector('.cg-badge'));
-      if(grpCol){
-        if(!stripe){stripe=document.createElement('div');stripe.className='cg-badge';row.prepend(stripe);row._stripe=stripe;}
-        stripe.style.background=grpCol;stripe.style.opacity='0.7';
-      } else if(stripe){stripe.remove();row._stripe=null;}
-      // Update metric cells — use cached array (avoids querySelectorAll on every update)
-      const cells=row._cells||row.querySelectorAll('.mc');
-      cols.forEach((c,ci)=>{
-        const cell=cells[ci];if(!cell)return;
-        const v=m[c.id];
-        const newTxt=fv(v,c.id);
-        const newCls='mc '+fc(v,c.id)+' '+fh(v,c.id);
-        if(cell.textContent!==newTxt)cell.textContent=newTxt;
-        if(cell.className!==newCls)cell.className=newCls;
-      });
-    });
-    return;
+  if(bodyEl.dataset.colsKey!==colsKey){
+    bodyEl.innerHTML='';
+    bodyEl._rowMap=new Map();
+    bodyEl.dataset.colsKey=colsKey;
   }
-
-  // Full rebuild
-  bodyEl.dataset.colsKey=colsKey;
-  bodyEl.dataset.symOrder=symOrder;
+  if(!bodyEl._rowMap)bodyEl._rowMap=new Map();
+  const rowMap=bodyEl._rowMap;
   const frag=document.createDocumentFragment();
   for(const m of rows){
-    const grp=getSymGroup(m.sym);
-    const grpCol=GROUP_COLORS[grp]||'';
-    const row=document.createElement('div');
-    row.className='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
-    row.onclick=()=>openFullscreenBySym(m.sym);
-    if(grpCol){
-      const stripe=document.createElement('div');
-      stripe.className='cg-badge';stripe.style.background=grpCol;stripe.style.opacity='0.7';
-      row.appendChild(stripe);
+    let row=rowMap.get(m.sym);
+    if(!row){
+      row=buildScreenerRow(m,cols);
+      rowMap.set(m.sym,row);
     }
-    const rt=document.createElement('div');rt.className='rtick';
-    if(!grpCol)rt.style.paddingLeft='9px';
-    const pgNum=pageSyms.has(m.sym)?`<span class="tpg">·${S.page+1}</span>`:'';
-    const gdot=document.createElement('span');gdot.className='cg-dot';
-    gdot.style.background=grpCol||'var(--bg4)';gdot.style.borderColor=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
-    gdot.title='Цветовая группа';
-    gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
-    rt.appendChild(gdot);
-    const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=m.sym.replace(/USDT$/,'');
-    nameSpan.title='Нажмите для копирования';nameSpan.style.cursor='pointer';
-    nameSpan.onclick=ev=>{ev.stopPropagation();copyTicker(m.sym.replace(/USDT$/,''));openFullscreenBySym(m.sym);};
-    rt.appendChild(nameSpan);
-    if(pgNum){const pg=document.createElement('span');pg.className='tpg';pg.textContent=`·${S.page+1}`;rt.appendChild(pg);}
-    row.appendChild(rt);
-    const rg=document.createElement('div');rg.className='rmgrid';
-    const cellArr=[];
-    for(const c of cols){
-      const v=m[c.id];const cell=document.createElement('div');
-      cell.className=`mc ${fc(v,c.id)} ${fh(v,c.id)}`;cell.textContent=fv(v,c.id);
-      rg.appendChild(cell);cellArr.push(cell);
-    }
-    row._cells=cellArr; // cache direct refs to avoid querySelectorAll on each update
-    row.appendChild(rg);frag.appendChild(row);
+    updateScreenerRow(row,m,cols,inChart,pageSyms);
+    frag.appendChild(row);
   }
-  bodyEl.innerHTML='';bodyEl.appendChild(frag);
+  bodyEl.replaceChildren(frag);
+  for(const sym of Array.from(rowMap.keys())){
+    if(!(sym in S.mx))rowMap.delete(sym);
+  }
+}
+
+function buildScreenerRow(m,cols){
+  const row=document.createElement('div');
+  row.className='srow';
+  row.onclick=()=>openFullscreenBySym(m.sym);
+  row._sym=m.sym;
+  const rt=document.createElement('div');rt.className='rtick';
+  const gdot=document.createElement('span');gdot.className='cg-dot';
+  gdot.title='Цветовая группа';
+  gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
+  rt.appendChild(gdot);
+  const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=m.sym.replace(/USDT$/,'');
+  nameSpan.title='Нажмите для копирования';nameSpan.style.cursor='pointer';
+  nameSpan.onclick=ev=>{ev.stopPropagation();copyTicker(m.sym.replace(/USDT$/,''));openFullscreenBySym(m.sym);};
+  rt.appendChild(nameSpan);
+  const pg=document.createElement('span');pg.className='tpg';rt.appendChild(pg);
+  row._gdot=gdot;row._name=nameSpan;row._pg=pg;row.appendChild(rt);
+  const rg=document.createElement('div');rg.className='rmgrid';
+  const cellArr=[];
+  for(const c of cols){
+    const cell=document.createElement('div');
+    cell.className='mc d';
+    rg.appendChild(cell);cellArr.push(cell);
+  }
+  row._cells=cellArr;row._rg=rg;row.appendChild(rg);
+  return row;
+}
+
+function updateScreenerRow(row,m,cols,inChart,pageSyms){
+  const grp=getSymGroup(m.sym);
+  const grpCol=GROUP_COLORS[grp]||'';
+  const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
+  if(row.className!==newCls)row.className=newCls;
+  row._sym=m.sym;
+  const gdot=row._gdot;
+  if(gdot){
+    const nc=grpCol||'var(--bg4)';
+    const nb=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
+    if(gdot.style.background!==nc)gdot.style.background=nc;
+    if(gdot.style.borderColor!==nb)gdot.style.borderColor=nb;
+    gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
+  }
+  const nameTxt=m.sym.replace(/USDT$/,'');
+  if(row._name&&row._name.textContent!==nameTxt)row._name.textContent=nameTxt;
+  if(row._name){
+    row._name.onclick=ev=>{ev.stopPropagation();copyTicker(nameTxt);openFullscreenBySym(m.sym);};
+  }
+  if(grpCol){
+    if(!row._stripe){row._stripe=document.createElement('div');row._stripe.className='cg-badge';row.prepend(row._stripe);}
+    row._stripe.style.background=grpCol;row._stripe.style.opacity='0.7';
+  }else if(row._stripe){row._stripe.remove();row._stripe=null;}
+  const rt=row.firstChild;
+  if(rt)rt.style.paddingLeft=grpCol?'':'9px';
+  if(row._pg)row._pg.textContent=pageSyms.has(m.sym)?`·${S.page+1}`:'';
+  if(row._cells.length!==cols.length){
+    row._rg.innerHTML='';
+    row._cells=[];
+    for(const c of cols){
+      const cell=document.createElement('div');
+      cell.className='mc d';
+      row._rg.appendChild(cell);
+      row._cells.push(cell);
+    }
+  }
+  cols.forEach((c,ci)=>{
+    const cell=row._cells[ci];if(!cell)return;
+    const v=m[c.id];
+    const newTxt=fv(v,c.id);
+    const newCls='mc '+fc(v,c.id)+' '+fh(v,c.id);
+    if(cell.textContent!==newTxt)cell.textContent=newTxt;
+    if(cell.className!==newCls)cell.className=newCls;
+  });
 }
 
 let _rt=null;
@@ -3788,7 +3759,6 @@ window.setBrushColor        = setBrushColor;
 window.setBrushWidth        = setBrushWidth;
 window.toggleEMA            = toggleEMA;
 window.openEMAEditor        = openEMAEditor;
-window.showTradeRRInput     = showTradeRRInput;
 
 
 main();
