@@ -232,6 +232,8 @@ const S = {
   tf:'5m', q:'', page:0, LC:null, bgDone:false,
   drawMode:null, drawIdCounter:0,
   symDrawings:{},      // drawings per symbol, shared between grid & FS
+  drawUndo:{},         // sym -> [drawings snapshot...]
+  drawRedo:{},         // sym -> [drawings snapshot...]
   minVol:0, gridSize:9, upColor:'#1fa891', wmVisible:true, sortAbs:true,
   screenerVisible:true, fsScreenerVisible:true,
   colOrder: ALL_COLS.map(c=>c.id),
@@ -266,6 +268,8 @@ const S = {
   emaCrossSound:true,
   emaSymOverrides:{},
 };
+const DRAW_HISTORY_LIMIT=60;
+let _lastDrawSym=null;
 
 function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
@@ -627,8 +631,10 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     e.preventDefault();
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     const pt=pixelToPoint(ch,x,y);if(!pt)return;
+    if(ch.sym)pushDrawUndo(ch.sym);
     const stroke={id:++S.drawIdCounter,type:'brush',pts:[pt],color:_brushColor,width:_brushWidth,opacity:0.85};
     ch.drawings.push(stroke);
+    _lastDrawSym=ch.sym||_lastDrawSym;
     ch._brushStroke=stroke;
   });
   interact.addEventListener('mousemove',e=>{
@@ -750,6 +756,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
           dragStartX:x,dragStartY:y,startPrice,
           orig_p1_time:d.p1.time,orig_p2_time:d.p2.time,
           orig_entry:entryPrice,orig_tp:tpPrice,orig_sl:slPrice};
+        ch.draggingDraw._undoPushed=false;
         if(ch.interact)ch.interact.style.pointerEvents='auto';
         return;
       }
@@ -766,6 +773,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
         if(px!=null&&py!=null&&Math.hypot(x-px,y-py)<10){
           e.preventDefault();e.stopPropagation();
           ch.draggingDraw={drawIdx:i,pointKey:key};
+          ch.draggingDraw._undoPushed=false;
           if(ch.interact)ch.interact.style.pointerEvents='auto';
           return;
         }
@@ -774,6 +782,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   },{capture:true,signal:sig});
   container.addEventListener('mousemove',e=>{
     if(!ch.draggingDraw)return;
+    if(!ch.draggingDraw._undoPushed&&ch.sym){
+      pushDrawUndo(ch.sym);
+      ch.draggingDraw._undoPushed=true;
+      _lastDrawSym=ch.sym;
+    }
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     const d=ch.drawings[ch.draggingDraw.drawIdx];
     if(!d)return;
@@ -855,6 +868,51 @@ function initLCChart(slot,isFs=false,fsIdx=null){
 function getSymDrawings(sym){
   if(!S.symDrawings[sym])S.symDrawings[sym]=[];
   return S.symDrawings[sym];
+}
+function cloneDrawings(drawings){
+  if(typeof structuredClone==='function')return structuredClone(drawings||[]);
+  return JSON.parse(JSON.stringify(drawings||[]));
+}
+function _getDrawStack(map,sym){
+  if(!map[sym])map[sym]=[];
+  return map[sym];
+}
+function pushDrawUndo(sym){
+  if(!sym)return;
+  const st=_getDrawStack(S.drawUndo,sym);
+  st.push(cloneDrawings(getSymDrawings(sym)));
+  if(st.length>DRAW_HISTORY_LIMIT)st.shift();
+  S.drawRedo[sym]=[];
+}
+function applySymDrawings(sym,drawings){
+  if(!sym)return;
+  S.symDrawings[sym]=cloneDrawings(drawings);
+  [...S.charts,...S.fsCharts].forEach(ch=>{
+    const chSym=ch.sym||S.fsSym;
+    if(chSym===sym){
+      ch.drawings=S.symDrawings[sym];
+      ch.pendingP1=null;
+      rCanvas(ch);
+    }
+  });
+}
+function undoDrawings(sym){
+  const st=_getDrawStack(S.drawUndo,sym);if(!st.length)return false;
+  _getDrawStack(S.drawRedo,sym).push(cloneDrawings(getSymDrawings(sym)));
+  applySymDrawings(sym,st.pop());
+  return true;
+}
+function redoDrawings(sym){
+  const st=_getDrawStack(S.drawRedo,sym);if(!st.length)return false;
+  _getDrawStack(S.drawUndo,sym).push(cloneDrawings(getSymDrawings(sym)));
+  applySymDrawings(sym,st.pop());
+  return true;
+}
+function resolveUndoSym(){
+  if(_lastDrawSym)return _lastDrawSym;
+  if(S.fsOpen&&S.fsSym)return S.fsSym;
+  const hov=S.charts.find(ch=>ch.hoverX>0&&ch.hoverY>0&&ch.sym);
+  return hov?.sym||S.charts.find(ch=>ch.sym)?.sym||null;
 }
 
 async function loadChart(slot,sym){
@@ -1079,7 +1137,12 @@ function isNearRuler(ch,px,py){
 function removeDrawingAtCursor(ch){
   if(ch.pendingP1){ch.pendingP1=null;rCanvas(ch);return;}
   const idx=ch.hoveredIdx;
-  if(idx>=0&&idx<ch.drawings.length){ch.drawings.splice(idx,1);ch.hoveredIdx=-1;rCanvas(ch);}
+  if(idx>=0&&idx<ch.drawings.length){
+    if(ch.sym)pushDrawUndo(ch.sym);
+    ch.drawings.splice(idx,1);ch.hoveredIdx=-1;
+    _lastDrawSym=ch.sym||_lastDrawSym;
+    rCanvas(ch);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -1694,7 +1757,7 @@ function checkEMACrossovers(ch){
       if(S.emaCrossSound)playAlert(isAbove?880:440);
       S.alertLog.unshift({ts:now,sym,curPrice:a1,linePrice:b1,distPct:0,
         type:'ema_cross',alertPct:0,
-        presetName:`EMA${a.period} ${dir} EMA${b.period} — ${label}`});
+        presetName:`[${S.tf}] EMA${a.period} ${dir} EMA${b.period} — ${label}`});
       if(S.alertLog.length>50)S.alertLog.pop();
       renderAlertLog();
       const badge=document.getElementById('alertBadge');
@@ -1852,23 +1915,31 @@ function onInteractClick(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   const pt=snapPoint(ch,x,y,e.ctrlKey);if(!pt)return;
   if(S.drawMode==='hray'){
+    if(ch.sym)pushDrawUndo(ch.sym);
     ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:'#e8a020'});
+    _lastDrawSym=ch.sym||_lastDrawSym;
     rCanvas(ch);
   }else if(S.drawMode==='tline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
+      if(ch.sym)pushDrawUndo(ch.sym);
       ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:'#3b82f6'});
+      _lastDrawSym=ch.sym||_lastDrawSym;
       ch.pendingP1=null;rCanvas(ch);
     }
   }else if(S.drawMode==='aray'){
     const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0};
+    if(ch.sym)pushDrawUndo(ch.sym);
     ch.drawings.push(d);rCanvas(ch);
+    _lastDrawSym=ch.sym||_lastDrawSym;
     showAlertPctInput(ch,d,container);
   }else if(S.drawMode==='atline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
       const d={id:++S.drawIdCounter,type:'atline',p1:ch.pendingP1,p2:pt,alertPct:null,_lastAlert:0};
+      if(ch.sym)pushDrawUndo(ch.sym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
+      _lastDrawSym=ch.sym||_lastDrawSym;
       showAlertPctInput(ch,d,container);
     }
   }else if(S.drawMode==='long'||S.drawMode==='short'){
@@ -1881,7 +1952,9 @@ function onInteractClick(ch,e,container){
       const slPrice=isLong?entryPrice-slDist:entryPrice+slDist;
       const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
       const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice};
+      if(ch.sym)pushDrawUndo(ch.sym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
+      _lastDrawSym=ch.sym||_lastDrawSym;
     }
   }
 }
@@ -2128,6 +2201,16 @@ function updateRulerTooltip(ch){
 }
 
 document.addEventListener('keydown',e=>{
+  const tgt=e.target;
+  const editable=tgt&&((tgt.tagName==='INPUT')||(tgt.tagName==='TEXTAREA')||tgt.isContentEditable);
+  const isUndoKey=(e.ctrlKey||e.metaKey)&&!editable&&e.key&&e.key.toLowerCase()==='z';
+  if(isUndoKey){
+    const sym=resolveUndoSym();
+    if(sym){
+      const ok=e.shiftKey?redoDrawings(sym):undoDrawings(sym);
+      if(ok){e.preventDefault();_lastDrawSym=sym;return;}
+    }
+  }
   if(e.key==='Escape'){
     [...S.charts,...S.fsCharts].forEach((ch,i)=>{
       ch.pendingP1=null;
@@ -2762,7 +2845,11 @@ function clearDrawingsSlot(slot){
   const last=_clearClickTs[slot]||0;
   if(now-last<600){
     const ch=S.charts[slot];
-    if(ch.sym){S.symDrawings[ch.sym]=[];ch.drawings=S.symDrawings[ch.sym];}
+    if(ch.sym&&ch.drawings.length){
+      pushDrawUndo(ch.sym);
+      applySymDrawings(ch.sym,[]);
+      _lastDrawSym=ch.sym;
+    }
     ch.pendingP1=null;
     rCanvas(ch);
     delete _clearClickTs[slot];
@@ -2778,7 +2865,11 @@ function clearFsDrawings(){
   const now=Date.now();
   if(now-_fsClearTs<600){
     // Double-click confirmed
-    if(S.fsSym){S.symDrawings[S.fsSym]=[];S.fsCharts.forEach(fch=>{fch.drawings=S.symDrawings[S.fsSym];fch.pendingP1=null;rCanvas(fch);});}
+    if(S.fsSym&&getSymDrawings(S.fsSym).length){
+      pushDrawUndo(S.fsSym);
+      applySymDrawings(S.fsSym,[]);
+      _lastDrawSym=S.fsSym;
+    }
     _fsClearTs=0;
     const btn=document.getElementById('fsClearDrawBtn');
     if(btn){btn.style.color='var(--red)';setTimeout(()=>{btn.style.color='';},600);}
@@ -3474,6 +3565,7 @@ function renderPotentialPanel(){
     const cnt=Object.keys(pr.matches||{}).length;
     tab.innerHTML=`<span>${pr.name}</span>${cnt?`<span class="pot-tab-cnt">${cnt}</span>`:''}`;
     tab.onclick=()=>{_potActiveTab=pr.id;renderPotentialPanel();};
+    tab.oncontextmenu=ev=>{ev.preventDefault();openPotPresetEditor(pr.id);};
     tabBar.appendChild(tab);
   });
   // Add button
@@ -3510,7 +3602,8 @@ function renderPotentialPanel(){
       const parts=[];
       if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
       if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
-      return`<span class="pot-cond-tag">${f?.label||c.field} ${parts.join(' ')}</span>`;
+      const absTxt=c.abs&&['ch24','cday'].includes(c.field)?'|.| ':'';
+      return`<span class="pot-cond-tag">${absTxt}${f?.label||c.field} ${parts.join(' ')}</span>`;
     }).join('');
     body.appendChild(cond);
   }
@@ -3532,7 +3625,8 @@ function renderPotentialPanel(){
         const f=POT_FIELDS.find(x=>x.id===c.field);
         const val=m[c.field];
         const fmt=c.field==='vol24'?fk(val):(val!=null?fn(val,2):'—');
-        return`<span class="pot-tag">${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit||''}</span>`;
+        const absTxt=c.abs&&['ch24','cday'].includes(c.field)?'|.| ':'';
+        return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit||''}</span>`;
       }).join('');
       item.innerHTML=`
         ${grpCol?`<span style="width:3px;align-self:stretch;background:${grpCol};border-radius:2px;flex-shrink:0"></span>`:''}
@@ -3555,7 +3649,7 @@ function openPotPresetEditor(presetId){
   box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:340px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.8)';
 
   // Working copy of conditions
-  const wCond=(existing?.conditions||[]).map(c=>({...c}));
+  const wCond=(existing?.conditions||[]).map(c=>({...c,abs:!!c.abs}));
 
   const render=()=>{
     box.innerHTML=`
@@ -3576,7 +3670,11 @@ function openPotPresetEditor(presetId){
       <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
         <button class="tbtn" style="flex:1;color:var(--text2)" onclick="document.getElementById('potPresetModal').remove()">Отмена</button>
         <button class="tbtn on" style="flex:2" id="potSaveBtn">✓ Сохранить</button>
-      </div>`;
+      </div>
+      ${existing?`<div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
+        <button class="tbtn${existing.enabled?' on':''}" style="flex:1" id="potToggleBtn">${existing.enabled?'● Вкл':'○ Выкл'} алерты</button>
+        <button class="tbtn" style="flex:1;color:var(--red)" id="potDeleteBtn">Удалить пресет</button>
+      </div>`:''}`;
 
     // Render conditions
     const cl=box.querySelector('#potCondList');
@@ -3589,6 +3687,10 @@ function openPotPresetEditor(presetId){
         <select style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:3px 4px">
           ${POT_FIELDS.map(x=>`<option value="${x.id}"${x.id===c.field?' selected':''}>${x.label}</option>`).join('')}
         </select>
+        <label title="Игнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','cday'].includes(c.field)?'':'visibility:hidden'}">
+          |x|
+          <input type="checkbox" ${c.abs?'checked':''}>
+        </label>
         <span style="font-size:9px;color:var(--text3)">от</span>
         <input type="number" value="${c.min??''}" placeholder="—" step="${f.step}"
           style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
@@ -3598,6 +3700,8 @@ function openPotPresetEditor(presetId){
         <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">✕</button>`;
       const sel=row.querySelector('select');
       sel.onchange=()=>{wCond[idx].field=sel.value;render();};
+      const absCb=row.querySelector('input[type=checkbox]');
+      if(absCb)absCb.onchange=()=>{wCond[idx].abs=absCb.checked;};
       const[minI,maxI]=Array.from(row.querySelectorAll('input[type=number]'));
       minI.onchange=()=>{const v=parseFloat(minI.value);wCond[idx].min=isNaN(v)?null:v;};
       maxI.onchange=()=>{const v=parseFloat(maxI.value);wCond[idx].max=isNaN(v)?null:v;};
@@ -3605,7 +3709,7 @@ function openPotPresetEditor(presetId){
       cl.appendChild(row);
     });
 
-    box.querySelector('#potAddCond').onclick=()=>{wCond.push({field:'ch24',min:null,max:null});render();};
+    box.querySelector('#potAddCond').onclick=()=>{wCond.push({field:'ch24',min:null,max:null,abs:false});render();};
     box.querySelector('#potSaveBtn').onclick=()=>{
       const name=box.querySelector('#potPresetName').value.trim()||'Пресет';
       // read current input values
@@ -3614,11 +3718,37 @@ function openPotPresetEditor(presetId){
         existing.name=name;existing.conditions=[...wCond];
       } else {
         const id='pot'+Date.now();
-        S.potentialPresets.push({id,name,conditions:[...wCond],matches:{},alerted:{},enabled:false,cooldown:60});
+        S.potentialPresets.push({id,name,conditions:[...wCond],matches:{},alerted:{},enabled:true,cooldown:60});
         _potActiveTab=id;
       }
-      modal.remove();renderPotentialPanel();
+      modal.remove();renderPotentialPanel();runPotentialCheck();buildGroupFilterBar();
     };
+    const tg=box.querySelector('#potToggleBtn');
+    if(tg&&existing){
+      tg.onclick=()=>{
+        existing.enabled=!existing.enabled;
+        if(existing.enabled){
+          if(!S._potInterval)S._potInterval=setInterval(runPotentialCheck,15000);
+          runPotentialCheck();
+        }else{
+          existing.matches={};existing.alerted={};
+          renderPotentialPanel();buildGroupFilterBar();
+        }
+        tg.classList.toggle('on',existing.enabled);
+        tg.textContent=(existing.enabled?'● Вкл':'○ Выкл')+' алерты';
+      };
+    }
+    const del=box.querySelector('#potDeleteBtn');
+    if(del&&existing){
+      del.onclick=()=>{
+        showConfirmModal(`Удалить пресет "${existing.name}"?`,{
+          title:'Удаление пресета',
+          okText:'Удалить',
+          danger:true,
+          onConfirm:()=>{deletePotPreset(existing.id);modal.remove();}
+        });
+      };
+    }
   };
   render();
   modal.appendChild(box);document.body.appendChild(modal);
@@ -3631,6 +3761,7 @@ function togglePotPreset(id){
   if(pr.enabled){if(!S._potInterval)S._potInterval=setInterval(runPotentialCheck,15000);runPotentialCheck();}
   else{pr.matches={};pr.alerted={};}
   renderPotentialPanel();
+  buildGroupFilterBar();
 }
 
 function deletePotPreset(id){
@@ -3638,6 +3769,7 @@ function deletePotPreset(id){
   S.potentialPresets.splice(idx,1);
   if(_potActiveTab===id)_potActiveTab=S.potentialPresets[0]?.id||null;
   renderPotentialPanel();
+  buildGroupFilterBar();
 }
 
 function runPotentialCheck(){
@@ -3651,6 +3783,7 @@ function runPotentialCheck(){
         let val=m[c.field];
         // vol24 is in USDT, convert condition to USDT (user enters in M$)
         if(c.field==='vol24')val=val/1e6;
+        if(c.abs&&['ch24','cday'].includes(c.field))val=Math.abs(val);
         if(val==null||isNaN(val))return false;
         if(c.min!=null&&val<c.min)return false;
         if(c.max!=null&&val>c.max)return false;
