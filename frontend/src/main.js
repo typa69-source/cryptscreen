@@ -451,12 +451,17 @@ function fc(v,id){
 }
 function fh(v,id){if(!['tr5','tr1h','vr5','vr1h'].includes(id)||v==null||isNaN(v))return'';if(v>4)return'hv3';if(v>2.5)return'hv2';if(v>1.5)return'hv1';if(v<0.3)return'hr3';if(v<0.5)return'hr2';if(v<0.7)return'hr1';return'';}
 
+function fmtTrimmed(p,d){
+  const s=p.toFixed(d).replace(/\.?0+$/,'');
+  return s==='-0'?'0':s;
+}
+
 function fmtPrice(p){
   if(p==null||isNaN(p)||p===0)return'—';
   const a=Math.abs(p);
-  if(a<0.0001)return p.toFixed(8);if(a<0.001)return p.toFixed(7);if(a<0.01)return p.toFixed(6);
-  if(a<0.1)return p.toFixed(5);if(a<1)return p.toFixed(4);if(a<100)return p.toFixed(3);
-  if(a<10000)return p.toFixed(2);return p.toFixed(0);
+  if(a<0.0001)return fmtTrimmed(p,8);if(a<0.001)return fmtTrimmed(p,7);if(a<0.01)return fmtTrimmed(p,6);
+  if(a<0.1)return fmtTrimmed(p,5);if(a<1)return fmtTrimmed(p,4);if(a<100)return fmtTrimmed(p,3);
+  if(a<10000)return fmtTrimmed(p,2);return fmtTrimmed(p,0);
 }
 function getPriceMinMove(p){
   if(!p||p<=0)return 0.00001;if(p<0.0001)return 1e-8;if(p<0.001)return 1e-7;
@@ -478,6 +483,35 @@ function copyTicker(sym){
     t.textContent=`📋 ${full} скопировано`;t.style.opacity='1';
     clearTimeout(t._to);t._to=setTimeout(()=>{t.style.opacity='0';},1200);
   }).catch(()=>{});
+}
+
+function showConfirmModal(text,{title='Подтверждение',okText='Подтвердить',cancelText='Отмена',danger=false,onConfirm}={}){
+  const old=document.getElementById('csConfirmModal');if(old)old.remove();
+  const ov=document.createElement('div');ov.id='csConfirmModal';
+  ov.style.cssText='position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;';
+  const box=document.createElement('div');
+  box.style.cssText='width:min(420px,92vw);background:var(--bg2);border:1px solid var(--border2);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.65);padding:12px;';
+  const ttl=document.createElement('div');
+  ttl.style.cssText='font-size:11px;color:#fff;font-weight:600;margin-bottom:8px;';
+  ttl.textContent=title;
+  const msg=document.createElement('div');
+  msg.style.cssText='font-size:10px;color:var(--text2);line-height:1.45;margin-bottom:12px;';
+  msg.textContent=text;
+  const row=document.createElement('div');
+  row.style.cssText='display:flex;justify-content:flex-end;gap:8px;';
+  const cancel=document.createElement('button');
+  cancel.style.cssText='background:transparent;border:1px solid var(--border2);border-radius:4px;color:var(--text2);font:inherit;font-size:10px;padding:4px 10px;cursor:pointer;';
+  cancel.textContent=cancelText;
+  const ok=document.createElement('button');
+  ok.style.cssText=`background:${danger?'#b32d2d':'var(--accent)'};border:none;border-radius:4px;color:#fff;font:inherit;font-size:10px;padding:4px 10px;cursor:pointer;`;
+  ok.textContent=okText;
+  cancel.onclick=()=>ov.remove();
+  ok.onclick=()=>{ov.remove();if(typeof onConfirm==='function')onConfirm();};
+  row.append(cancel,ok);
+  box.append(ttl,msg,row);
+  ov.appendChild(box);
+  ov.addEventListener('mousedown',e=>{if(e.target===ov)ov.remove();});
+  document.body.appendChild(ov);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2788,12 +2822,22 @@ function clearFsDrawings(){
 //  #9: COLOR GROUPS
 // ═══════════════════════════════════════════════════════════════
 function getSymGroup(sym){return S.symGroups[sym]||0;}
+let _groupUiRaf=0;
+function scheduleGroupUiRefresh(){
+  if(_groupUiRaf)return;
+  _groupUiRaf=requestAnimationFrame(()=>{
+    _groupUiRaf=0;
+    renderTable();
+    updateCharts();
+    buildGroupFilterBar();
+  });
+}
 function setSymGroup(sym,g){
   if(g===0)delete S.symGroups[sym];
   else S.symGroups[sym]=g;
-  renderTable();
-  // update color stripe in chart headers
+  // update color stripe in chart headers immediately
   S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
+  scheduleGroupUiRefresh();
 }
 
 function buildGroupFilterBar(){
@@ -2805,7 +2849,7 @@ function buildGroupFilterBar(){
     bar.innerHTML='';
     const allBtn=document.createElement('button');
     allBtn.className='cg-filter-all'+(S.activeGroupFilter===0?' active':'');
-    allBtn.textContent='Все';allBtn.onclick=()=>{S.activeGroupFilter=0;renderTable();updateCharts();buildGroupFilterBar();};
+    allBtn.textContent='Все';allBtn.onclick=()=>{S.activeGroupFilter=0;scheduleGroupUiRefresh();};
     bar.appendChild(allBtn);
     for(let g=1;g<=7;g++){
       const cnt=Object.values(S.symGroups).filter(v=>v===g).length;
@@ -2816,14 +2860,19 @@ function buildGroupFilterBar(){
       btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'');
       btn.style.background=GROUP_COLORS[g];
       btn.title=`Группа ${g} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
-      btn.onclick=()=>{S.activeGroupFilter=S.activeGroupFilter===g?0:g;renderTable();updateCharts();buildGroupFilterBar();};
+      btn.onclick=()=>{S.activeGroupFilter=S.activeGroupFilter===g?0:g;scheduleGroupUiRefresh();};
       btn.oncontextmenu=ev=>{ev.preventDefault();ev.stopPropagation();
         if(!cnt)return;
-        if(confirm(`Очистить группу ${g} (${cnt} монет)?`)){
-          Object.keys(S.symGroups).forEach(s=>{if(S.symGroups[s]===g)delete S.symGroups[s];});
-          if(S.activeGroupFilter===g)S.activeGroupFilter=0;
-          renderTable();updateCharts();buildGroupFilterBar();
-        }
+        showConfirmModal(`Очистить группу ${g} (${cnt} монет)?`,{
+          title:'Очистка группы',
+          okText:'Очистить',
+          danger:true,
+          onConfirm:()=>{
+            Object.keys(S.symGroups).forEach(s=>{if(S.symGroups[s]===g)delete S.symGroups[s];});
+            if(S.activeGroupFilter===g)S.activeGroupFilter=0;
+            scheduleGroupUiRefresh();
+          }
+        });
       };
       wrap.appendChild(btn);
       // Small "+" button to manage this group
@@ -2843,10 +2892,15 @@ function buildGroupFilterBar(){
     delAll.onclick=()=>{
       const total=Object.keys(S.symGroups).length;
       if(!total)return;
-      if(confirm(`Удалить все цветовые категории (${total} монет)?`)){
-        S.symGroups={};S.activeGroupFilter=0;
-        renderTable();updateCharts();buildGroupFilterBar();
-      }
+      showConfirmModal(`Удалить все цветовые категории (${total} монет)?`,{
+        title:'Удаление всех категорий',
+        okText:'Удалить все',
+        danger:true,
+        onConfirm:()=>{
+          S.symGroups={};S.activeGroupFilter=0;
+          scheduleGroupUiRefresh();
+        }
+      });
     };
     bar.appendChild(delAll);
     // Potential preset tabs — appear as filter tabs alongside color groups
@@ -2880,6 +2934,7 @@ function showGroupPicker(sym,anchorEl){
   const target=S.lastGroupUsed||1;
   if(cur===target){setSymGroup(sym,0);}
   else{setSymGroup(sym,target);S.lastGroupUsed=target;}
+  syncAllGroupDots(sym);
   // Show quick-change picker so user can pick a different color
   showQuickGroupChanger(sym,anchorEl);
 }
@@ -2928,7 +2983,6 @@ function syncAllGroupDots(sym){
   S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
   const fsCgDot=document.getElementById('fsCgDot');
   if(fsCgDot&&S.fsSym===sym){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
-  buildGroupFilterBar();
 }
 
 function openGroupManager(g){
@@ -2969,7 +3023,7 @@ function openGroupManager(g){
         ${inGrp?`<span style="font-size:9px;color:${col}">✓ в группе</span>`:''}`;
       row.onmouseenter=()=>row.style.background=inGrp?'rgba(255,255,255,.07)':'rgba(255,255,255,.025)';
       row.onmouseleave=()=>row.style.background=inGrp?'rgba(255,255,255,.04)':'';
-      row.onclick=()=>{setSymGroup(m.sym,inGrp?0:g);buildList(srch.value);buildGroupFilterBar();};
+      row.onclick=()=>{setSymGroup(m.sym,inGrp?0:g);buildList(srch.value);};
       frag.appendChild(row);
     }
     list.appendChild(frag);
