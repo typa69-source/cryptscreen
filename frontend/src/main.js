@@ -721,6 +721,8 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.addEventListener('mousedown',e=>{
     if(e.button!==0||S.drawMode)return;
     const{x,y}=getCoords(container,e.clientX,e.clientY);
+    const drawW=Math.max(1,container.clientWidth-PRICE_AXIS_W);
+    if(x>=drawW)return; // price scale has priority for its own drag/zoom
     // Check long/short drag handles
     for(let i=0;i<ch.drawings.length;i++){
       const d=ch.drawings[i];
@@ -1201,7 +1203,7 @@ function computeDensities(ch){
   // Use persisted settings if available
   const ds=getDensitySettings(sym);
   const largeMult=ds.largeMult,medMult=ds.medMult,smallMult=ds.smallMult;
-  const nowSec=Math.floor(Date.now()/1000)+TZ_OFFSET_S;
+  const seenAt=ch.candles.length?toChartTime(ch.candles[ch.candles.length-1].t):(Math.floor(Date.now()/1000)+TZ_OFFSET_S);
   const baseStep=Math.max(1e-8,(ch.candles[ch.candles.length-1]?.c||1)*0.0015); // 0.15% bucket
   const activeKeys=new Set();
   // Only show top-tier clusters to avoid noise
@@ -1216,7 +1218,7 @@ function computeDensities(ch){
   for(const z of zones){
     const key=`${sym}:${z.tier}:${z._bucket}`;
     activeKeys.add(key);
-    if(!_densityFirstSeen.has(key))_densityFirstSeen.set(key,nowSec);
+    if(!_densityFirstSeen.has(key))_densityFirstSeen.set(key,seenAt);
     z.time=_densityFirstSeen.get(key);
   }
   // Trim stale keys for this symbol so map does not grow forever.
@@ -1241,7 +1243,7 @@ function drawDensities(ctx,ch,W,H){
   if(!zones.length)return;
   ctx.save();
   for(const z of zones){
-    const y=ch.cs.priceToCoordinate(z.price);if(y===null||y<0||y>H)continue;
+    const y=ch.cs.priceToCoordinate(z.price);if(y===null||y<0||y>H-TIME_AXIS_H)continue;
     const x0=Math.max(0,timeToCoordX(ch,z.time)??0);
     let col,alpha;
     if(z.tier==='large'){col='#e04040';alpha=0.75;}
@@ -1271,6 +1273,7 @@ document.addEventListener('keyup',e=>{if(e.key==='Control'||e.key==='Meta')_ctrl
 
 // Price axis width estimate (LW Charts right scale ~= 65px)
 const PRICE_AXIS_W=65;
+const TIME_AXIS_H=22;
 
 // ── Render canvas ──────────────────────────────────────────────
 // Per-chart RAF guard: only one pending rCanvas per chart at a time
@@ -1685,8 +1688,9 @@ function drawEMAs(ctx,ch,W,H){
   if(!S.emaVisible||!ch.cs||!ch.lc||!ch.candles.length)return;
   const sym=ch.sym||S.fsSym;
   const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
+  const plotH=Math.max(0,H-TIME_AXIS_H);
   ctx.save();
-  ctx.beginPath();ctx.rect(0,0,W,H);ctx.clip();
+  ctx.beginPath();ctx.rect(0,0,W,plotH);ctx.clip();
 
   // Get visible time range so we only draw visible EMA points
   const vr=ch.lc.timeScale().getVisibleLogicalRange();
@@ -1719,7 +1723,7 @@ function drawEMAs(ctx,ch,W,H){
     }
     ctx.stroke();
     // Label near right edge
-    if(lastPy!=null&&lastPy>5&&lastPy<H-5){
+    if(lastPy!=null&&lastPy>5&&lastPy<plotH-5){
       ctx.font='bold 8px JetBrains Mono,monospace';ctx.fillStyle=cfg.color;
       ctx.globalAlpha=0.95;ctx.textAlign='left';
       ctx.fillText(`EMA${cfg.period}`,4,lastPy-3);
@@ -1829,6 +1833,14 @@ function renderAlertLog(){
         <span style="color:#f97316;font-size:9px;margin:0 4px">⚡</span>
         <span style="color:#fff;font-weight:600;margin-right:5px">${symShort}</span>
         <span style="color:#f97316;font-size:9px">${a.presetName||'Потенциал'}</span>
+        <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(a.curPrice)}</span>
+      </div>`;
+    }
+    if(a.type==='ema_cross'){
+      return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="Открыть ${symShort}">
+        <span style="color:var(--text3);font-size:9px">${tStr}</span>
+        <span style="color:#fff;font-weight:600;margin:0 5px">${symShort}</span>
+        <span style="color:#f97316;font-size:9px">${a.presetName||'EMA cross'}</span>
         <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(a.curPrice)}</span>
       </div>`;
     }
@@ -2203,11 +2215,14 @@ function updateRulerTooltip(ch){
 document.addEventListener('keydown',e=>{
   const tgt=e.target;
   const editable=tgt&&((tgt.tagName==='INPUT')||(tgt.tagName==='TEXTAREA')||tgt.isContentEditable);
-  const isUndoKey=(e.ctrlKey||e.metaKey)&&!editable&&e.key&&e.key.toLowerCase()==='z';
-  if(isUndoKey){
+  const mod=(e.ctrlKey||e.metaKey)&&!editable;
+  const isZ=!!e.code&&e.code.toLowerCase()==='keyz';
+  const isY=!!e.code&&e.code.toLowerCase()==='keyy';
+  if(mod&&(isZ||isY)){
     const sym=resolveUndoSym();
     if(sym){
-      const ok=e.shiftKey?redoDrawings(sym):undoDrawings(sym);
+      const wantRedo=e.shiftKey||isY;
+      const ok=wantRedo?redoDrawings(sym):undoDrawings(sym);
       if(ok){e.preventDefault();_lastDrawSym=sym;return;}
     }
   }
