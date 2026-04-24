@@ -2238,6 +2238,15 @@ document.addEventListener('keydown',e=>{
     }
   }
   if(e.key==='Escape'){
+    // Fullscreen should feel like the same app: Esc closes fullscreen first
+    // (but don't hijack Esc while user edits inputs or a modal is open)
+    const settingsOpen=document.getElementById('settingsModal')?.classList.contains('open');
+    const emaOpen=!!document.getElementById('emaEditorModal');
+    if(S.fsOpen&&!editable&&!settingsOpen&&!emaOpen){
+      closeFullscreen();
+      e.preventDefault();
+      return;
+    }
     [...S.charts,...S.fsCharts].forEach((ch,i)=>{
       ch.pendingP1=null;
       if(ch.ruler){ch.ruler=null;document.getElementById('rulerTooltip').style.display='none';}
@@ -2446,7 +2455,6 @@ function updateFsHeaderValues(){
   const ft=document.getElementById('fsTrd');if(ft)ft.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const corVal=m.corr14??m.corr;const fc=document.getElementById('fsCorr');
   if(fc)fc.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
-  const fhc=document.getElementById('fsHcount');if(fhc)fhc.textContent=document.getElementById('hcount').textContent;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2625,7 +2633,6 @@ function renderTable(){
   const rows=sortedRows();
   const countTxt=rows.length+' монет';
   document.getElementById('hcount').textContent=countTxt;
-  const fshc=document.getElementById('fsHcount');if(fshc)fshc.textContent=countTxt;
   renderScreenerInto(document.getElementById('sbody'),rows);
   if(S.fsOpen&&S.fsScreenerVisible){
     renderScreenerInto(document.getElementById('fsSbody'),rows);
@@ -2679,7 +2686,7 @@ function changePage(delta){
 
 function setTf(tf,btnId){
   S.tf=tf;
-  document.querySelectorAll('#toolbar .tbtn,#fsTfBtns .tbtn').forEach(b=>{
+  document.querySelectorAll('#toolbar .tbtn').forEach(b=>{
     if(['tf1m','tf5m','tf15m','tf1h','tf4h','tf1d'].includes(b.id)||b.dataset.tf)b.classList.remove('on');
   });
   document.getElementById(btnId)?.classList.add('on');
@@ -2706,10 +2713,14 @@ function updTime(){
   const timeStr=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   const ht=document.getElementById('htime');if(ht)ht.textContent=timeStr;
   const hs=document.getElementById('hstatus');if(hs)hs.textContent='Онлайн';
-  if(S.fsOpen){
-    const fshtime=document.getElementById('fsHtime');if(fshtime)fshtime.textContent=timeStr;
-    const fshstatus=document.getElementById('fsHstatus');if(fshstatus)fshstatus.textContent='Онлайн';
-  }
+}
+
+function updateToggleScrBtn(){
+  const btn=document.getElementById('toggleScrBtn');
+  if(!btn)return;
+  const on=S.fsOpen?S.fsScreenerVisible:S.screenerVisible;
+  btn.textContent=(on?'◀':'▶')+' Список';
+  btn.classList.toggle('on',on);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3121,6 +3132,7 @@ function openGroupManager(g){
 }
 
 function toggleScreener(){
+  if(S.fsOpen){toggleFsScreener();return;}
   S.screenerVisible=!S.screenerVisible;
   const spl=document.getElementById('spl');
   const sp=document.getElementById('spanel');
@@ -3133,8 +3145,7 @@ function toggleScreener(){
     cp.style.flex=''; cp.style.width=S._savedCpW||'64%';
     spl.style.display=''; sp.style.display='';
   }
-  const btn=document.getElementById('toggleScrBtn');
-  if(btn){btn.textContent=(S.screenerVisible?'◀':'▶')+' Список';btn.classList.toggle('on',S.screenerVisible);}
+  updateToggleScrBtn();
   setTimeout(()=>{S.charts.forEach((ch,i)=>{const cb=document.getElementById(`cb${i}`);if(cb&&ch.lc&&ch.cs){try{ch.lc.resize(cb.clientWidth,cb.clientHeight);ch.canvas.width=cb.clientWidth;ch.canvas.height=cb.clientHeight;rCanvas(ch);}catch(e){}}});},60);
   if(S.screenerVisible)renderTable();
 }
@@ -3152,8 +3163,7 @@ function toggleFsScreener(){
     ca.style.flex=''; ca.style.width=S._savedFsCaW||'';
     spl.style.display=''; sp.style.display='';
   }
-  const btn=document.getElementById('fsToggleScrBtn');
-  if(btn){btn.textContent=(S.fsScreenerVisible?'◀':'▶')+' Список';btn.classList.toggle('on',S.fsScreenerVisible);}
+  updateToggleScrBtn();
   setTimeout(()=>{S.fsCharts.forEach((fch,i)=>{const el=document.getElementById(`fsChartEl${i}`);if(el&&fch.lc&&fch.cs){try{fch.lc.resize(el.clientWidth,el.clientHeight);fch.canvas.width=el.clientWidth;fch.canvas.height=el.clientHeight;rCanvas(fch);}catch(e){}}});},60);
   if(S.fsScreenerVisible)renderTable();
 }
@@ -3341,14 +3351,6 @@ function buildFsTfBar(barId,idx){
   });
 }
 
-function buildFsTfButtons(){
-  const c=document.getElementById('fsTfBtns');if(!c)return;c.innerHTML='';
-  ['1m','5m','15m','1h','4h','1d'].forEach(tf=>{
-    const b=document.createElement('button');b.className='tbtn'+(tf===S.tf?' on':'');
-    b.textContent=tf;b.dataset.tf=tf;b.onclick=()=>setTf(tf,b.id||'');c.appendChild(b);
-  });
-}
-
 function initFsChart(idx){
   if(!S.LC)return;
   const fch=S.fsCharts[idx];
@@ -3403,7 +3405,13 @@ async function loadMoreFsHistory(idx){
 function openFullscreenBySym(sym){
   if(!sym)return;
   S.fsSym=sym;S.fsOpen=true;
-  document.getElementById('fsView').classList.add('open');
+  const body=document.getElementById('body');
+  const fsBody=document.getElementById('fsBody');
+  if(body)body.style.display='none';
+  if(fsBody)fsBody.style.display='';
+  const fsExtras=document.getElementById('fsExtras');
+  if(fsExtras)fsExtras.style.display='flex';
+  updateToggleScrBtn();
   document.getElementById('fsSym').textContent=sym.replace(/USDT$/,'');
   setCoinIcon('fsSymIcon',sym);
   // Update FS color dot
@@ -3419,21 +3427,9 @@ function openFullscreenBySym(sym){
   document.getElementById('fsTrd').innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const corVal=m.corr14??m.corr;
   document.getElementById('fsCorr').innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
-  // Sync top-bar status info
-  const htime=document.getElementById('htime');
-  const fshtime=document.getElementById('fsHtime');
-  if(htime&&fshtime)fshtime.textContent=htime.textContent;
-  const hstatus=document.getElementById('hstatus');
-  const fshstatus=document.getElementById('fsHstatus');
-  if(hstatus&&fshstatus)fshstatus.textContent=hstatus.textContent;
-  const hcount=document.getElementById('hcount');
-  const fshcount=document.getElementById('fsHcount');
-  if(hcount&&fshcount)fshcount.textContent=hcount.textContent;
   // Build FS screener
   buildScreenerHeader(document.getElementById('fsShdr'));
   renderTable();
-  // Build TF buttons
-  buildFsTfButtons();
   // Build 3 FS charts
   for(let i=0;i<3;i++){buildFsTfBar(`fsTfBar${i}`,i);initFsChart(i);loadFsChart(i);}
   startFsWs();
@@ -3446,8 +3442,14 @@ function openFullscreen(slot){
 }
 
 function closeFullscreen(){
-  document.getElementById('fsView').classList.remove('open');
   S.fsOpen=false;
+  const body=document.getElementById('body');
+  const fsBody=document.getElementById('fsBody');
+  if(fsBody)fsBody.style.display='none';
+  if(body)body.style.display='';
+  const fsExtras=document.getElementById('fsExtras');
+  if(fsExtras)fsExtras.style.display='none';
+  updateToggleScrBtn();
   if(S.fsWs){try{S.fsWs.close();}catch(e){}S.fsWs=null;}
   // Sync drawings back
   S.fsCharts.forEach(fch=>{rCanvas(fch);});

@@ -25,105 +25,7 @@
   <div class="ld-err" id="lerr"></div>
 </div>
 
-<!-- FULLSCREEN VIEW -->
-<div id="fsView">
-  <div id="fsHdr">
-    <button class="fs-back" onclick="closeFullscreen()">← Назад</button>
-    <div class="hsep"></div>
-    <div class="fs-hdr-logo"><div class="logo-sq" style="font-size:8px;font-weight:700;width:14px;height:14px">C</div>CRYPTSCREEN</div>
-    <div class="hsep"></div>
-    <div class="fs-hdr-status">
-      <span class="live-dot" id="fsLdot"></span>
-      <span id="fsHstatus" style="font-size:10px;color:var(--text2)">—</span>
-      <span id="fsHcount" style="font-size:10px;color:var(--text3)"></span>
-      <span id="fsHtime" style="font-size:10px;color:var(--text3);min-width:65px;text-align:right"></span>
-    </div>
-    <div class="hsep"></div>
-    <img id="fsSymIcon" src="" alt="" style="display:none;width:18px;height:18px;border-radius:50%;margin-right:2px;flex-shrink:0">
-    <span id="fsSym"></span>
-    <span id="fsPrc" style="margin-left:6px"></span>
-    <span id="fsChg" style="margin-left:4px"></span>
-    <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
-    <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
-    <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
-    <span id="fsCgDot" class="cg-dot chart-cg-dot" style="margin-left:8px;cursor:pointer;width:14px;height:14px" title="Цветовая группа — нажать" onclick="showChartGroupPicker(S.fsSym,this)"></span>
-    <button class="tbtn" style="margin-left:4px;font-size:10px" onclick="toggleAlertLog()" title="История алертов">🔔<span id="fsAlertBadge" style="display:none;background:#a855f7;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;margin-left:2px"></span></button>
-    <div class="hsep"></div>
-    <!-- TF -->
-    <span style="font-size:9px;color:var(--text3)">ТФ</span>
-    <div id="fsTfBtns" style="display:flex;gap:2px"></div>
-    <div class="tsep"></div>
-    <!-- Draw -->
-    <span style="font-size:9px;color:var(--text3)">РИСУНОК</span>
-    <button class="tbtn on" id="fs-draw-none" onclick="setDrawMode(null)">↖</button>
-    <button class="tbtn" id="fs-draw-hray" onclick="setDrawMode('hray')">─▷</button>
-    <button class="tbtn" id="fs-draw-tline" onclick="setDrawMode('tline')">╱</button>
-    <button class="tbtn" id="fs-draw-brush" onclick="setDrawMode('brush')" title="Кисть">✏</button>
-    <div id="fsBrushPalette" style="display:none;align-items:center;gap:3px">
-      <div class="brush-color active" style="background:#f97316" onclick="setBrushColor('#f97316',this)"></div>
-      <div class="brush-color" style="background:#ef4444" onclick="setBrushColor('#ef4444',this)"></div>
-      <div class="brush-color" style="background:#eab308" onclick="setBrushColor('#eab308',this)"></div>
-      <div class="brush-color" style="background:#22c55e" onclick="setBrushColor('#22c55e',this)"></div>
-      <div class="brush-color" style="background:#3b82f6" onclick="setBrushColor('#3b82f6',this)"></div>
-      <div class="brush-color" style="background:#a855f7" onclick="setBrushColor('#a855f7',this)"></div>
-      <div class="brush-color" style="background:#e2e8f0" onclick="setBrushColor('#e2e8f0',this)"></div>
-      <input type="number" class="brush-size" min="1" max="12" value="2" title="Толщина" onchange="setBrushWidth(+this.value)">
-    </div>
-    <button class="tbtn" id="fs-draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч">🔔─</button>
-    <button class="tbtn" id="fs-draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия">🔔╱</button>
-    <button class="tbtn" id="fs-draw-long" onclick="setDrawMode('long')" title="Лонг">▲Л</button>
-    <button class="tbtn" id="fs-draw-short" onclick="setDrawMode('short')" title="Шорт">▼Ш</button>
-    <button class="tbtn" id="fsClearDrawBtn" onclick="clearFsDrawings()" title="Двойное нажатие — удалить все рисунки текущей монеты" style="color:var(--text3)">✕✕</button>
-    <div class="tsep"></div>
-    <button class="tbtn" id="fsEmaBtn" onclick="openEMAEditor()" title="EMA линии">EMA</button>
-    <div class="tsep"></div>
-    <!-- Pagination -->
-    <span style="font-size:9px;color:var(--text3)">СТР</span>
-    <div class="pg-wrap">
-      <button class="pg-btn" id="fsPgPrev" onclick="changePage(-1)" disabled>‹</button>
-      <span class="pg-info" id="fsPgInfo">1/1</span>
-      <button class="pg-btn" id="fsPgNext" onclick="changePage(1)" disabled>›</button>
-    </div>
-    <div class="tsep"></div>
-    <!-- Vol filter -->
-    <span style="font-size:9px;color:var(--text3)">ОБ≥</span>
-    <input type="range" class="vol-slider" id="fsVolSlider" min="0" max="25" step="1" value="0" oninput="onVolFilter(this.value)">
-    <span class="vol-val" id="fsVolVal">0</span>
-    <div class="tsep"></div>
-    <!-- Search -->
-    <div class="srch">
-      <span class="srch-ico">⌕</span>
-      <input class="sinput" id="fsSearch" type="text" placeholder="Поиск..." oninput="onSearch(this.value)">
-    </div>
-    <div style="margin-left:auto;display:flex;align-items:center;gap:5px">
-      <button class="hbtn" onclick="openSettings()">⚙ Настройки</button>
-      <button class="hbtn" id="fsToggleScrBtn" onclick="toggleFsScreener()">▶ Список</button>
-    </div>
-  </div>
-  <div id="fsMain">
-    <div id="fsChartArea">
-      <div id="fsTop">
-        <div class="fs-tf-bar" id="fsTfBar0"><span class="fs-label">ОСНОВНОЙ:</span></div>
-        <div class="fs-chart-el" id="fsChartEl0"></div>
-      </div>
-      <div id="fsBtm">
-        <div id="fsLeft">
-          <div class="fs-tf-bar" id="fsTfBar1"><span class="fs-label">ЛЕВЫЙ:</span></div>
-          <div class="fs-chart-el" id="fsChartEl1"></div>
-        </div>
-        <div id="fsRight">
-          <div class="fs-tf-bar" id="fsTfBar2"><span class="fs-label">ПРАВЫЙ:</span></div>
-          <div class="fs-chart-el" id="fsChartEl2"></div>
-        </div>
-      </div>
-    </div>
-    <div class="spl" id="fsSpl" onmousedown="dragSpl(event,'fsSpl','fsChartArea','fsMain')"></div>
-    <div class="spanel" id="fsSpanel">
-      <div class="shdr" id="fsShdr"></div>
-      <div class="sbody" id="fsSbody"></div>
-    </div>
-  </div>
-</div>
+<!-- Fullscreen is a mode of the same app (no separate header). -->
 
 <!-- ALERT LOG PANEL -->
 <div id="alertLogPanel">
@@ -222,10 +124,53 @@
     <span id="sinfo" style="font-size:9px;color:var(--text3);flex-shrink:0"></span>
     <div class="tsep"></div>
     <button class="tbtn" id="densityBtn" onclick="toggleDensity()" title="Плотности объёма на графике">◈ Плотность</button>
+
+    <!-- Fullscreen-only extras: uses the same button styles/patterns -->
+    <div id="fsExtras" style="display:none;align-items:center;gap:6px;flex-shrink:0">
+      <div class="tsep"></div>
+      <button class="hbtn" id="fsCloseBtn" onclick="closeFullscreen()">← Назад</button>
+      <div class="hsep"></div>
+      <img id="fsSymIcon" src="" alt="" style="display:none;width:18px;height:18px;border-radius:50%;margin-right:2px;flex-shrink:0">
+      <span id="fsSym" style="font-weight:600;color:#fff"></span>
+      <span id="fsPrc" style="margin-left:6px"></span>
+      <span id="fsChg" style="margin-left:4px"></span>
+      <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
+      <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
+      <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
+      <span id="fsCgDot" class="cg-dot chart-cg-dot" style="margin-left:6px;cursor:pointer;width:14px;height:14px" title="Цветовая группа — нажать" onclick="showChartGroupPicker(S.fsSym,this)"></span>
+    </div>
+
     <div class="tright">
       <div class="srch">
         <span class="srch-ico">⌕</span>
         <input class="sinput" id="sinput" type="text" placeholder="Поиск..." oninput="onSearch(this.value)">
+      </div>
+    </div>
+  </div>
+
+  <!-- FULLSCREEN BODY (shown instead of #body) -->
+  <div id="fsBody" style="display:none">
+    <div id="fsMain">
+      <div id="fsChartArea">
+        <div id="fsTop">
+          <div class="fs-tf-bar" id="fsTfBar0"><span class="fs-label">ОСНОВНОЙ:</span></div>
+          <div class="fs-chart-el" id="fsChartEl0"></div>
+        </div>
+        <div id="fsBtm">
+          <div id="fsLeft">
+            <div class="fs-tf-bar" id="fsTfBar1"><span class="fs-label">ЛЕВЫЙ:</span></div>
+            <div class="fs-chart-el" id="fsChartEl1"></div>
+          </div>
+          <div id="fsRight">
+            <div class="fs-tf-bar" id="fsTfBar2"><span class="fs-label">ПРАВЫЙ:</span></div>
+            <div class="fs-chart-el" id="fsChartEl2"></div>
+          </div>
+        </div>
+      </div>
+      <div class="spl" id="fsSpl" onmousedown="dragSpl(event,'fsSpl','fsChartArea','fsMain')"></div>
+      <div class="spanel" id="fsSpanel">
+        <div class="shdr" id="fsShdr"></div>
+        <div class="sbody" id="fsSbody"></div>
       </div>
     </div>
   </div>
