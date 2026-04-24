@@ -3180,6 +3180,16 @@ function dragSpl(e,splId,leftId,bodyId){
     const r=body.getBoundingClientRect();
     const pct=Math.max(20,Math.min(85,((ev.clientX-r.left)/r.width)*100));
     left.style.width=pct+'%';
+    // Keep the screener width consistent between main and fullscreen modes
+    if(leftId==='cpanel'){
+      const fsCA=document.getElementById('fsChartArea');
+      if(fsCA){fsCA.style.flex='none';fsCA.style.width=pct+'%';}
+      S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
+    } else if(leftId==='fsChartArea'){
+      const cp=document.getElementById('cpanel');
+      if(cp){cp.style.flex='none';cp.style.width=pct+'%';}
+      S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
+    }
     [...S.charts,...S.fsCharts].forEach(ch=>{if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(er){}});
   };
   const onU=()=>{spl.classList.remove('drag');window.removeEventListener('mousemove',onM);window.removeEventListener('mouseup',onU);};
@@ -3293,19 +3303,12 @@ function autoResizeScreener(){
   if(totalW<1)return;
   const chartW=Math.max(totalW*minChartPct/100, totalW-idealScrW-splW);
   const pct=Math.round(chartW/totalW*100);
-  cp.style.width=Math.max(minChartPct,Math.min(85,pct))+'%';
-  // Same for FS
-  const fsMain=document.getElementById('fsMain');
+  const clamped=Math.max(minChartPct,Math.min(85,pct))+'%';
+  cp.style.width=clamped;
+  // Same pct for fullscreen chart area
   const fsCA=document.getElementById('fsChartArea');
-  if(fsMain&&fsCA){
-    const fw=fsMain.clientWidth;
-    if(fw>1){
-      const fChartW=Math.max(fw*minChartPct/100,fw-idealScrW-splW);
-      const fp=Math.round(fChartW/fw*100);
-      fsCA.style.flex='none';
-      fsCA.style.width=Math.max(minChartPct,Math.min(85,fp))+'%';
-    }
-  }
+  if(fsCA){fsCA.style.flex='none';fsCA.style.width=clamped;}
+  S._savedCpW=clamped;S._savedFsCaW=clamped;
 }
 
 function rebuildScreenerHeaders(){
@@ -3411,8 +3414,15 @@ function openFullscreenBySym(sym){
   if(fsBody)fsBody.style.display='';
   const fsExtras=document.getElementById('fsExtras');
   if(fsExtras)fsExtras.style.display='flex';
+  const tfGroup=document.getElementById('tfGroup');
+  if(tfGroup)tfGroup.style.display='none';
+  // Ensure shared chart area width is the same in both modes
+  const cp=document.getElementById('cpanel');
+  const fsCA=document.getElementById('fsChartArea');
+  const sharedW=(cp&&cp.style.width)?cp.style.width:(S._savedCpW||'');
+  if(sharedW&&fsCA){fsCA.style.flex='none';fsCA.style.width=sharedW;S._savedFsCaW=sharedW;}
   updateToggleScrBtn();
-  document.getElementById('fsSym').textContent=sym.replace(/USDT$/,'');
+  document.getElementById('fsSym').textContent=sym;
   setCoinIcon('fsSymIcon',sym);
   // Update FS color dot
   const fsCgDot=document.getElementById('fsCgDot');
@@ -3449,12 +3459,23 @@ function closeFullscreen(){
   if(body)body.style.display='';
   const fsExtras=document.getElementById('fsExtras');
   if(fsExtras)fsExtras.style.display='none';
+  const tfGroup=document.getElementById('tfGroup');
+  if(tfGroup)tfGroup.style.display='';
+  // Keep shared width consistent when returning
+  const cp=document.getElementById('cpanel');
+  const fsCA=document.getElementById('fsChartArea');
+  const sharedW=(fsCA&&fsCA.style.width)?fsCA.style.width:(S._savedFsCaW||'');
+  if(sharedW&&cp){cp.style.flex='none';cp.style.width=sharedW;S._savedCpW=sharedW;}
   updateToggleScrBtn();
   if(S.fsWs){try{S.fsWs.close();}catch(e){}S.fsWs=null;}
   // Sync drawings back
   S.fsCharts.forEach(fch=>{rCanvas(fch);});
   // Refresh main grid drawings
   S.charts.forEach((ch,i)=>{if(ch.sym)ch.drawings=getSymDrawings(ch.sym);rCanvas(ch);});
+}
+
+function goHome(){
+  if(S.fsOpen)closeFullscreen();
 }
 
 async function setFsTf(idx,tf){
@@ -3887,6 +3908,7 @@ window.clearFsDrawings    = clearFsDrawings;
 window.closeFullscreen    = closeFullscreen;
 window.openFullscreen     = openFullscreen;
 window.openFullscreenBySym= openFullscreenBySym;
+window.goHome             = goHome;
 window.onSearch           = onSearch;
 window.onVolFilter        = onVolFilter;
 window.toggleDensity      = toggleDensity;

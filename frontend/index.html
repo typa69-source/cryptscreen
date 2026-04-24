@@ -59,7 +59,9 @@
 <!-- MAIN APP -->
 <div id="app">
   <div id="header">
-    <div class="logo"><div class="logo-sq">C</div>CRYPTSCREEN</div>
+    <div class="logo" id="logoBtn" role="button" tabindex="0" onclick="goHome()" title="На главную">
+      <div class="logo-sq">C</div>CRYPTSCREEN
+    </div>
     <div class="hsep"></div>
     <div class="hright">
       <span class="live-dot" id="ldot"></span>
@@ -75,15 +77,31 @@
   </div>
 
   <div id="toolbar">
-    <span style="color:var(--text3);font-size:9px;flex-shrink:0">ТФ</span>
-    <div class="tsep"></div>
-    <button class="tbtn" id="tf1m" onclick="setTf('1m','tf1m')">1м</button>
-    <button class="tbtn on" id="tf5m" onclick="setTf('5m','tf5m')">5м</button>
-    <button class="tbtn" id="tf15m" onclick="setTf('15m','tf15m')">15м</button>
-    <button class="tbtn" id="tf1h" onclick="setTf('1h','tf1h')">1ч</button>
-    <button class="tbtn" id="tf4h" onclick="setTf('4h','tf4h')">4ч</button>
-    <button class="tbtn" id="tf1d" onclick="setTf('1d','tf1d')">Д</button>
-    <div class="tsep"></div>
+    <!-- Fullscreen-only extras: replaces TF group -->
+    <div id="fsExtras" style="display:none;align-items:center;gap:6px;flex-shrink:0">
+      <button class="hbtn" id="fsCloseBtn" onclick="closeFullscreen()">← Назад</button>
+      <span id="fsCgDot" class="cg-dot chart-cg-dot" style="cursor:pointer;width:16px;height:16px" title="Цветовая группа — нажать" onclick="showChartGroupPicker(S.fsSym,this)"></span>
+      <img id="fsSymIcon" src="" alt="" style="display:none;width:18px;height:18px;border-radius:50%;flex-shrink:0">
+      <span id="fsSym" style="font-weight:600;color:#fff;cursor:pointer" title="Нажмите чтобы скопировать BTCUSDT" onclick="copyTicker(S.fsSym)"></span>
+      <span id="fsPrc" style="margin-left:6px"></span>
+      <span id="fsChg" style="margin-left:4px"></span>
+      <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
+      <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
+      <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
+      <div class="tsep"></div>
+    </div>
+
+    <div id="tfGroup">
+      <span style="color:var(--text3);font-size:9px;flex-shrink:0">ТФ</span>
+      <div class="tsep"></div>
+      <button class="tbtn" id="tf1m" onclick="setTf('1m','tf1m')">1м</button>
+      <button class="tbtn on" id="tf5m" onclick="setTf('5m','tf5m')">5м</button>
+      <button class="tbtn" id="tf15m" onclick="setTf('15m','tf15m')">15м</button>
+      <button class="tbtn" id="tf1h" onclick="setTf('1h','tf1h')">1ч</button>
+      <button class="tbtn" id="tf4h" onclick="setTf('4h','tf4h')">4ч</button>
+      <button class="tbtn" id="tf1d" onclick="setTf('1d','tf1d')">Д</button>
+      <div class="tsep"></div>
+    </div>
     <span style="color:var(--text3);font-size:9px;flex-shrink:0">СТР</span>
     <div class="pg-wrap">
       <button class="pg-btn" id="pgPrev" onclick="changePage(-1)" disabled>‹</button>
@@ -124,21 +142,6 @@
     <span id="sinfo" style="font-size:9px;color:var(--text3);flex-shrink:0"></span>
     <div class="tsep"></div>
     <button class="tbtn" id="densityBtn" onclick="toggleDensity()" title="Плотности объёма на графике">◈ Плотность</button>
-
-    <!-- Fullscreen-only extras: uses the same button styles/patterns -->
-    <div id="fsExtras" style="display:none;align-items:center;gap:6px;flex-shrink:0">
-      <div class="tsep"></div>
-      <button class="hbtn" id="fsCloseBtn" onclick="closeFullscreen()">← Назад</button>
-      <div class="hsep"></div>
-      <img id="fsSymIcon" src="" alt="" style="display:none;width:18px;height:18px;border-radius:50%;margin-right:2px;flex-shrink:0">
-      <span id="fsSym" style="font-weight:600;color:#fff"></span>
-      <span id="fsPrc" style="margin-left:6px"></span>
-      <span id="fsChg" style="margin-left:4px"></span>
-      <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
-      <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
-      <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
-      <span id="fsCgDot" class="cg-dot chart-cg-dot" style="margin-left:6px;cursor:pointer;width:14px;height:14px" title="Цветовая группа — нажать" onclick="showChartGroupPicker(S.fsSym,this)"></span>
-    </div>
 
     <div class="tright">
       <div class="srch">

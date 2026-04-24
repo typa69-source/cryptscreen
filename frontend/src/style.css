@@ -67,6 +67,8 @@ html,body{
 
 /* HEADER */
 .logo{display:flex;align-items:center;gap:5px;color:#fff;font-weight:600;font-size:13px;letter-spacing:.8px}
+.logo[role="button"]{cursor:pointer}
+.logo[role="button"]:focus-visible{outline:2px solid rgba(124,58,237,.45);outline-offset:3px;border-radius:6px}
 .logo-sq{width:16px;height:16px;background:var(--accent);border-radius:var(--radius-xs);
   display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700}
 .hsep{width:1px;height:18px;background:var(--border2);flex-shrink:0}
