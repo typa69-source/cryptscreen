@@ -607,7 +607,15 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     priceFormat:{type:'custom',formatter:p=>fmtPrice(p),minMove:0.0000001},
   });
   const vs=lc.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol',color:'#1fa89120'});
-  lc.priceScale('vol').applyOptions({scaleMargins:{top:.82,bottom:0},drawTicks:false,borderVisible:false});
+  // Hide the volume "last value" indicator (bottom-right) on small charts.
+  // We keep histogram bars but remove any corner/scale label.
+  vs.applyOptions({lastValueVisible:false,priceLineVisible:false});
+  lc.priceScale('vol').applyOptions({
+    scaleMargins:{top:.82,bottom:0},
+    drawTicks:false,
+    borderVisible:false,
+    visible:false,
+  });
 
   // Watermark
   const wm=document.createElement('div');wm.className='chart-wm';
@@ -1290,11 +1298,12 @@ function _rCanvasImmediate(ch){
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
-  // #3: clip drawing area so we don't overdraw the price axis
+  // #3: clip drawing area so we don't overdraw the axes (price/time)
   const drawW=Math.max(1,W-PRICE_AXIS_W);
-  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,H);ctx.clip();
+  const drawH=Math.max(1,H-TIME_AXIS_H);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
   // Densities (behind drawings)
-  if(S.showDensity)drawDensities(ctx,ch,drawW,H);
+  if(S.showDensity)drawDensities(ctx,ch,drawW,drawH);
   ch.drawings.forEach((d,i)=>{
     const hov=(i===ch.hoveredIdx||ch.draggingDraw?.drawIdx===i);
     if(d.type==='hray')drawHRay(ctx,ch,d,drawW,hov);
@@ -1330,7 +1339,7 @@ function _rCanvasImmediate(ch){
     }
   }
   // EMA overlay (drawn on top of candles, below crosshair)
-  drawEMAs(ctx,ch,drawW,H);
+  drawEMAs(ctx,ch,drawW,drawH);
   if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
   // Custom crosshair: always visible when cursor is on chart
