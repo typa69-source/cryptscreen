@@ -607,7 +607,15 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     priceFormat:{type:'custom',formatter:p=>fmtPrice(p),minMove:0.0000001},
   });
   const vs=lc.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol',color:'#1fa89120'});
-  lc.priceScale('vol').applyOptions({scaleMargins:{top:.82,bottom:0},drawTicks:false,borderVisible:false});
+  // Hide the volume "last value" indicator (bottom-right) on small charts.
+  // We keep histogram bars but remove any corner/scale label.
+  vs.applyOptions({lastValueVisible:false,priceLineVisible:false});
+  lc.priceScale('vol').applyOptions({
+    scaleMargins:{top:.82,bottom:0},
+    drawTicks:false,
+    borderVisible:false,
+    visible:false,
+  });
 
   // Watermark
   const wm=document.createElement('div');wm.className='chart-wm';
@@ -1290,11 +1298,12 @@ function _rCanvasImmediate(ch){
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
-  // #3: clip drawing area so we don't overdraw the price axis
+  // #3: clip drawing area so we don't overdraw the axes (price/time)
   const drawW=Math.max(1,W-PRICE_AXIS_W);
-  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,H);ctx.clip();
+  const drawH=Math.max(1,H-TIME_AXIS_H);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
   // Densities (behind drawings)
-  if(S.showDensity)drawDensities(ctx,ch,drawW,H);
+  if(S.showDensity)drawDensities(ctx,ch,drawW,drawH);
   ch.drawings.forEach((d,i)=>{
     const hov=(i===ch.hoveredIdx||ch.draggingDraw?.drawIdx===i);
     if(d.type==='hray')drawHRay(ctx,ch,d,drawW,hov);
@@ -1330,7 +1339,7 @@ function _rCanvasImmediate(ch){
     }
   }
   // EMA overlay (drawn on top of candles, below crosshair)
-  drawEMAs(ctx,ch,drawW,H);
+  drawEMAs(ctx,ch,drawW,drawH);
   if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
   // Custom crosshair: always visible when cursor is on chart
@@ -2216,8 +2225,10 @@ document.addEventListener('keydown',e=>{
   const tgt=e.target;
   const editable=tgt&&((tgt.tagName==='INPUT')||(tgt.tagName==='TEXTAREA')||tgt.isContentEditable);
   const mod=(e.ctrlKey||e.metaKey)&&!editable;
-  const isZ=!!e.code&&e.code.toLowerCase()==='keyz';
-  const isY=!!e.code&&e.code.toLowerCase()==='keyy';
+  const key=(e.key||'').toLowerCase();
+  const code=(e.code||'').toLowerCase();
+  const isZ=code==='keyz'||key==='z'||key==='я';
+  const isY=code==='keyy'||key==='y'||key==='н';
   if(mod&&(isZ||isY)){
     const sym=resolveUndoSym();
     if(sym){
@@ -2466,13 +2477,13 @@ function sortedRows(){
   let rows=Object.values(S.mx);
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
-  // Group filter
-  if(S.activeGroupFilter>0)rows=rows.filter(r=>getSymGroup(r.sym)===S.activeGroupFilter);
-  // Potential preset tab filter
+  // Filters are exclusive: preset OR color group OR all
   if(S._potFilterPreset){
     const pr=S.potentialPresets.find(p=>p.id===S._potFilterPreset);
     if(pr&&Object.keys(pr.matches||{}).length>0)rows=rows.filter(r=>pr.matches[r.sym]);
     else S._potFilterPreset=null; // preset has no matches, clear filter
+  }else if(S.activeGroupFilter>0){
+    rows=rows.filter(r=>getSymGroup(r.sym)===S.activeGroupFilter);
   }
   rows.sort((a,b)=>{
     if(S.sortAlpha){
@@ -2564,12 +2575,9 @@ function updateScreenerRow(row,m,cols,inChart,pageSyms){
   if(row._name){
     row._name.onclick=ev=>{ev.stopPropagation();copyTicker(nameTxt);openFullscreenBySym(m.sym);};
   }
-  if(grpCol){
-    if(!row._stripe){row._stripe=document.createElement('div');row._stripe.className='cg-badge';row.prepend(row._stripe);}
-    row._stripe.style.background=grpCol;row._stripe.style.opacity='0.7';
-  }else if(row._stripe){row._stripe.remove();row._stripe=null;}
+  if(row._stripe){row._stripe.remove();row._stripe=null;}
   const rt=row.firstChild;
-  if(rt)rt.style.paddingLeft=grpCol?'':'9px';
+  if(rt)rt.style.paddingLeft='9px';
   if(row._pg)row._pg.textContent=pageSyms.has(m.sym)?`·${S.page+1}`:'';
   if(row._cells.length!==cols.length){
     row._rg.innerHTML='';
@@ -2924,10 +2932,15 @@ function buildGroupFilterBar(){
     let bar=hdr.parentElement.querySelector('.cg-filter-bar');
     if(!bar){bar=document.createElement('div');bar.className='cg-filter-bar';hdr.before(bar);}
     bar.innerHTML='';
+    bar.style.display='flex';bar.style.alignItems='center';bar.style.gap='6px';bar.style.flexWrap='wrap';
+
+    const grpSec=document.createElement('div');
+    grpSec.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 5px;border:1px solid var(--border2);border-radius:6px;background:rgba(255,255,255,.02);';
     const allBtn=document.createElement('button');
-    allBtn.className='cg-filter-all'+(S.activeGroupFilter===0?' active':'');
-    allBtn.textContent='Все';allBtn.onclick=()=>{S.activeGroupFilter=0;scheduleGroupUiRefresh();};
-    bar.appendChild(allBtn);
+    allBtn.className='cg-filter-all'+(S.activeGroupFilter===0&&!S._potFilterPreset?' active':'');
+    allBtn.textContent='Все';
+    allBtn.onclick=()=>{S.activeGroupFilter=0;S._potFilterPreset=null;scheduleGroupUiRefresh();};
+    grpSec.appendChild(allBtn);
     for(let g=1;g<=7;g++){
       const cnt=Object.values(S.symGroups).filter(v=>v===g).length;
       // Hide group button if no coins assigned AND it's not the active filter
@@ -2937,7 +2950,12 @@ function buildGroupFilterBar(){
       btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'');
       btn.style.background=GROUP_COLORS[g];
       btn.title=`Группа ${g} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
-      btn.onclick=()=>{S.activeGroupFilter=S.activeGroupFilter===g?0:g;scheduleGroupUiRefresh();};
+      btn.onclick=()=>{
+        const next=S.activeGroupFilter===g?0:g;
+        S.activeGroupFilter=next;
+        S._potFilterPreset=null;
+        scheduleGroupUiRefresh();
+      };
       btn.oncontextmenu=ev=>{ev.preventDefault();ev.stopPropagation();
         if(!cnt)return;
         showConfirmModal(`Очистить группу ${g} (${cnt} монет)?`,{
@@ -2958,50 +2976,40 @@ function buildGroupFilterBar(){
       addBtn.title=`Управление группой ${g}`;addBtn.textContent='＋';
       addBtn.onclick=ev=>{ev.stopPropagation();openGroupManager(g);};
       wrap.appendChild(addBtn);
-      bar.appendChild(wrap);
+      grpSec.appendChild(wrap);
     }
-    // Delete-all button
-    const delAll=document.createElement('button');
-    delAll.style.cssText='background:none;border:1px solid var(--border2);border-radius:3px;color:var(--text3);cursor:pointer;font:inherit;font-size:9px;padding:2px 6px;margin-left:4px;transition:all .1s;';
-    delAll.textContent='✕ Все';delAll.title='Удалить все цветовые категории';
-    delAll.onmouseenter=()=>delAll.style.color='var(--red)';
-    delAll.onmouseleave=()=>delAll.style.color='';
-    delAll.onclick=()=>{
-      const total=Object.keys(S.symGroups).length;
-      if(!total)return;
-      showConfirmModal(`Удалить все цветовые категории (${total} монет)?`,{
-        title:'Удаление всех категорий',
-        okText:'Удалить все',
-        danger:true,
-        onConfirm:()=>{
-          S.symGroups={};S.activeGroupFilter=0;
-          scheduleGroupUiRefresh();
-        }
-      });
-    };
-    bar.appendChild(delAll);
+    bar.appendChild(grpSec);
+
     // Potential preset tabs — appear as filter tabs alongside color groups
+    const potSec=document.createElement('div');
+    potSec.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 5px;border:1px solid #5a401f;border-radius:6px;background:rgba(249,115,22,.06);';
+    const potLbl=document.createElement('span');
+    potLbl.textContent='Потенциал';
+    potLbl.style.cssText='font-size:9px;color:#f6b07d;padding:0 3px;';
+    potSec.appendChild(potLbl);
     S.potentialPresets.forEach(pr=>{
       const cnt=Object.keys(pr.matches||{}).length;
       const tab=document.createElement('button');
-      tab.style.cssText=`background:${pr.enabled?(cnt?'rgba(249,115,22,.18)':'rgba(255,255,255,.05)'):'transparent'};border:1px solid ${pr.enabled?'#f97316':'var(--border2)'};border-radius:3px;color:${pr.enabled?(cnt?'#f97316':'var(--text2)'):'var(--text3)'};cursor:pointer;font:inherit;font-size:9px;padding:2px 7px;margin-left:2px;transition:all .1s;white-space:nowrap;display:flex;align-items:center;gap:3px;`;
-      tab.innerHTML=`⚡${pr.name}${cnt?` <span style="background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;line-height:1.5">${cnt}</span>`:''}`;
+      tab.style.cssText=`background:${pr.enabled?(cnt?'rgba(249,115,22,.18)':'rgba(255,255,255,.05)'):'transparent'};border:1px solid ${pr.enabled?'#f97316':'var(--border2)'};border-radius:4px;color:${pr.enabled?(cnt?'#f97316':'var(--text2)'):'var(--text3)'};cursor:pointer;font:inherit;font-size:9px;padding:2px 7px;transition:all .1s;white-space:nowrap;display:flex;align-items:center;gap:3px;`;
+      tab.innerHTML=`⚡ ${pr.name}${cnt?` <span style="background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;line-height:1.5">${cnt}</span>`:''}`;
       tab.title=`${pr.name}: ${cnt} монет. ЛКМ — фильтр, ПКМ — настройка`;
       tab.onclick=()=>{
-        // Toggle filter: show only coins in this preset
+        // Toggle filter: show only coins in this preset (exclusive)
+        S.activeGroupFilter=0;
         S._potFilterPreset=(S._potFilterPreset===pr.id?null:pr.id);
-        renderTable();buildGroupFilterBar();
+        scheduleGroupUiRefresh();
       };
       tab.oncontextmenu=ev=>{ev.preventDefault();openPotPresetEditor(pr.id);};
       if(S._potFilterPreset===pr.id)tab.style.outline='1px solid #f97316';
-      bar.appendChild(tab);
+      potSec.appendChild(tab);
     });
     // "+" to add new preset
     const addPotBtn=document.createElement('button');
-    addPotBtn.style.cssText='background:none;border:1px solid var(--border2);border-radius:3px;color:var(--text3);cursor:pointer;font:inherit;font-size:10px;padding:2px 6px;margin-left:2px;';
-    addPotBtn.textContent='⚡＋';addPotBtn.title='Добавить пресет Потенциала';
+    addPotBtn.style.cssText='background:none;border:1px dashed #a06a35;border-radius:4px;color:#f2bb88;cursor:pointer;font:inherit;font-size:10px;padding:2px 6px;';
+    addPotBtn.textContent='＋ Пресет';addPotBtn.title='Добавить пресет Потенциала';
     addPotBtn.onclick=()=>openPotPresetEditor(null);
-    bar.appendChild(addPotBtn);
+    potSec.appendChild(addPotBtn);
+    bar.appendChild(potSec);
   });
 }
 
