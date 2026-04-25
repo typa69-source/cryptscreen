@@ -102,12 +102,6 @@
       <button class="tbtn" id="tf1d" onclick="setTf('1d','tf1d')">Д</button>
       <div class="tsep"></div>
     </div>
-    <div class="vol-slider-wrap">
-      <span style="font-size:9px;color:var(--text3);flex-shrink:0">ОБ≥</span>
-      <input type="range" class="vol-slider" id="volSlider" min="0" max="25" step="1" value="0" oninput="onVolFilter(this.value)">
-      <span class="vol-val" id="volVal">0</span>
-    </div>
-    <div class="tsep"></div>
     <span style="color:var(--text3);font-size:9px;flex-shrink:0">РИСУНОК</span>
     <button class="tbtn on" id="draw-none" onclick="setDrawMode(null)" title="Курсор">↖</button>
     <button class="tbtn" id="draw-hray" onclick="setDrawMode('hray')" title="Горизонтальный луч">─▷</button>
@@ -136,6 +130,16 @@
     <button class="tbtn" id="densityBtn" onclick="toggleDensity()" title="Плотности объёма на графике">◈ Плотность</button>
 
     <div class="tright">
+      <div class="vol-slider-wrap filter-slider-wrap">
+        <span style="font-size:9px;color:var(--text3);flex-shrink:0">ОБ≥</span>
+        <input type="range" class="vol-slider" id="volSlider" min="0" max="25" step="1" value="0" oninput="onVolFilter(this.value)">
+        <span class="vol-val" id="volVal">0</span>
+      </div>
+      <div class="vol-slider-wrap filter-slider-wrap">
+        <span style="font-size:9px;color:var(--text3);flex-shrink:0">СДЛК≥</span>
+        <input type="range" class="vol-slider" id="trdSlider" min="0" max="40" step="1" value="0" oninput="onTrdFilter(this.value)">
+        <span class="vol-val" id="trdVal">0</span>
+      </div>
       <div class="pg-wrap pg-wrap-right">
         <span style="color:var(--text3);font-size:9px;flex-shrink:0">СТР</span>
         <button class="pg-btn" id="pgPrev" onclick="changePage(-1)" disabled>‹</button>

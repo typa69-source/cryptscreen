@@ -234,7 +234,7 @@ const S = {
   symDrawings:{},      // drawings per symbol, shared between grid & FS
   drawUndo:{},         // sym -> [drawings snapshot...]
   drawRedo:{},         // sym -> [drawings snapshot...]
-  minVol:0, gridSize:9, upColor:'#1fa891', wmVisible:true, sortAbs:true,
+  minVol:0, minTrd:0, gridSize:9, upColor:'#1fa891', wmVisible:true, sortAbs:true,
   screenerVisible:true, fsScreenerVisible:true,
   colOrder: ALL_COLS.map(c=>c.id),
   colVisible: new Set(ALL_COLS.map(c=>c.id)),
@@ -665,7 +665,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   });
   interact.addEventListener('mouseup',e=>{
     if(e.button!==0)return;
+    const hadStroke=!!ch._brushStroke;
     ch._brushStroke=null;
+    if(hadStroke&&S.drawMode==='brush')setDrawMode(null);
   });
   interact.addEventListener('contextmenu',e=>{
     e.preventDefault();
@@ -934,6 +936,17 @@ function resolveUndoSym(){
   if(S.fsOpen&&S.fsSym)return S.fsSym;
   const hov=S.charts.find(ch=>ch.hoverX>0&&ch.hoverY>0&&ch.sym);
   return hov?.sym||S.charts.find(ch=>ch.sym)?.sym||null;
+}
+function resolveUndoCandidates(){
+  const out=[];
+  const push=sym=>{if(sym&&!out.includes(sym))out.push(sym);};
+  push(_lastDrawSym);
+  if(S.fsOpen)push(S.fsSym);
+  const hov=S.charts.find(ch=>ch.hoverX>0&&ch.hoverY>0&&ch.sym);
+  push(hov?.sym);
+  S.charts.forEach(ch=>push(ch.sym));
+  Object.keys(S.symDrawings||{}).forEach(push);
+  return out;
 }
 
 async function loadChart(slot,sym){
@@ -1960,6 +1973,7 @@ function onInteractClick(ch,e,container){
     ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:'#e8a020'});
     _lastDrawSym=ch.sym||_lastDrawSym;
     rCanvas(ch);
+    setDrawMode(null);
   }else if(S.drawMode==='tline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
@@ -1967,6 +1981,7 @@ function onInteractClick(ch,e,container){
       ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:'#3b82f6'});
       _lastDrawSym=ch.sym||_lastDrawSym;
       ch.pendingP1=null;rCanvas(ch);
+      setDrawMode(null);
     }
   }else if(S.drawMode==='aray'){
     const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0};
@@ -1974,6 +1989,7 @@ function onInteractClick(ch,e,container){
     ch.drawings.push(d);rCanvas(ch);
     _lastDrawSym=ch.sym||_lastDrawSym;
     showAlertPctInput(ch,d,container);
+    setDrawMode(null);
   }else if(S.drawMode==='atline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
@@ -1982,6 +1998,7 @@ function onInteractClick(ch,e,container){
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=ch.sym||_lastDrawSym;
       showAlertPctInput(ch,d,container);
+      setDrawMode(null);
     }
   }else if(S.drawMode==='long'||S.drawMode==='short'){
     if(!ch.pendingP1)ch.pendingP1=pt;
@@ -1996,6 +2013,7 @@ function onInteractClick(ch,e,container){
       if(ch.sym)pushDrawUndo(ch.sym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=ch.sym||_lastDrawSym;
+      setDrawMode(null);
     }
   }
 }
@@ -2273,17 +2291,21 @@ function updateRulerTooltip(ch){
 document.addEventListener('keydown',e=>{
   const tgt=e.target;
   const editable=tgt&&((tgt.tagName==='INPUT')||(tgt.tagName==='TEXTAREA')||tgt.isContentEditable);
-  const mod=(e.ctrlKey||e.metaKey)&&!editable;
+  const mod=(e.ctrlKey||e.metaKey);
   const key=(e.key||'').toLowerCase();
   const code=(e.code||'').toLowerCase();
   const isZ=code==='keyz'||key==='z'||key==='я';
   const isY=code==='keyy'||key==='y'||key==='н';
   if(mod&&(isZ||isY)){
-    const sym=resolveUndoSym();
-    if(sym){
-      const wantRedo=e.shiftKey||isY;
+    const wantRedo=e.shiftKey||isY;
+    const cand=resolveUndoCandidates();
+    for(const sym of cand){
       const ok=wantRedo?redoDrawings(sym):undoDrawings(sym);
-      if(ok){e.preventDefault();_lastDrawSym=sym;return;}
+      if(ok){
+        e.preventDefault();
+        _lastDrawSym=sym;
+        return;
+      }
     }
   }
   if(e.key==='Escape'){
@@ -2534,6 +2556,7 @@ function sortedRows(){
   let rows=Object.values(S.mx);
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
+  if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||getSymGroup(r.sym)>0);
   // Filters are exclusive: preset OR color group OR all
   if(S._potFilterPreset){
     const pr=S.potentialPresets.find(p=>p.id===S._potFilterPreset);
@@ -2751,6 +2774,14 @@ function onVolFilter(val){
   const disp=S.minVol===0?'0':`${S.minVol}M`;
   ['volVal','fsVolVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=disp;});
   ['volSlider','fsVolSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=val;});
+  S.page=0;updateCharts();renderTable();
+}
+function onTrdFilter(val){
+  // 1 step = 50k trades/day. Range 0..2M by default.
+  S.minTrd=+val*50000;
+  const disp=S.minTrd===0?'0':(S.minTrd>=1e6?`${(S.minTrd/1e6).toFixed(1)}M`:`${Math.round(S.minTrd/1000)}K`);
+  ['trdVal','fsTrdVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=disp;});
+  ['trdSlider','fsTrdSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=val;});
   S.page=0;updateCharts();renderTable();
 }
 
@@ -3576,7 +3607,8 @@ async function loadKlinesBackground(){
     const top=Object.entries(S.tk).filter(([s])=>S.syms.includes(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
     Object.assign(S.k5m,await batchKlines(top,'5m',300,null,null,20));
     Object.assign(S.k1h,await batchKlines(top,'1h',170,null,null,20));
-    Object.assign(S.k1m,await batchKlines(top.slice(0,60),'1m',70,null,null,20));
+    // Load 1m history for all symbols (previously it was only top-60).
+    Object.assign(S.k1m,await batchKlines(top,'1m',70,null,null,12));
     calcAll();renderTable();S.bgDone=true;
   }catch(e){console.warn('bg klines',e);}
 }
@@ -3959,6 +3991,7 @@ window.openFullscreenBySym= openFullscreenBySym;
 window.goHome             = goHome;
 window.onSearch           = onSearch;
 window.onVolFilter        = onVolFilter;
+window.onTrdFilter        = onTrdFilter;
 window.toggleDensity      = toggleDensity;
 window.renderAlertLog     = renderAlertLog;
 window.dragSpl            = dragSpl;
