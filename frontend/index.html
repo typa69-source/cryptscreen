@@ -102,14 +102,6 @@
       <button class="tbtn" id="tf1d" onclick="setTf('1d','tf1d')">Д</button>
       <div class="tsep"></div>
     </div>
-    <span style="color:var(--text3);font-size:9px;flex-shrink:0">СТР</span>
-    <div class="pg-wrap">
-      <button class="pg-btn" id="pgPrev" onclick="changePage(-1)" disabled>‹</button>
-      <span class="pg-info" id="pgInfo">1 / 1</span>
-      <button class="pg-btn" id="pgNext" onclick="changePage(1)" disabled>›</button>
-    </div>
-    <span class="pg-total" id="pgTotal"></span>
-    <div class="tsep"></div>
     <div class="vol-slider-wrap">
       <span style="font-size:9px;color:var(--text3);flex-shrink:0">ОБ≥</span>
       <input type="range" class="vol-slider" id="volSlider" min="0" max="25" step="1" value="0" oninput="onVolFilter(this.value)">
@@ -137,13 +129,20 @@
     <button class="tbtn" id="draw-long" onclick="setDrawMode('long')" title="Лонг: вход → СЛ → ТП 2:1">▲Л</button>
     <button class="tbtn" id="draw-short" onclick="setDrawMode('short')" title="Шорт: вход → СЛ → ТП 2:1">▼Ш</button>
     <div class="tsep"></div>
-    <button class="tbtn" id="emaBtn" onclick="toggleEMA()" title="EMA 9/21/50/200">EMA</button>
+    <button class="tbtn" id="emaBtn" onclick="openEMAEditor('auto')" title="Настройки EMA">EMA</button>
     <div class="tsep"></div>
     <span id="sinfo" style="font-size:9px;color:var(--text3);flex-shrink:0"></span>
     <div class="tsep"></div>
     <button class="tbtn" id="densityBtn" onclick="toggleDensity()" title="Плотности объёма на графике">◈ Плотность</button>
 
     <div class="tright">
+      <div class="pg-wrap pg-wrap-right">
+        <span style="color:var(--text3);font-size:9px;flex-shrink:0">СТР</span>
+        <button class="pg-btn" id="pgPrev" onclick="changePage(-1)" disabled>‹</button>
+        <span class="pg-info" id="pgInfo">1 / 1</span>
+        <button class="pg-btn" id="pgNext" onclick="changePage(1)" disabled>›</button>
+        <span class="pg-total" id="pgTotal"></span>
+      </div>
       <div class="srch">
         <span class="srch-ico">⌕</span>
         <input class="sinput" id="sinput" type="text" placeholder="Поиск..." oninput="onSearch(this.value)">
@@ -180,11 +179,6 @@
 
   <div id="body">
     <div id="cpanel">
-      <div class="ctop">
-        <span style="font-size:9px;color:var(--text2)">ГРАФИКИ</span>
-        <span class="ctop-tf" id="ctf">5м</span>
-        <span class="ctop-hint" id="ctopHint">Топ-9 · колёсико=линейка · ПКМ=удалить у курсора · Ctrl=магнит</span>
-      </div>
       <div id="cgrid"></div>
     </div>
     <div class="spl" id="spl" onmousedown="dragSpl(event,'spl','cpanel','body')"></div>

@@ -267,6 +267,8 @@ const S = {
   emaVisible:false,
   emaCrossSound:true,
   emaSymOverrides:{},
+  emaSymEnabled:{},
+  emaAlertPairs:[],
 };
 const DRAW_HISTORY_LIMIT=60;
 let _lastDrawSym=null;
@@ -391,6 +393,15 @@ function calcATR(kl,n){if(!kl||kl.length<n+1)return null;let s=0;const f=kl.leng
 function calcNATR(kl,n){const a=calcATR(kl,n);return a&&kl?a/kl[kl.length-1].c*100:null;}
 function calcRange(kl,n){if(!kl||kl.length<n)return null;const sl=kl.slice(-n);const H=sl.reduce((m,k)=>Math.max(m,k.h),-Infinity);const L=sl.reduce((m,k)=>Math.min(m,k.l),Infinity);return L>0?(H-L)/L*100:null;}
 function calcRel(kl,n,f){if(!kl||kl.length<n+1)return null;const sl=kl.slice(-n-1);const cur=sl[sl.length-1][f];let s=0;for(let i=0;i<n;i++)s+=sl[i][f];const avg=s/n;return avg>0?cur/avg:null;}
+function calcNATRFlexible(kl,n){
+  if(!kl||kl.length<3)return null;
+  const p=Math.min(n,Math.max(2,kl.length-1));
+  return calcNATR(kl,p);
+}
+function calcRangeFlexible(kl,n){
+  if(!kl||kl.length<2)return null;
+  return calcRange(kl,Math.min(n,kl.length));
+}
 function calcRets(kl){if(!kl||kl.length<2)return[];const r=[];for(let i=1;i<kl.length;i++)r.push((kl[i].c-kl[i-1].c)/kl[i-1].c);return r;}
 function calcCorr(a,b){if(!a||!b||a.length<5)return null;const n=Math.min(a.length,b.length);const x=a.slice(-n),y=b.slice(-n);let mx=0,my=0;for(let i=0;i<n;i++){mx+=x[i];my+=y[i];}mx/=n;my/=n;let num=0,sx=0,sy=0;for(let i=0;i<n;i++){const xa=x[i]-mx,ya=y[i]-my;num+=xa*ya;sx+=xa*xa;sy+=ya*ya;}const d=Math.sqrt(sx*sy);return d>0?num/d:null;}
 
@@ -415,14 +426,14 @@ function calcAll(){
       sym,price:t.p,ch24:t.c24,cday,
       rtd:(t.h24&&t.l24)?(t.h24-t.l24)/t.l24*100:null,
       r24:calcRange(k5,288),r7d:calcRange(k1h,168),
-      na30:calcNATR(k1m,30),na14:calcNATR(k5,14),r1m5:calcRange(k1m,5),
+      na30:calcNATRFlexible(k1m,30),na14:calcNATRFlexible(k5,14),r1m5:calcRangeFlexible(k1m,5),
       tr5:calcRel(k5,14,'tr'),tr1h:calcRel(k1h,24,'tr'),
       vr5:calcRel(k5,14,'qv'),vr1h:calcRel(k1h,24,'qv'),
       ch7d:null,trd24:t.tr,vol24:t.qv,
       corr:S.btcR.length>10&&k5?calcCorr(calcRets(k5),S.btcR):null,
       corr14,
-      v15m:k1m&&k1m.length>=15?k1m.slice(-15).reduce((a,k)=>a+k.qv,0):null,
-      v60m:k1m&&k1m.length>=60?k1m.slice(-60).reduce((a,k)=>a+k.qv,0):null,
+      v15m:k1m&&k1m.length>=2?k1m.slice(-Math.min(15,k1m.length)).reduce((a,k)=>a+k.qv,0):null,
+      v60m:k1m&&k1m.length>=2?k1m.slice(-Math.min(60,k1m.length)).reduce((a,k)=>a+k.qv,0):null,
     };
     if(k1h&&k1h.length>=168){const old=k1h[k1h.length-168];m.ch7d=(t.p-old.c)/old.c*100;}
     S.mx[sym]=m;
@@ -1694,8 +1705,10 @@ function calcEMACached(candles,period){
 }
 
 function drawEMAs(ctx,ch,W,H){
-  if(!S.emaVisible||!ch.cs||!ch.lc||!ch.candles.length)return;
+  if(!ch.cs||!ch.lc||!ch.candles.length)return;
   const sym=ch.sym||S.fsSym;
+  const symEnabled=!!(sym&&S.emaSymEnabled[sym]);
+  if(!S.emaVisible&&!symEnabled)return;
   const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
   const plotH=Math.max(0,H-TIME_AXIS_H);
   ctx.save();
@@ -1745,15 +1758,22 @@ function drawEMAs(ctx,ch,W,H){
 // Check last 2 EMA values: if they cross, fire alert
 let _emaCrossAlerted={}; // key="sym_aXb" → last alert ts
 function checkEMACrossovers(ch){
-  if(!S.emaVisible||!ch.candles.length)return;
+  if(!ch.candles.length)return;
   const sym=ch.sym||S.fsSym;if(!sym)return;
+  const symEnabled=!!S.emaSymEnabled[sym];
+  if(!S.emaVisible&&!symEnabled)return;
   const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
   const visible=settings.filter(c=>c.visible);
   if(visible.length<2)return;
+  const enabledPairs=(S.emaAlertPairs||[]).filter(p=>p.enabled!==false);
+  if(enabledPairs.length===0)return;
   const now=Date.now();
+  const tf=(ch.tf||S.tf||'');
   for(let i=0;i<visible.length;i++){
     for(let j=i+1;j<visible.length;j++){
       const a=visible[i],b=visible[j];
+      const pa=Math.min(a.period,b.period),pb=Math.max(a.period,b.period);
+      if(!enabledPairs.some(p=>p.a===pa&&p.b===pb))continue;
       const va=calcEMACached(ch.candles,a.period);
       const vb=calcEMACached(ch.candles,b.period);
       if(va.length<2||vb.length<2)continue;
@@ -1761,7 +1781,7 @@ function checkEMACrossovers(ch){
       const b1=vb[vb.length-1].v,b2=vb[vb.length-2].v;
       const waAbove=a2>b2,isAbove=a1>b1;
       if(waAbove===isAbove)continue; // no cross
-      const key=`${sym}_${a.period}x${b.period}`;
+      const key=`${sym}_${tf}_${a.period}x${b.period}`;
       const lastAlert=_emaCrossAlerted[key]||0;
       if(now-lastAlert<60000)continue; // 1 min cooldown
       _emaCrossAlerted[key]=now;
@@ -1770,7 +1790,7 @@ function checkEMACrossovers(ch){
       if(S.emaCrossSound)playAlert(isAbove?880:440);
       S.alertLog.unshift({ts:now,sym,curPrice:a1,linePrice:b1,distPct:0,
         type:'ema_cross',alertPct:0,
-        presetName:`[${S.tf}] EMA${a.period} ${dir} EMA${b.period} — ${label}`});
+        presetName:`[${tf}] EMA${a.period} ${dir} EMA${b.period} — ${label}`});
       if(S.alertLog.length>50)S.alertLog.pop();
       renderAlertLog();
       const badge=document.getElementById('alertBadge');
@@ -2000,33 +2020,23 @@ function setDrawMode(mode){
     ch.pendingP1=null;
     if(ch.interact)ch.interact.className='chart-interact'+(mode?' draw':'');
   });
-  const hint=document.getElementById('ctopHint');
-  if(hint){
-    const h={
-      null:'Топ-9 · колёсико=линейка · ПКМ=удалить нарисованное · Ctrl=магнит · ЛКМ на точке=перетащить · ДблКлик=редактировать%',
-      hray:'Горизонтальный луч: клик · ПКМ=выйти в курсор · Ctrl+клик=магнит',
-      tline:'Трендовая линия: 2 клика · ПКМ=выйти в курсор · Ctrl+клик=магнит',
-      brush:'Кисть: зажми и веди · ПКМ=выйти в курсор · выбери цвет и толщину ниже',
-      long:'Лонг: 1й клик=вход, 2й=стоп-лосс · R:R 2:1 · ПКМ=выйти',
-      short:'Шорт: 1й клик=вход, 2й=стоп-лосс · R:R 2:1 · ПКМ=выйти',
-      aray:'Алерт-луч: клик → введите % · ПКМ=выйти в курсор · ДблКлик на линии=изменить%',
-      atline:'Алерт-линия: 2 клика → введите % · ПКМ=выйти в курсор'
-    };
-    hint.textContent=h[mode]??h[null];
-  }
+}
+
+function refreshEMAButtonState(){
+  const hasSymEnabled=S.fsSym?!!S.emaSymEnabled[S.fsSym]:false;
+  const active=S.emaVisible||hasSymEnabled;
+  const btn=document.getElementById('emaBtn');if(btn)btn.classList.toggle('on',active);
+  const fsBtn=document.getElementById('fsEmaBtn');if(fsBtn)fsBtn.classList.toggle('on',active);
 }
 
 function toggleEMA(){
-  // If no EMAs set, open add dialog immediately; otherwise toggle visibility
-  if(!S.emaSettings.length){openEMAEditor();return;}
   S.emaVisible=!S.emaVisible;
-  const btn=document.getElementById('emaBtn');if(btn)btn.classList.toggle('on',S.emaVisible);
-  const fsBtn=document.getElementById('fsEmaBtn');if(fsBtn)fsBtn.classList.toggle('on',S.emaVisible);
+  refreshEMAButtonState();
   _emaCache.clear();
   [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
 }
 
-function openEMAEditor(){
+function openEMAEditor(mode='auto'){
   const old=document.getElementById('emaEditorModal');if(old)old.remove();
   const modal=document.createElement('div');modal.id='emaEditorModal';
   modal.style.cssText='position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;';
@@ -2034,25 +2044,34 @@ function openEMAEditor(){
   box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:300px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.8)';
 
   const EMA_COLORS=['#f97316','#3b82f6','#a855f7','#e04040','#1fa891','#eab308','#ec4899','#22c55e'];
-  let _editSym=null; // null=global, string=per-symbol
+  let _editSym=(mode==='symbol'&&S.fsSym)?S.fsSym:null; // null=global, string=per-symbol
 
   const render=()=>{
+    const activeSym=_editSym||(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);
+    const targetSymEnabled=activeSym?!!S.emaSymEnabled[activeSym]:false;
     box.innerHTML=`
       <div style="display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA линии</span>
+        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA линии и алерты</span>
         <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('emaEditorModal').remove()">✕</button>
       </div>
       <div id="emaList" style="flex:1;overflow-y:auto;padding:8px 14px;display:flex;flex-direction:column;gap:6px;min-height:0"></div>
       <div style="padding:6px 14px;border-top:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <label style="font-size:9px;color:var(--text3)">Показывать EMA:</label>
+        <button id="emaGlobalBtn" class="tbtn${S.emaVisible?' on':''}" title="Показывать EMA на всех монетах">Все</button>
+        <button id="emaSymOnlyBtn" class="tbtn${targetSymEnabled?' on':''}" title="Показывать EMA только для выбранной монеты">Текущая монета</button>
         <label style="font-size:9px;color:var(--text3)">Звук при пересечении:</label>
-        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}" onclick="S.emaCrossSound=!S.emaCrossSound;render()">${S.emaCrossSound?'● Вкл':'○ Выкл'}</button>
+        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}">${S.emaCrossSound?'● Вкл':'○ Выкл'}</button>
         <span style="flex:1"></span>
         <label style="font-size:9px;color:var(--text3)" title="Задать отдельные EMA для текущей монеты">Режим:</label>
-        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}" onclick="_editSym=_editSym?null:(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);render()">${_editSym?'📌 '+_editSym.replace(/USDT$/,''):'🌍 Глобал'}</button>
+        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}">${_editSym?'📌 '+_editSym.replace(/USDT$/,''):'🌍 Глобал'}</button>
+      </div>
+      <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:9px;color:var(--text3)">Алерты пересечения EMA (добавляются в Алерты с ТФ):</div>
+        <div id="emaPairsList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       </div>
       <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
         <button class="tbtn" style="flex:1" id="addEmaBtn">＋ Добавить EMA</button>
-        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();S.emaVisible=true;[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));document.getElementById('emaBtn')?.classList.add('on');document.getElementById('fsEmaBtn')?.classList.add('on')">✓ Применить</button>
+        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">✓ Готово</button>
       </div>`;
 
     const list=box.querySelector('#emaList');
@@ -2088,13 +2107,32 @@ function openEMAEditor(){
       const delBtn=document.createElement('button');
       delBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0 2px;margin-left:auto';
       delBtn.textContent='✕';delBtn.title='Удалить';
-      delBtn.onclick=()=>{S.emaSettings.splice(i,1);_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
+      delBtn.onclick=()=>{_activeSettings.splice(i,1);_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
       row.appendChild(delBtn);
       list.appendChild(row);
     });
 
-    if(!S.emaSettings.length){
+    if(!_activeSettings.length){
       list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">Нет EMA линий. Нажми ＋ чтобы добавить.</div>';
+    }
+    const pairsEl=box.querySelector('#emaPairsList');
+    const visiblePeriods=[...new Set(_activeSettings.filter(c=>c.visible).map(c=>c.period))].sort((a,b)=>a-b);
+    if(visiblePeriods.length<2){
+      pairsEl.innerHTML='<span style="font-size:9px;color:var(--text3)">Нужно минимум 2 активные EMA линии</span>';
+    }else{
+      pairsEl.innerHTML='';
+      for(let i=0;i<visiblePeriods.length;i++){
+        for(let j=i+1;j<visiblePeriods.length;j++){
+          const a=visiblePeriods[i],b=visiblePeriods[j];
+          let pair=S.emaAlertPairs.find(p=>p.a===a&&p.b===b);
+          if(!pair){pair={a,b,enabled:false};S.emaAlertPairs.push(pair);}
+          const pbtn=document.createElement('button');
+          pbtn.className='tbtn'+(pair.enabled?' on':'');
+          pbtn.textContent=`EMA${a}×EMA${b}`;
+          pbtn.onclick=()=>{pair.enabled=!pair.enabled;render();};
+          pairsEl.appendChild(pbtn);
+        }
+      }
     }
 
     box.querySelector('#addEmaBtn').onclick=()=>{
@@ -2106,9 +2144,20 @@ function openEMAEditor(){
     // Fix: bind closures via addEventListener (inline onclick can't access local `render` / `_editSym`)
     const soundBtn=box.querySelector('#emaSoundBtn');
     if(soundBtn)soundBtn.onclick=()=>{S.emaCrossSound=!S.emaCrossSound;render();};
+    const gBtn=box.querySelector('#emaGlobalBtn');
+    if(gBtn)gBtn.onclick=()=>{S.emaVisible=!S.emaVisible;refreshEMAButtonState();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
+    const symOnlyBtn=box.querySelector('#emaSymOnlyBtn');
+    if(symOnlyBtn)symOnlyBtn.onclick=()=>{
+      const sym=activeSym;
+      if(!sym)return;
+      S.emaSymEnabled[sym]=!S.emaSymEnabled[sym];
+      refreshEMAButtonState();
+      [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
+      render();
+    };
     const symBtn=box.querySelector('#emaSymBtn');
     if(symBtn)symBtn.onclick=()=>{
-      _editSym=_editSym?null:(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);
+      _editSym=_editSym?null:activeSym;
       render();
     };
   };
@@ -2511,7 +2560,6 @@ function renderScreenerInto(bodyEl,rows){
   if(!bodyEl)return;
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
   const start=S.page*S.charts.length;
-  const pageSyms=new Set(rows.slice(start,start+S.charts.length).map(r=>r.sym));
   const cols=activeCols();
   const colsKey=cols.map(c=>c.id).join(',');
   if(bodyEl.dataset.colsKey!==colsKey){
@@ -2528,7 +2576,7 @@ function renderScreenerInto(bodyEl,rows){
       row=buildScreenerRow(m,cols);
       rowMap.set(m.sym,row);
     }
-    updateScreenerRow(row,m,cols,inChart,pageSyms);
+    updateScreenerRow(row,m,cols,inChart);
     frag.appendChild(row);
   }
   bodyEl.replaceChildren(frag);
@@ -2551,8 +2599,7 @@ function buildScreenerRow(m,cols){
   nameSpan.title='Нажмите для копирования';nameSpan.style.cursor='pointer';
   nameSpan.onclick=ev=>{ev.stopPropagation();copyTicker(m.sym.replace(/USDT$/,''));openFullscreenBySym(m.sym);};
   rt.appendChild(nameSpan);
-  const pg=document.createElement('span');pg.className='tpg';rt.appendChild(pg);
-  row._gdot=gdot;row._name=nameSpan;row._pg=pg;row.appendChild(rt);
+  row._gdot=gdot;row._name=nameSpan;row.appendChild(rt);
   const rg=document.createElement('div');rg.className='rmgrid';
   const cellArr=[];
   for(const c of cols){
@@ -2564,7 +2611,7 @@ function buildScreenerRow(m,cols){
   return row;
 }
 
-function updateScreenerRow(row,m,cols,inChart,pageSyms){
+function updateScreenerRow(row,m,cols,inChart){
   const grp=getSymGroup(m.sym);
   const grpCol=GROUP_COLORS[grp]||'';
   const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
@@ -2586,7 +2633,6 @@ function updateScreenerRow(row,m,cols,inChart,pageSyms){
   if(row._stripe){row._stripe.remove();row._stripe=null;}
   const rt=row.firstChild;
   if(rt)rt.style.paddingLeft='9px';
-  if(row._pg)row._pg.textContent=pageSyms.has(m.sym)?`·${S.page+1}`:'';
   if(row._cells.length!==cols.length){
     row._rg.innerHTML='';
     row._cells=[];
@@ -2691,7 +2737,7 @@ function setTf(tf,btnId){
   });
   document.getElementById(btnId)?.classList.add('on');
   document.querySelectorAll(`[data-tf="${tf}"]`).forEach(b=>b.classList.add('on'));
-  document.getElementById('ctf').textContent=tf;
+  const ctf=document.getElementById('ctf');if(ctf)ctf.textContent=tf;
   const syms=S.charts.map(c=>c.sym);
   S.charts.forEach(c=>{c.sym=null;c.candles=[];});
   syms.forEach((sym,i)=>{if(sym)loadChart(i,sym);});
@@ -3442,6 +3488,7 @@ function openFullscreenBySym(sym){
   renderTable();
   // Build 3 FS charts
   for(let i=0;i<3;i++){buildFsTfBar(`fsTfBar${i}`,i);initFsChart(i);loadFsChart(i);}
+  refreshEMAButtonState();
   startFsWs();
   setTimeout(autoResizeScreener,100);
 }
@@ -3472,6 +3519,7 @@ function closeFullscreen(){
   S.fsCharts.forEach(fch=>{rCanvas(fch);});
   // Refresh main grid drawings
   S.charts.forEach((ch,i)=>{if(ch.sym)ch.drawings=getSymDrawings(ch.sym);rCanvas(ch);});
+  refreshEMAButtonState();
 }
 
 function goHome(){
@@ -3564,7 +3612,7 @@ async function main(){
 
     ldSet('Вычисление метрик…',70);calcAll();
     ldSet('Готово!',100);
-    renderTable();updSortHdr();updTime();
+    renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
     updateCharts();startScreenerWS();loadKlinesBackground();
     setTimeout(autoResizeScreener,300);
