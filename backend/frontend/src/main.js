@@ -271,9 +271,12 @@ function activeCols(){
 //  LOADING UI
 // ═══════════════════════════════════════════════════════════════
 function ldSet(t,p,d){
-  if(t!=null)document.getElementById('ltxt').textContent=t;
-  if(p!=null)document.getElementById('lfill').style.width=p+'%';
-  if(d!=null)document.getElementById('llog').textContent=d;
+  const ltxt=document.getElementById('ltxt');
+  const lfill=document.getElementById('lfill');
+  const llog=document.getElementById('llog');
+  if(t!=null&&ltxt)ltxt.textContent=t;
+  if(p!=null&&lfill)lfill.style.width=p+'%';
+  if(d!=null&&llog)llog.textContent=d;
 }
 function ldErr(m){const e=document.getElementById('lerr');e.style.display='block';e.innerHTML='⚠ '+String(m).replace(/\n/g,'<br>');}
 function ldHide(){const el=document.getElementById('ld');document.getElementById('app').style.visibility='visible';el.style.opacity='0';el.style.transition='opacity .3s';setTimeout(()=>el.remove(),320);}
@@ -1309,7 +1312,9 @@ function startChartWS(){
   const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${syms.map(s=>`${s.toLowerCase()}@kline_${S.tf}`).join('/')}`);
   let closed=false;
   ws.onmessage=(evt)=>{
-    const k=JSON.parse(evt.data).data?.k;if(!k)return;
+    let k;
+    try{k=JSON.parse(evt.data).data?.k;}catch(e){return;}
+    if(!k)return;
     const slot=S.charts.findIndex(c=>c.sym===k.s);if(slot===-1)return;
     const ch=S.charts[slot];if(!ch.cs)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
@@ -1339,31 +1344,102 @@ function startChartWS(){
   S.wsCharts=ws;
 }
 
+function tfMs(tf){
+  if(tf==='1m')return 60000;
+  if(tf==='3m')return 180000;
+  if(tf==='5m')return 300000;
+  if(tf==='15m')return 900000;
+  if(tf==='30m')return 1800000;
+  if(tf==='1h')return 3600000;
+  if(tf==='4h')return 14400000;
+  if(tf==='1d')return 86400000;
+  return 300000;
+}
+
+let _wsChartTrades=null;
+let _wsChartTradesReconnectTimer=null;
+function startChartTradesWS(){
+  if(_wsChartTradesReconnectTimer){clearTimeout(_wsChartTradesReconnectTimer);_wsChartTradesReconnectTimer=null;}
+  if(_wsChartTrades){try{_wsChartTrades.close();}catch(e){}_wsChartTrades=null;}
+  const syms=S.charts.map(c=>c.sym).filter(Boolean);if(!syms.length||!S.LC)return;
+  const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${syms.map(s=>`${s.toLowerCase()}@aggTrade`).join('/')}`);
+  let closed=false;
+  ws.onmessage=(evt)=>{
+    let d;
+    try{d=JSON.parse(evt.data).data;}catch(e){return;}
+    if(!d?.s||d.p==null)return;
+    const slot=S.charts.findIndex(c=>c.sym===d.s);if(slot===-1)return;
+    const ch=S.charts[slot];if(!ch?.cs||!ch.candles?.length)return;
+    const price=+d.p;if(!isFinite(price))return;
+    const ms=tfMs(S.tf);
+    const ts=(+d.T||Date.now());
+    const bucketTs=Math.floor(ts/ms)*ms;
+    let c=ch.candles[ch.candles.length-1];
+    if(bucketTs===c.t){
+      c.c=price;
+      if(price>c.h)c.h=price;
+      if(price<c.l)c.l=price;
+    }else if(bucketTs>c.t){
+      c={t:bucketTs,o:c.c,h:Math.max(c.c,price),l:Math.min(c.c,price),c:price,qv:c.qv||0,v:c.v||0,tr:c.tr||0};
+      ch.candles.push(c);
+      if(ch.candles.length>1500)ch.candles.splice(0,ch.candles.length-1500);
+    }else return;
+    if(!ch._tradeRafPending){
+      ch._tradeRafPending=true;
+      requestAnimationFrame(()=>{
+        ch._tradeRafPending=false;
+        const lc=ch.candles[ch.candles.length-1];
+        if(!lc||!ch.cs)return;
+        try{
+          ch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
+          const cpEl=document.getElementById(`cp${slot}`);if(cpEl)cpEl.textContent=fmtPrice(lc.c);
+          rCanvas(ch);
+        }catch(e){}
+      });
+    }
+  };
+  ws.onclose=()=>{if(!closed)_wsChartTradesReconnectTimer=setTimeout(startChartTradesWS,3000);};
+  ws.onerror=()=>{closed=true;try{ws.close();}catch(e){}_wsChartTradesReconnectTimer=setTimeout(startChartTradesWS,3000);};
+  _wsChartTrades=ws;
+}
+
+let _wsTickerRawLatest='';
+let _wsTickerFlushTimer=null;
+let _lastAlertCheckTs=0;
 function startScreenerWS(){
+  if(S.wsScreener){try{S.wsScreener.close();}catch(e){}}
   const ws=new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
   ws.onmessage=(evt)=>{
-    // Parse off the main thread tick to avoid jank
-    const raw=evt.data;
-    queueMicrotask(()=>{
-      const arr=JSON.parse(raw);
+    _wsTickerRawLatest=evt.data;
+    if(_wsTickerFlushTimer)return;
+    _wsTickerFlushTimer=setTimeout(()=>{
+      _wsTickerFlushTimer=null;
+      const raw=_wsTickerRawLatest;_wsTickerRawLatest='';
+      let arr;
+      try{arr=JSON.parse(raw);}catch(e){return;}
       for(const t of arr){
-        if(!t.s.endsWith('USDT'))continue;
+        if(!t?.s?.endsWith('USDT'))continue;
         if(S.tk[t.s]){S.tk[t.s].p=+t.c;S.tk[t.s].c24=+t.P;S.tk[t.s].qv=+t.q;S.tk[t.s].tr=+t.n||S.tk[t.s].tr;}
         if(S.mx[t.s]){S.mx[t.s].price=+t.c;S.mx[t.s].ch24=+t.P;S.mx[t.s].vol24=+t.q;S.mx[t.s].trd24=+t.n||S.mx[t.s].trd24;}
       }
       scheduleRender();updTime();
-    if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym]){
-      const t=S.tk[S.fsSym];const m=S.mx[S.fsSym]||{};
-      document.getElementById('fsPrc').textContent=fmtPrice(t.p);
-      const ce=document.getElementById('fsChg');ce.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';ce.className='cchg '+(t.c24>=0?'p':'n');
-      const fv=document.getElementById('fsVol');if(fv)fv.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
-      const ft=document.getElementById('fsTrd');if(ft)ft.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
-      const corVal=m.corr14??m.corr;const fc=document.getElementById('fsCorr');
-      if(fc)fc.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
-      const fhc=document.getElementById('fsHcount');if(fhc)fhc.textContent=document.getElementById('hcount').textContent;
-    }
-      checkAllAlerts();
-    }); // end queueMicrotask
+      if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym]){
+        const t=S.tk[S.fsSym];const m=S.mx[S.fsSym]||{};
+        const fsp=document.getElementById('fsPrc');if(fsp)fsp.textContent=fmtPrice(t.p);
+        const ce=document.getElementById('fsChg');if(ce){ce.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';ce.className='cchg '+(t.c24>=0?'p':'n');}
+        const fv=document.getElementById('fsVol');if(fv)fv.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
+        const ft=document.getElementById('fsTrd');if(ft)ft.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
+        const corVal=m.corr14??m.corr;const fc=document.getElementById('fsCorr');
+        if(fc)fc.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+        const fhc=document.getElementById('fsHcount');
+        const hc=document.getElementById('hcount');
+        if(fhc&&hc)fhc.textContent=hc.textContent||'';
+      }
+      if(Date.now()-_lastAlertCheckTs>2000){
+        _lastAlertCheckTs=Date.now();
+        checkAllAlerts();
+      }
+    },350);
   };
   ws.onclose=()=>setTimeout(startScreenerWS,3000);
   S.wsScreener=ws;
@@ -1523,7 +1599,7 @@ function updatePagination(total){
 
 function updSortHdr(){
   document.querySelectorAll('.mhcol').forEach(e=>e.classList.remove('sa','sd'));
-  const el=document.getElementById(`hc-${S.sortId}`);if(el)el.classList.add(S.sortDir==='desc'?'sd':'sa');
+  document.querySelectorAll(`#hc-${S.sortId}`).forEach(el=>el.classList.add(S.sortDir==='desc'?'sd':'sa'));
   const c=ALL_COLS.find(x=>x.id===S.sortId);
   const si=document.getElementById('sinfo');
   if(si)si.textContent=S.sortAlpha?`Тикер ${S.sortDir==='asc'?'▲':'▼'}`:(c?`Сорт: ${c.l} ${c.s} ${S.sortDir==='desc'?'↓':'↑'}`:'');
@@ -1562,11 +1638,11 @@ function setTf(tf,btnId){
   });
   document.getElementById(btnId)?.classList.add('on');
   document.querySelectorAll(`[data-tf="${tf}"]`).forEach(b=>b.classList.add('on'));
-  document.getElementById('ctf').textContent=tf;
+  const ctf=document.getElementById('ctf');if(ctf)ctf.textContent=tf;
   const syms=S.charts.map(c=>c.sym);
   S.charts.forEach(c=>{c.sym=null;c.candles=[];});
   syms.forEach((sym,i)=>{if(sym)loadChart(i,sym);});
-  setTimeout(startChartWS,700);
+  setTimeout(()=>{startChartWS();startChartTradesWS();},700);
 }
 
 function onSearch(q){S.q=q;S.page=0;updateCharts();renderTable();}
@@ -1582,8 +1658,8 @@ function onVolFilter(val){
 function updTime(){
   const d=new Date();const pad=n=>n.toString().padStart(2,'0');
   const timeStr=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-  document.getElementById('htime').textContent=timeStr;
-  document.getElementById('hstatus').textContent='Онлайн';
+  const ht=document.getElementById('htime');if(ht)ht.textContent=timeStr;
+  const hs=document.getElementById('hstatus');if(hs)hs.textContent='Онлайн';
   // Sync to FS header if open
   if(S.fsOpen){
     const fshtime=document.getElementById('fsHtime');if(fshtime)fshtime.textContent=timeStr;
@@ -1603,7 +1679,7 @@ function updateCharts(){
     const ns=pageSyms[i]||null;
     if(S.charts[i].sym!==ns){changed=true;loadChart(i,ns);}
   }
-  if(changed)setTimeout(startChartWS,600);
+  if(changed)setTimeout(()=>{startChartWS();startChartTradesWS();},600);
   updatePagination(rows.length);
 }
 
@@ -2103,7 +2179,7 @@ function setGridSize(n){
   if(S.gridSize===n)return;S.gridSize=n;
   S.charts=Array.from({length:n},()=>mkChart());
   buildChartGrid();if(S.LC)for(let i=0;i<n;i++)initLCChart(i);
-  S.page=0;updateCharts();startChartWS();
+  S.page=0;updateCharts();startChartWS();startChartTradesWS();
   renderSettingsGen(document.getElementById('smodal-body'));
 }
 
@@ -2190,18 +2266,20 @@ async function loadMoreFsHistory(idx){
 function openFullscreenBySym(sym){
   if(!sym)return;
   S.fsSym=sym;S.fsOpen=true;
-  document.getElementById('fsView').classList.add('open');
-  document.getElementById('fsSym').textContent=sym.replace(/USDT$/,'');
+  const fsView=document.getElementById('fsView');if(fsView)fsView.classList.add('open');
+  const fsSymEl=document.getElementById('fsSym');if(fsSymEl)fsSymEl.textContent=sym.replace(/USDT$/,'');
   const t=S.tk[sym]||{};const m=S.mx[sym]||{};
-  document.getElementById('fsPrc').textContent=fmtPrice(t.p);
+  const fsPrc=document.getElementById('fsPrc');if(fsPrc)fsPrc.textContent=fmtPrice(t.p);
   const ce=document.getElementById('fsChg');
-  ce.textContent=t.c24!=null?(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%':'';
-  ce.className='cchg '+(t.c24>=0?'p':'n');
+  if(ce){
+    ce.textContent=t.c24!=null?(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%':'';
+    ce.className='cchg '+(t.c24>=0?'p':'n');
+  }
   // Extra indicators
-  document.getElementById('fsVol').innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
-  document.getElementById('fsTrd').innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
+  const fsVol=document.getElementById('fsVol');if(fsVol)fsVol.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
+  const fsTrd=document.getElementById('fsTrd');if(fsTrd)fsTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const corVal=m.corr14??m.corr;
-  document.getElementById('fsCorr').innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+  const fsCorr=document.getElementById('fsCorr');if(fsCorr)fsCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
   // Sync top-bar status info
   const htime=document.getElementById('htime');
   const fshtime=document.getElementById('fsHtime');
@@ -2317,7 +2395,8 @@ async function main(){
     ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();
     setTimeout(ldHide,150);
-    updateCharts();startScreenerWS();loadKlinesBackground();
+    updateCharts();startChartTradesWS();startScreenerWS();loadKlinesBackground();
+    if(!S._timeTick)S._timeTick=setInterval(updTime,1000);
     setTimeout(autoResizeScreener,300);
   }catch(err){
     console.error('Init error:',err);ldSet('Ошибка загрузки',100);ldErr(err.message||String(err));
