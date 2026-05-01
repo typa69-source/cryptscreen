@@ -405,6 +405,40 @@ function calcRangeFlexible(kl,n){
 function calcRets(kl){if(!kl||kl.length<2)return[];const r=[];for(let i=1;i<kl.length;i++)r.push((kl[i].c-kl[i-1].c)/kl[i-1].c);return r;}
 function calcCorr(a,b){if(!a||!b||a.length<5)return null;const n=Math.min(a.length,b.length);const x=a.slice(-n),y=b.slice(-n);let mx=0,my=0;for(let i=0;i<n;i++){mx+=x[i];my+=y[i];}mx/=n;my/=n;let num=0,sx=0,sy=0;for(let i=0;i<n;i++){const xa=x[i]-mx,ya=y[i]-my;num+=xa*ya;sx+=xa*xa;sy+=ya*ya;}const d=Math.sqrt(sx*sy);return d>0?num/d:null;}
 
+function updateLiveKlineSeries(kl,intervalMs,price,nowMs){
+  if(!kl||!kl.length||price==null||isNaN(price))return;
+  const bucketTs=Math.floor(nowMs/intervalMs)*intervalMs;
+  const last=kl[kl.length-1];
+  if(!last)return;
+  if(last.t===bucketTs){
+    last.c=price;
+    if(price>last.h)last.h=price;
+    if(price<last.l)last.l=price;
+    return;
+  }
+  if(bucketTs>last.t){
+    let prev=last;
+    for(let ts=last.t+intervalMs;ts<=bucketTs;ts+=intervalMs){
+      const baseClose=prev.c;
+      const isCurrent=ts===bucketTs;
+      const next={
+        t:ts,o:baseClose,h:isCurrent?Math.max(baseClose,price):baseClose,l:isCurrent?Math.min(baseClose,price):baseClose,
+        c:isCurrent?price:baseClose,v:0,tr:0,qv:0
+      };
+      kl.push(next);
+      prev=next;
+    }
+    const maxLen=intervalMs===60000?360:intervalMs===300000?300:170;
+    if(kl.length>maxLen)kl.splice(0,kl.length-maxLen);
+  }
+}
+
+function applyLiveKlineUpdate(sym,price,nowMs){
+  updateLiveKlineSeries(S.k1m[sym],60000,price,nowMs);
+  updateLiveKlineSeries(S.k5m[sym],300000,price,nowMs);
+  updateLiveKlineSeries(S.k1h[sym],3600000,price,nowMs);
+}
+
 function calcAll(){
   const btc5=S.k5m['BTCUSDT'];
   S.btcR=btc5?calcRets(btc5):[];
@@ -2450,6 +2484,27 @@ function getTickerWorker(){
 
 // Throttle screener WS updates
 let _wsBatchTimer=null;
+let _metricsRecalcTimer=null;
+
+function scheduleRealtimeMetricRecalc(gen){
+  if(_metricsRecalcTimer||!S.bgDone)return;
+  _metricsRecalcTimer=setTimeout(()=>{
+    _metricsRecalcTimer=null;
+    if(gen!==_wsScreenerGen)return;
+    const nowMs=Date.now();
+    for(const sym of S.syms){
+      const tk=S.tk[sym];
+      if(!tk||tk.p==null||isNaN(tk.p))continue;
+      applyLiveKlineUpdate(sym,tk.p,nowMs);
+    }
+    calcAll();
+    if(!document.hidden){
+      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
+      else scheduleRender();
+    }
+    if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
+  },2500);
+}
 
 function startScreenerWS(){
   if(_wsScreenerReconnectTimer){clearTimeout(_wsScreenerReconnectTimer);_wsScreenerReconnectTimer=null;}
@@ -2486,13 +2541,16 @@ function startScreenerWS(){
 
 function _applyTickerUpdate(arr,gen){
   let changed=false;
+  const nowMs=Date.now();
   for(const t of arr){
     const tk=S.tk[t.s];const mx=S.mx[t.s];
     if(!tk)continue;
     if(tk.p!==t.c||tk.c24!==t.P){tk.p=t.c;tk.c24=t.P;tk.qv=t.q;tk.tr=t.n||tk.tr;changed=true;}
     if(mx){mx.price=t.c;mx.ch24=t.P;mx.vol24=t.q;mx.trd24=t.n||mx.trd24;}
+    applyLiveKlineUpdate(t.s,t.c,nowMs);
   }
   if(!changed)return;
+  scheduleRealtimeMetricRecalc(gen);
   if(!_wsBatchTimer){
     _wsBatchTimer=setTimeout(()=>{
       _wsBatchTimer=null;
@@ -2721,7 +2779,7 @@ function updatePagination(total){
 
 function updSortHdr(){
   document.querySelectorAll('.mhcol').forEach(e=>e.classList.remove('sa','sd'));
-  const el=document.getElementById(`hc-${S.sortId}`);if(el)el.classList.add(S.sortDir==='desc'?'sd':'sa');
+  document.querySelectorAll(`#hc-${S.sortId}`).forEach(el=>el.classList.add(S.sortDir==='desc'?'sd':'sa'));
   const c=ALL_COLS.find(x=>x.id===S.sortId);
   const si=document.getElementById('sinfo');
   if(si)si.textContent=S.sortAlpha?`Тикер ${S.sortDir==='asc'?'▲':'▼'}`:(c?`Сорт: ${c.l} ${c.s} ${S.sortDir==='desc'?'↓':'↑'}`:'');

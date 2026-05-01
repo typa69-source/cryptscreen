@@ -262,7 +262,7 @@ html,body{
 .shdr{height:36px;background:var(--bg2);border-bottom:1px solid var(--border);
   display:flex;align-items:stretch;flex-shrink:0;overflow:hidden}
 .sbody{flex:1;overflow-y:scroll;overflow-x:hidden}
-.tick-col{width:68px;min-width:68px;flex-shrink:0;display:flex;align-items:center;padding:0 6px;
+.tick-col{width:84px;min-width:84px;flex-shrink:0;display:flex;align-items:center;padding:0 7px;
   border-right:1px solid var(--border);background:var(--bg2);user-select:none;cursor:pointer}
 .tick-col:hover{background:var(--bg3)}
 .tick-lbl{font-size:9px;color:var(--text2);font-weight:600}
@@ -279,11 +279,11 @@ html,body{
 .srow:hover{background:rgba(255,255,255,.022)}
 .srow.inchart{background:rgba(224,48,48,.06)}
 .srow.inchart .rtick{background:rgba(224,48,48,.1)}
-.rtick{width:68px;min-width:68px;flex-shrink:0;display:flex;align-items:center;padding:0 5px;
+.rtick{width:84px;min-width:84px;flex-shrink:0;display:flex;align-items:center;padding:0 6px;
   gap:3px;border-right:1px solid var(--border);background:var(--bg)}
 .srow:hover .rtick{background:var(--bg3)}
 .txmark{width:4px;height:4px;border-radius:50%;flex-shrink:0;background:var(--yellow)}
-.tname{font-size:10px;font-weight:500;color:var(--text)}
+.tname{font-size:10px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .rmgrid{display:flex;flex:1;min-width:0}
 .mc{display:flex;align-items:center;justify-content:flex-end;padding:0 3px;
   font-size:10px;font-variant-numeric:tabular-nums;border-right:1px solid rgba(37,37,48,.3);
