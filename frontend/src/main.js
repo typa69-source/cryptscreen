@@ -2410,6 +2410,8 @@ let _wsChartsGen=0; // increment on each start to invalidate old callbacks
 let _wsScreenerGen=0;
 let _wsChartsReconnectTimer=null;
 let _wsScreenerReconnectTimer=null;
+let _lastScreenerWsMsgAt=0;
+let _lastChartWsMsgAt=0;
 
 function startChartWS(){
   // Cancel any pending reconnect
@@ -2420,8 +2422,11 @@ function startChartWS(){
   const gen=++_wsChartsGen; // this generation's ID
   const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${syms.map(s=>`${s.toLowerCase()}@kline_${S.tf}`).join('/')}`);
   ws.onmessage=(evt)=>{
+    _lastChartWsMsgAt=Date.now();
     if(gen!==_wsChartsGen)return; // stale, discard
-    const k=JSON.parse(evt.data).data?.k;if(!k)return;
+    let k;
+    try{k=JSON.parse(evt.data).data?.k;}catch(e){return;}
+    if(!k)return;
     const slot=S.charts.findIndex(c=>c.sym===k.s);if(slot===-1)return;
     const ch=S.charts[slot];if(!ch.cs)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
@@ -2454,6 +2459,24 @@ function startChartWS(){
   ws.onclose=()=>schedReconnect();
   ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
   S.wsCharts=ws;
+}
+
+function startRealtimeWatchdog(){
+  if(S._rtWatchdog)return;
+  S._rtWatchdog=setInterval(()=>{
+    const now=Date.now();
+    if(!document.hidden){
+      if(S.wsScreener&&_lastScreenerWsMsgAt&&now-_lastScreenerWsMsgAt>20000){
+        console.warn('Screener WS stale, restarting');
+        try{S.wsScreener.close();}catch(e){}
+      }
+      if(S.wsCharts&&_lastChartWsMsgAt&&now-_lastChartWsMsgAt>20000){
+        console.warn('Chart WS stale, restarting');
+        try{S.wsCharts.close();}catch(e){}
+      }
+    }
+    updTime();
+  },1000);
 }
 
 // ── Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) ──
@@ -2491,19 +2514,27 @@ function scheduleRealtimeMetricRecalc(gen){
   _metricsRecalcTimer=setTimeout(()=>{
     _metricsRecalcTimer=null;
     if(gen!==_wsScreenerGen)return;
-    const nowMs=Date.now();
-    for(const sym of S.syms){
-      const tk=S.tk[sym];
-      if(!tk||tk.p==null||isNaN(tk.p))continue;
-      applyLiveKlineUpdate(sym,tk.p,nowMs);
-    }
-    calcAll();
-    if(!document.hidden){
-      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
-      else scheduleRender();
-    }
-    if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
-  },2500);
+    const run=()=>{
+      try{
+        const nowMs=Date.now();
+        for(const sym of S.syms){
+          const tk=S.tk[sym];
+          if(!tk||tk.p==null||isNaN(tk.p))continue;
+          applyLiveKlineUpdate(sym,tk.p,nowMs);
+        }
+        calcAll();
+        if(!document.hidden){
+          if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
+          else scheduleRender();
+        }
+        if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
+      }catch(e){
+        console.warn('realtime metric recalc failed',e);
+      }
+    };
+    if(typeof requestIdleCallback!=='undefined')requestIdleCallback(run,{timeout:1200});
+    else setTimeout(run,0);
+  },8000);
 }
 
 function startScreenerWS(){
@@ -2513,6 +2544,7 @@ function startScreenerWS(){
   const ws=new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
   const worker=getTickerWorker();
   ws.onmessage=(evt)=>{
+    _lastScreenerWsMsgAt=Date.now();
     if(gen!==_wsScreenerGen)return;
     const raw=evt.data;
     if(worker){
@@ -3705,6 +3737,7 @@ async function main(){
     renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
     updateCharts();startScreenerWS();loadKlinesBackground();
+    startRealtimeWatchdog();
     setTimeout(autoResizeScreener,300);
   }catch(err){
     console.error('Init error:',err);ldSet('Ошибка загрузки',100);ldErr(err.message||String(err));
