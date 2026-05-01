@@ -234,7 +234,7 @@ const S = {
   symDrawings:{},      // drawings per symbol, shared between grid & FS
   drawUndo:{},         // sym -> [drawings snapshot...]
   drawRedo:{},         // sym -> [drawings snapshot...]
-  minVol:0, gridSize:9, upColor:'#1fa891', wmVisible:true, sortAbs:true,
+  minVol:0, minTrd:0, gridSize:9, upColor:'#1fa891', wmVisible:true, sortAbs:true,
   screenerVisible:true, fsScreenerVisible:true,
   colOrder: ALL_COLS.map(c=>c.id),
   colVisible: new Set(ALL_COLS.map(c=>c.id)),
@@ -267,6 +267,8 @@ const S = {
   emaVisible:false,
   emaCrossSound:true,
   emaSymOverrides:{},
+  emaSymEnabled:{},
+  emaAlertPairs:[],
 };
 const DRAW_HISTORY_LIMIT=60;
 let _lastDrawSym=null;
@@ -391,8 +393,51 @@ function calcATR(kl,n){if(!kl||kl.length<n+1)return null;let s=0;const f=kl.leng
 function calcNATR(kl,n){const a=calcATR(kl,n);return a&&kl?a/kl[kl.length-1].c*100:null;}
 function calcRange(kl,n){if(!kl||kl.length<n)return null;const sl=kl.slice(-n);const H=sl.reduce((m,k)=>Math.max(m,k.h),-Infinity);const L=sl.reduce((m,k)=>Math.min(m,k.l),Infinity);return L>0?(H-L)/L*100:null;}
 function calcRel(kl,n,f){if(!kl||kl.length<n+1)return null;const sl=kl.slice(-n-1);const cur=sl[sl.length-1][f];let s=0;for(let i=0;i<n;i++)s+=sl[i][f];const avg=s/n;return avg>0?cur/avg:null;}
+function calcNATRFlexible(kl,n){
+  if(!kl||kl.length<3)return null;
+  const p=Math.min(n,Math.max(2,kl.length-1));
+  return calcNATR(kl,p);
+}
+function calcRangeFlexible(kl,n){
+  if(!kl||kl.length<2)return null;
+  return calcRange(kl,Math.min(n,kl.length));
+}
 function calcRets(kl){if(!kl||kl.length<2)return[];const r=[];for(let i=1;i<kl.length;i++)r.push((kl[i].c-kl[i-1].c)/kl[i-1].c);return r;}
 function calcCorr(a,b){if(!a||!b||a.length<5)return null;const n=Math.min(a.length,b.length);const x=a.slice(-n),y=b.slice(-n);let mx=0,my=0;for(let i=0;i<n;i++){mx+=x[i];my+=y[i];}mx/=n;my/=n;let num=0,sx=0,sy=0;for(let i=0;i<n;i++){const xa=x[i]-mx,ya=y[i]-my;num+=xa*ya;sx+=xa*xa;sy+=ya*ya;}const d=Math.sqrt(sx*sy);return d>0?num/d:null;}
+
+function updateLiveKlineSeries(kl,intervalMs,price,nowMs){
+  if(!kl||!kl.length||price==null||isNaN(price))return;
+  const bucketTs=Math.floor(nowMs/intervalMs)*intervalMs;
+  const last=kl[kl.length-1];
+  if(!last)return;
+  if(last.t===bucketTs){
+    last.c=price;
+    if(price>last.h)last.h=price;
+    if(price<last.l)last.l=price;
+    return;
+  }
+  if(bucketTs>last.t){
+    let prev=last;
+    for(let ts=last.t+intervalMs;ts<=bucketTs;ts+=intervalMs){
+      const baseClose=prev.c;
+      const isCurrent=ts===bucketTs;
+      const next={
+        t:ts,o:baseClose,h:isCurrent?Math.max(baseClose,price):baseClose,l:isCurrent?Math.min(baseClose,price):baseClose,
+        c:isCurrent?price:baseClose,v:0,tr:0,qv:0
+      };
+      kl.push(next);
+      prev=next;
+    }
+    const maxLen=intervalMs===60000?360:intervalMs===300000?300:170;
+    if(kl.length>maxLen)kl.splice(0,kl.length-maxLen);
+  }
+}
+
+function applyLiveKlineUpdate(sym,price,nowMs){
+  updateLiveKlineSeries(S.k1m[sym],60000,price,nowMs);
+  updateLiveKlineSeries(S.k5m[sym],300000,price,nowMs);
+  updateLiveKlineSeries(S.k1h[sym],3600000,price,nowMs);
+}
 
 function calcAll(){
   const btc5=S.k5m['BTCUSDT'];
@@ -415,14 +460,14 @@ function calcAll(){
       sym,price:t.p,ch24:t.c24,cday,
       rtd:(t.h24&&t.l24)?(t.h24-t.l24)/t.l24*100:null,
       r24:calcRange(k5,288),r7d:calcRange(k1h,168),
-      na30:calcNATR(k1m,30),na14:calcNATR(k5,14),r1m5:calcRange(k1m,5),
+      na30:calcNATRFlexible(k1m,30),na14:calcNATRFlexible(k5,14),r1m5:calcRangeFlexible(k1m,5),
       tr5:calcRel(k5,14,'tr'),tr1h:calcRel(k1h,24,'tr'),
       vr5:calcRel(k5,14,'qv'),vr1h:calcRel(k1h,24,'qv'),
       ch7d:null,trd24:t.tr,vol24:t.qv,
       corr:S.btcR.length>10&&k5?calcCorr(calcRets(k5),S.btcR):null,
       corr14,
-      v15m:k1m&&k1m.length>=15?k1m.slice(-15).reduce((a,k)=>a+k.qv,0):null,
-      v60m:k1m&&k1m.length>=60?k1m.slice(-60).reduce((a,k)=>a+k.qv,0):null,
+      v15m:k1m&&k1m.length>=2?k1m.slice(-Math.min(15,k1m.length)).reduce((a,k)=>a+k.qv,0):null,
+      v60m:k1m&&k1m.length>=2?k1m.slice(-Math.min(60,k1m.length)).reduce((a,k)=>a+k.qv,0):null,
     };
     if(k1h&&k1h.length>=168){const old=k1h[k1h.length-168];m.ch7d=(t.p-old.c)/old.c*100;}
     S.mx[sym]=m;
@@ -654,7 +699,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   });
   interact.addEventListener('mouseup',e=>{
     if(e.button!==0)return;
+    const hadStroke=!!ch._brushStroke;
     ch._brushStroke=null;
+    if(hadStroke&&S.drawMode==='brush')setDrawMode(null);
   });
   interact.addEventListener('contextmenu',e=>{
     e.preventDefault();
@@ -923,6 +970,17 @@ function resolveUndoSym(){
   if(S.fsOpen&&S.fsSym)return S.fsSym;
   const hov=S.charts.find(ch=>ch.hoverX>0&&ch.hoverY>0&&ch.sym);
   return hov?.sym||S.charts.find(ch=>ch.sym)?.sym||null;
+}
+function resolveUndoCandidates(){
+  const out=[];
+  const push=sym=>{if(sym&&!out.includes(sym))out.push(sym);};
+  push(_lastDrawSym);
+  if(S.fsOpen)push(S.fsSym);
+  const hov=S.charts.find(ch=>ch.hoverX>0&&ch.hoverY>0&&ch.sym);
+  push(hov?.sym);
+  S.charts.forEach(ch=>push(ch.sym));
+  Object.keys(S.symDrawings||{}).forEach(push);
+  return out;
 }
 
 async function loadChart(slot,sym){
@@ -1694,8 +1752,10 @@ function calcEMACached(candles,period){
 }
 
 function drawEMAs(ctx,ch,W,H){
-  if(!S.emaVisible||!ch.cs||!ch.lc||!ch.candles.length)return;
+  if(!ch.cs||!ch.lc||!ch.candles.length)return;
   const sym=ch.sym||S.fsSym;
+  const symEnabled=!!(sym&&S.emaSymEnabled[sym]);
+  if(!S.emaVisible&&!symEnabled)return;
   const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
   const plotH=Math.max(0,H-TIME_AXIS_H);
   ctx.save();
@@ -1745,15 +1805,22 @@ function drawEMAs(ctx,ch,W,H){
 // Check last 2 EMA values: if they cross, fire alert
 let _emaCrossAlerted={}; // key="sym_aXb" → last alert ts
 function checkEMACrossovers(ch){
-  if(!S.emaVisible||!ch.candles.length)return;
+  if(!ch.candles.length)return;
   const sym=ch.sym||S.fsSym;if(!sym)return;
+  const symEnabled=!!S.emaSymEnabled[sym];
+  if(!S.emaVisible&&!symEnabled)return;
   const settings=(sym&&S.emaSymOverrides[sym])||S.emaSettings;
   const visible=settings.filter(c=>c.visible);
   if(visible.length<2)return;
+  const enabledPairs=(S.emaAlertPairs||[]).filter(p=>p.enabled!==false);
+  if(enabledPairs.length===0)return;
   const now=Date.now();
+  const tf=(ch.tf||S.tf||'');
   for(let i=0;i<visible.length;i++){
     for(let j=i+1;j<visible.length;j++){
       const a=visible[i],b=visible[j];
+      const pa=Math.min(a.period,b.period),pb=Math.max(a.period,b.period);
+      if(!enabledPairs.some(p=>p.a===pa&&p.b===pb))continue;
       const va=calcEMACached(ch.candles,a.period);
       const vb=calcEMACached(ch.candles,b.period);
       if(va.length<2||vb.length<2)continue;
@@ -1761,7 +1828,7 @@ function checkEMACrossovers(ch){
       const b1=vb[vb.length-1].v,b2=vb[vb.length-2].v;
       const waAbove=a2>b2,isAbove=a1>b1;
       if(waAbove===isAbove)continue; // no cross
-      const key=`${sym}_${a.period}x${b.period}`;
+      const key=`${sym}_${tf}_${a.period}x${b.period}`;
       const lastAlert=_emaCrossAlerted[key]||0;
       if(now-lastAlert<60000)continue; // 1 min cooldown
       _emaCrossAlerted[key]=now;
@@ -1770,7 +1837,7 @@ function checkEMACrossovers(ch){
       if(S.emaCrossSound)playAlert(isAbove?880:440);
       S.alertLog.unshift({ts:now,sym,curPrice:a1,linePrice:b1,distPct:0,
         type:'ema_cross',alertPct:0,
-        presetName:`[${S.tf}] EMA${a.period} ${dir} EMA${b.period} — ${label}`});
+        presetName:`[${tf}] EMA${a.period} ${dir} EMA${b.period} — ${label}`});
       if(S.alertLog.length>50)S.alertLog.pop();
       renderAlertLog();
       const badge=document.getElementById('alertBadge');
@@ -1940,6 +2007,7 @@ function onInteractClick(ch,e,container){
     ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:'#e8a020'});
     _lastDrawSym=ch.sym||_lastDrawSym;
     rCanvas(ch);
+    setDrawMode(null);
   }else if(S.drawMode==='tline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
@@ -1947,6 +2015,7 @@ function onInteractClick(ch,e,container){
       ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:'#3b82f6'});
       _lastDrawSym=ch.sym||_lastDrawSym;
       ch.pendingP1=null;rCanvas(ch);
+      setDrawMode(null);
     }
   }else if(S.drawMode==='aray'){
     const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0};
@@ -1954,6 +2023,7 @@ function onInteractClick(ch,e,container){
     ch.drawings.push(d);rCanvas(ch);
     _lastDrawSym=ch.sym||_lastDrawSym;
     showAlertPctInput(ch,d,container);
+    setDrawMode(null);
   }else if(S.drawMode==='atline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
@@ -1962,6 +2032,7 @@ function onInteractClick(ch,e,container){
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=ch.sym||_lastDrawSym;
       showAlertPctInput(ch,d,container);
+      setDrawMode(null);
     }
   }else if(S.drawMode==='long'||S.drawMode==='short'){
     if(!ch.pendingP1)ch.pendingP1=pt;
@@ -1976,6 +2047,7 @@ function onInteractClick(ch,e,container){
       if(ch.sym)pushDrawUndo(ch.sym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=ch.sym||_lastDrawSym;
+      setDrawMode(null);
     }
   }
 }
@@ -2000,33 +2072,23 @@ function setDrawMode(mode){
     ch.pendingP1=null;
     if(ch.interact)ch.interact.className='chart-interact'+(mode?' draw':'');
   });
-  const hint=document.getElementById('ctopHint');
-  if(hint){
-    const h={
-      null:'Топ-9 · колёсико=линейка · ПКМ=удалить нарисованное · Ctrl=магнит · ЛКМ на точке=перетащить · ДблКлик=редактировать%',
-      hray:'Горизонтальный луч: клик · ПКМ=выйти в курсор · Ctrl+клик=магнит',
-      tline:'Трендовая линия: 2 клика · ПКМ=выйти в курсор · Ctrl+клик=магнит',
-      brush:'Кисть: зажми и веди · ПКМ=выйти в курсор · выбери цвет и толщину ниже',
-      long:'Лонг: 1й клик=вход, 2й=стоп-лосс · R:R 2:1 · ПКМ=выйти',
-      short:'Шорт: 1й клик=вход, 2й=стоп-лосс · R:R 2:1 · ПКМ=выйти',
-      aray:'Алерт-луч: клик → введите % · ПКМ=выйти в курсор · ДблКлик на линии=изменить%',
-      atline:'Алерт-линия: 2 клика → введите % · ПКМ=выйти в курсор'
-    };
-    hint.textContent=h[mode]??h[null];
-  }
+}
+
+function refreshEMAButtonState(){
+  const hasSymEnabled=S.fsSym?!!S.emaSymEnabled[S.fsSym]:false;
+  const active=S.emaVisible||hasSymEnabled;
+  const btn=document.getElementById('emaBtn');if(btn)btn.classList.toggle('on',active);
+  const fsBtn=document.getElementById('fsEmaBtn');if(fsBtn)fsBtn.classList.toggle('on',active);
 }
 
 function toggleEMA(){
-  // If no EMAs set, open add dialog immediately; otherwise toggle visibility
-  if(!S.emaSettings.length){openEMAEditor();return;}
   S.emaVisible=!S.emaVisible;
-  const btn=document.getElementById('emaBtn');if(btn)btn.classList.toggle('on',S.emaVisible);
-  const fsBtn=document.getElementById('fsEmaBtn');if(fsBtn)fsBtn.classList.toggle('on',S.emaVisible);
+  refreshEMAButtonState();
   _emaCache.clear();
   [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
 }
 
-function openEMAEditor(){
+function openEMAEditor(mode='auto'){
   const old=document.getElementById('emaEditorModal');if(old)old.remove();
   const modal=document.createElement('div');modal.id='emaEditorModal';
   modal.style.cssText='position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;';
@@ -2034,25 +2096,34 @@ function openEMAEditor(){
   box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:300px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.8)';
 
   const EMA_COLORS=['#f97316','#3b82f6','#a855f7','#e04040','#1fa891','#eab308','#ec4899','#22c55e'];
-  let _editSym=null; // null=global, string=per-symbol
+  let _editSym=(mode==='symbol'&&S.fsSym)?S.fsSym:null; // null=global, string=per-symbol
 
   const render=()=>{
+    const activeSym=_editSym||(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);
+    const targetSymEnabled=activeSym?!!S.emaSymEnabled[activeSym]:false;
     box.innerHTML=`
       <div style="display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA линии</span>
+        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA линии и алерты</span>
         <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('emaEditorModal').remove()">✕</button>
       </div>
       <div id="emaList" style="flex:1;overflow-y:auto;padding:8px 14px;display:flex;flex-direction:column;gap:6px;min-height:0"></div>
       <div style="padding:6px 14px;border-top:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <label style="font-size:9px;color:var(--text3)">Показывать EMA:</label>
+        <button id="emaGlobalBtn" class="tbtn${S.emaVisible?' on':''}" title="Показывать EMA на всех монетах">Все</button>
+        <button id="emaSymOnlyBtn" class="tbtn${targetSymEnabled?' on':''}" title="Показывать EMA только для выбранной монеты">Текущая монета</button>
         <label style="font-size:9px;color:var(--text3)">Звук при пересечении:</label>
-        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}" onclick="S.emaCrossSound=!S.emaCrossSound;render()">${S.emaCrossSound?'● Вкл':'○ Выкл'}</button>
+        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}">${S.emaCrossSound?'● Вкл':'○ Выкл'}</button>
         <span style="flex:1"></span>
         <label style="font-size:9px;color:var(--text3)" title="Задать отдельные EMA для текущей монеты">Режим:</label>
-        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}" onclick="_editSym=_editSym?null:(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);render()">${_editSym?'📌 '+_editSym.replace(/USDT$/,''):'🌍 Глобал'}</button>
+        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}">${_editSym?'📌 '+_editSym.replace(/USDT$/,''):'🌍 Глобал'}</button>
+      </div>
+      <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
+        <div style="font-size:9px;color:var(--text3)">Алерты пересечения EMA (добавляются в Алерты с ТФ):</div>
+        <div id="emaPairsList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       </div>
       <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
         <button class="tbtn" style="flex:1" id="addEmaBtn">＋ Добавить EMA</button>
-        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();S.emaVisible=true;[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));document.getElementById('emaBtn')?.classList.add('on');document.getElementById('fsEmaBtn')?.classList.add('on')">✓ Применить</button>
+        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">✓ Готово</button>
       </div>`;
 
     const list=box.querySelector('#emaList');
@@ -2088,13 +2159,32 @@ function openEMAEditor(){
       const delBtn=document.createElement('button');
       delBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0 2px;margin-left:auto';
       delBtn.textContent='✕';delBtn.title='Удалить';
-      delBtn.onclick=()=>{S.emaSettings.splice(i,1);_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
+      delBtn.onclick=()=>{_activeSettings.splice(i,1);_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
       row.appendChild(delBtn);
       list.appendChild(row);
     });
 
-    if(!S.emaSettings.length){
+    if(!_activeSettings.length){
       list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">Нет EMA линий. Нажми ＋ чтобы добавить.</div>';
+    }
+    const pairsEl=box.querySelector('#emaPairsList');
+    const visiblePeriods=[...new Set(_activeSettings.filter(c=>c.visible).map(c=>c.period))].sort((a,b)=>a-b);
+    if(visiblePeriods.length<2){
+      pairsEl.innerHTML='<span style="font-size:9px;color:var(--text3)">Нужно минимум 2 активные EMA линии</span>';
+    }else{
+      pairsEl.innerHTML='';
+      for(let i=0;i<visiblePeriods.length;i++){
+        for(let j=i+1;j<visiblePeriods.length;j++){
+          const a=visiblePeriods[i],b=visiblePeriods[j];
+          let pair=S.emaAlertPairs.find(p=>p.a===a&&p.b===b);
+          if(!pair){pair={a,b,enabled:false};S.emaAlertPairs.push(pair);}
+          const pbtn=document.createElement('button');
+          pbtn.className='tbtn'+(pair.enabled?' on':'');
+          pbtn.textContent=`EMA${a}×EMA${b}`;
+          pbtn.onclick=()=>{pair.enabled=!pair.enabled;render();};
+          pairsEl.appendChild(pbtn);
+        }
+      }
     }
 
     box.querySelector('#addEmaBtn').onclick=()=>{
@@ -2106,9 +2196,20 @@ function openEMAEditor(){
     // Fix: bind closures via addEventListener (inline onclick can't access local `render` / `_editSym`)
     const soundBtn=box.querySelector('#emaSoundBtn');
     if(soundBtn)soundBtn.onclick=()=>{S.emaCrossSound=!S.emaCrossSound;render();};
+    const gBtn=box.querySelector('#emaGlobalBtn');
+    if(gBtn)gBtn.onclick=()=>{S.emaVisible=!S.emaVisible;refreshEMAButtonState();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
+    const symOnlyBtn=box.querySelector('#emaSymOnlyBtn');
+    if(symOnlyBtn)symOnlyBtn.onclick=()=>{
+      const sym=activeSym;
+      if(!sym)return;
+      S.emaSymEnabled[sym]=!S.emaSymEnabled[sym];
+      refreshEMAButtonState();
+      [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
+      render();
+    };
     const symBtn=box.querySelector('#emaSymBtn');
     if(symBtn)symBtn.onclick=()=>{
-      _editSym=_editSym?null:(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);
+      _editSym=_editSym?null:activeSym;
       render();
     };
   };
@@ -2224,20 +2325,33 @@ function updateRulerTooltip(ch){
 document.addEventListener('keydown',e=>{
   const tgt=e.target;
   const editable=tgt&&((tgt.tagName==='INPUT')||(tgt.tagName==='TEXTAREA')||tgt.isContentEditable);
-  const mod=(e.ctrlKey||e.metaKey)&&!editable;
+  const mod=(e.ctrlKey||e.metaKey);
   const key=(e.key||'').toLowerCase();
   const code=(e.code||'').toLowerCase();
   const isZ=code==='keyz'||key==='z'||key==='я';
   const isY=code==='keyy'||key==='y'||key==='н';
   if(mod&&(isZ||isY)){
-    const sym=resolveUndoSym();
-    if(sym){
-      const wantRedo=e.shiftKey||isY;
+    const wantRedo=e.shiftKey||isY;
+    const cand=resolveUndoCandidates();
+    for(const sym of cand){
       const ok=wantRedo?redoDrawings(sym):undoDrawings(sym);
-      if(ok){e.preventDefault();_lastDrawSym=sym;return;}
+      if(ok){
+        e.preventDefault();
+        _lastDrawSym=sym;
+        return;
+      }
     }
   }
   if(e.key==='Escape'){
+    // Fullscreen should feel like the same app: Esc closes fullscreen first
+    // (but don't hijack Esc while user edits inputs or a modal is open)
+    const settingsOpen=document.getElementById('settingsModal')?.classList.contains('open');
+    const emaOpen=!!document.getElementById('emaEditorModal');
+    if(S.fsOpen&&!editable&&!settingsOpen&&!emaOpen){
+      closeFullscreen();
+      e.preventDefault();
+      return;
+    }
     [...S.charts,...S.fsCharts].forEach((ch,i)=>{
       ch.pendingP1=null;
       if(ch.ruler){ch.ruler=null;document.getElementById('rulerTooltip').style.display='none';}
@@ -2370,6 +2484,27 @@ function getTickerWorker(){
 
 // Throttle screener WS updates
 let _wsBatchTimer=null;
+let _metricsRecalcTimer=null;
+
+function scheduleRealtimeMetricRecalc(gen){
+  if(_metricsRecalcTimer||!S.bgDone)return;
+  _metricsRecalcTimer=setTimeout(()=>{
+    _metricsRecalcTimer=null;
+    if(gen!==_wsScreenerGen)return;
+    const nowMs=Date.now();
+    for(const sym of S.syms){
+      const tk=S.tk[sym];
+      if(!tk||tk.p==null||isNaN(tk.p))continue;
+      applyLiveKlineUpdate(sym,tk.p,nowMs);
+    }
+    calcAll();
+    if(!document.hidden){
+      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
+      else scheduleRender();
+    }
+    if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
+  },2500);
+}
 
 function startScreenerWS(){
   if(_wsScreenerReconnectTimer){clearTimeout(_wsScreenerReconnectTimer);_wsScreenerReconnectTimer=null;}
@@ -2406,13 +2541,16 @@ function startScreenerWS(){
 
 function _applyTickerUpdate(arr,gen){
   let changed=false;
+  const nowMs=Date.now();
   for(const t of arr){
     const tk=S.tk[t.s];const mx=S.mx[t.s];
     if(!tk)continue;
     if(tk.p!==t.c||tk.c24!==t.P){tk.p=t.c;tk.c24=t.P;tk.qv=t.q;tk.tr=t.n||tk.tr;changed=true;}
     if(mx){mx.price=t.c;mx.ch24=t.P;mx.vol24=t.q;mx.trd24=t.n||mx.trd24;}
+    applyLiveKlineUpdate(t.s,t.c,nowMs);
   }
   if(!changed)return;
+  scheduleRealtimeMetricRecalc(gen);
   if(!_wsBatchTimer){
     _wsBatchTimer=setTimeout(()=>{
       _wsBatchTimer=null;
@@ -2446,7 +2584,6 @@ function updateFsHeaderValues(){
   const ft=document.getElementById('fsTrd');if(ft)ft.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const corVal=m.corr14??m.corr;const fc=document.getElementById('fsCorr');
   if(fc)fc.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
-  const fhc=document.getElementById('fsHcount');if(fhc)fhc.textContent=document.getElementById('hcount').textContent;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -2477,6 +2614,7 @@ function sortedRows(){
   let rows=Object.values(S.mx);
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
+  if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||getSymGroup(r.sym)>0);
   // Filters are exclusive: preset OR color group OR all
   if(S._potFilterPreset){
     const pr=S.potentialPresets.find(p=>p.id===S._potFilterPreset);
@@ -2503,7 +2641,6 @@ function renderScreenerInto(bodyEl,rows){
   if(!bodyEl)return;
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
   const start=S.page*S.charts.length;
-  const pageSyms=new Set(rows.slice(start,start+S.charts.length).map(r=>r.sym));
   const cols=activeCols();
   const colsKey=cols.map(c=>c.id).join(',');
   if(bodyEl.dataset.colsKey!==colsKey){
@@ -2520,7 +2657,7 @@ function renderScreenerInto(bodyEl,rows){
       row=buildScreenerRow(m,cols);
       rowMap.set(m.sym,row);
     }
-    updateScreenerRow(row,m,cols,inChart,pageSyms);
+    updateScreenerRow(row,m,cols,inChart);
     frag.appendChild(row);
   }
   bodyEl.replaceChildren(frag);
@@ -2543,8 +2680,7 @@ function buildScreenerRow(m,cols){
   nameSpan.title='Нажмите для копирования';nameSpan.style.cursor='pointer';
   nameSpan.onclick=ev=>{ev.stopPropagation();copyTicker(m.sym.replace(/USDT$/,''));openFullscreenBySym(m.sym);};
   rt.appendChild(nameSpan);
-  const pg=document.createElement('span');pg.className='tpg';rt.appendChild(pg);
-  row._gdot=gdot;row._name=nameSpan;row._pg=pg;row.appendChild(rt);
+  row._gdot=gdot;row._name=nameSpan;row.appendChild(rt);
   const rg=document.createElement('div');rg.className='rmgrid';
   const cellArr=[];
   for(const c of cols){
@@ -2556,7 +2692,7 @@ function buildScreenerRow(m,cols){
   return row;
 }
 
-function updateScreenerRow(row,m,cols,inChart,pageSyms){
+function updateScreenerRow(row,m,cols,inChart){
   const grp=getSymGroup(m.sym);
   const grpCol=GROUP_COLORS[grp]||'';
   const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
@@ -2578,7 +2714,6 @@ function updateScreenerRow(row,m,cols,inChart,pageSyms){
   if(row._stripe){row._stripe.remove();row._stripe=null;}
   const rt=row.firstChild;
   if(rt)rt.style.paddingLeft='9px';
-  if(row._pg)row._pg.textContent=pageSyms.has(m.sym)?`·${S.page+1}`:'';
   if(row._cells.length!==cols.length){
     row._rg.innerHTML='';
     row._cells=[];
@@ -2625,7 +2760,6 @@ function renderTable(){
   const rows=sortedRows();
   const countTxt=rows.length+' монет';
   document.getElementById('hcount').textContent=countTxt;
-  const fshc=document.getElementById('fsHcount');if(fshc)fshc.textContent=countTxt;
   renderScreenerInto(document.getElementById('sbody'),rows);
   if(S.fsOpen&&S.fsScreenerVisible){
     renderScreenerInto(document.getElementById('fsSbody'),rows);
@@ -2645,7 +2779,7 @@ function updatePagination(total){
 
 function updSortHdr(){
   document.querySelectorAll('.mhcol').forEach(e=>e.classList.remove('sa','sd'));
-  const el=document.getElementById(`hc-${S.sortId}`);if(el)el.classList.add(S.sortDir==='desc'?'sd':'sa');
+  document.querySelectorAll(`#hc-${S.sortId}`).forEach(el=>el.classList.add(S.sortDir==='desc'?'sd':'sa'));
   const c=ALL_COLS.find(x=>x.id===S.sortId);
   const si=document.getElementById('sinfo');
   if(si)si.textContent=S.sortAlpha?`Тикер ${S.sortDir==='asc'?'▲':'▼'}`:(c?`Сорт: ${c.l} ${c.s} ${S.sortDir==='desc'?'↓':'↑'}`:'');
@@ -2679,12 +2813,12 @@ function changePage(delta){
 
 function setTf(tf,btnId){
   S.tf=tf;
-  document.querySelectorAll('#toolbar .tbtn,#fsTfBtns .tbtn').forEach(b=>{
+  document.querySelectorAll('#toolbar .tbtn').forEach(b=>{
     if(['tf1m','tf5m','tf15m','tf1h','tf4h','tf1d'].includes(b.id)||b.dataset.tf)b.classList.remove('on');
   });
   document.getElementById(btnId)?.classList.add('on');
   document.querySelectorAll(`[data-tf="${tf}"]`).forEach(b=>b.classList.add('on'));
-  document.getElementById('ctf').textContent=tf;
+  const ctf=document.getElementById('ctf');if(ctf)ctf.textContent=tf;
   const syms=S.charts.map(c=>c.sym);
   S.charts.forEach(c=>{c.sym=null;c.candles=[];});
   syms.forEach((sym,i)=>{if(sym)loadChart(i,sym);});
@@ -2700,16 +2834,28 @@ function onVolFilter(val){
   ['volSlider','fsVolSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=val;});
   S.page=0;updateCharts();renderTable();
 }
+function onTrdFilter(val){
+  // 1 step = 50k trades/day. Range 0..2M by default.
+  S.minTrd=+val*50000;
+  const disp=S.minTrd===0?'0':(S.minTrd>=1e6?`${(S.minTrd/1e6).toFixed(1)}M`:`${Math.round(S.minTrd/1000)}K`);
+  ['trdVal','fsTrdVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=disp;});
+  ['trdSlider','fsTrdSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=val;});
+  S.page=0;updateCharts();renderTable();
+}
 
 function updTime(){
   const d=new Date();const pad=n=>n.toString().padStart(2,'0');
   const timeStr=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   const ht=document.getElementById('htime');if(ht)ht.textContent=timeStr;
   const hs=document.getElementById('hstatus');if(hs)hs.textContent='Онлайн';
-  if(S.fsOpen){
-    const fshtime=document.getElementById('fsHtime');if(fshtime)fshtime.textContent=timeStr;
-    const fshstatus=document.getElementById('fsHstatus');if(fshstatus)fshstatus.textContent='Онлайн';
-  }
+}
+
+function updateToggleScrBtn(){
+  const btn=document.getElementById('toggleScrBtn');
+  if(!btn)return;
+  const on=S.fsOpen?S.fsScreenerVisible:S.screenerVisible;
+  btn.textContent=(on?'◀':'▶')+' Список';
+  btn.classList.toggle('on',on);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3121,6 +3267,7 @@ function openGroupManager(g){
 }
 
 function toggleScreener(){
+  if(S.fsOpen){toggleFsScreener();return;}
   S.screenerVisible=!S.screenerVisible;
   const spl=document.getElementById('spl');
   const sp=document.getElementById('spanel');
@@ -3133,8 +3280,7 @@ function toggleScreener(){
     cp.style.flex=''; cp.style.width=S._savedCpW||'64%';
     spl.style.display=''; sp.style.display='';
   }
-  const btn=document.getElementById('toggleScrBtn');
-  if(btn){btn.textContent=(S.screenerVisible?'◀':'▶')+' Список';btn.classList.toggle('on',S.screenerVisible);}
+  updateToggleScrBtn();
   setTimeout(()=>{S.charts.forEach((ch,i)=>{const cb=document.getElementById(`cb${i}`);if(cb&&ch.lc&&ch.cs){try{ch.lc.resize(cb.clientWidth,cb.clientHeight);ch.canvas.width=cb.clientWidth;ch.canvas.height=cb.clientHeight;rCanvas(ch);}catch(e){}}});},60);
   if(S.screenerVisible)renderTable();
 }
@@ -3152,8 +3298,7 @@ function toggleFsScreener(){
     ca.style.flex=''; ca.style.width=S._savedFsCaW||'';
     spl.style.display=''; sp.style.display='';
   }
-  const btn=document.getElementById('fsToggleScrBtn');
-  if(btn){btn.textContent=(S.fsScreenerVisible?'◀':'▶')+' Список';btn.classList.toggle('on',S.fsScreenerVisible);}
+  updateToggleScrBtn();
   setTimeout(()=>{S.fsCharts.forEach((fch,i)=>{const el=document.getElementById(`fsChartEl${i}`);if(el&&fch.lc&&fch.cs){try{fch.lc.resize(el.clientWidth,el.clientHeight);fch.canvas.width=el.clientWidth;fch.canvas.height=el.clientHeight;rCanvas(fch);}catch(e){}}});},60);
   if(S.fsScreenerVisible)renderTable();
 }
@@ -3170,6 +3315,16 @@ function dragSpl(e,splId,leftId,bodyId){
     const r=body.getBoundingClientRect();
     const pct=Math.max(20,Math.min(85,((ev.clientX-r.left)/r.width)*100));
     left.style.width=pct+'%';
+    // Keep the screener width consistent between main and fullscreen modes
+    if(leftId==='cpanel'){
+      const fsCA=document.getElementById('fsChartArea');
+      if(fsCA){fsCA.style.flex='none';fsCA.style.width=pct+'%';}
+      S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
+    } else if(leftId==='fsChartArea'){
+      const cp=document.getElementById('cpanel');
+      if(cp){cp.style.flex='none';cp.style.width=pct+'%';}
+      S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
+    }
     [...S.charts,...S.fsCharts].forEach(ch=>{if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(er){}});
   };
   const onU=()=>{spl.classList.remove('drag');window.removeEventListener('mousemove',onM);window.removeEventListener('mouseup',onU);};
@@ -3283,19 +3438,12 @@ function autoResizeScreener(){
   if(totalW<1)return;
   const chartW=Math.max(totalW*minChartPct/100, totalW-idealScrW-splW);
   const pct=Math.round(chartW/totalW*100);
-  cp.style.width=Math.max(minChartPct,Math.min(85,pct))+'%';
-  // Same for FS
-  const fsMain=document.getElementById('fsMain');
+  const clamped=Math.max(minChartPct,Math.min(85,pct))+'%';
+  cp.style.width=clamped;
+  // Same pct for fullscreen chart area
   const fsCA=document.getElementById('fsChartArea');
-  if(fsMain&&fsCA){
-    const fw=fsMain.clientWidth;
-    if(fw>1){
-      const fChartW=Math.max(fw*minChartPct/100,fw-idealScrW-splW);
-      const fp=Math.round(fChartW/fw*100);
-      fsCA.style.flex='none';
-      fsCA.style.width=Math.max(minChartPct,Math.min(85,fp))+'%';
-    }
-  }
+  if(fsCA){fsCA.style.flex='none';fsCA.style.width=clamped;}
+  S._savedCpW=clamped;S._savedFsCaW=clamped;
 }
 
 function rebuildScreenerHeaders(){
@@ -3338,14 +3486,6 @@ function buildFsTfBar(barId,idx){
   FS_TFS.forEach(tf=>{
     const b=document.createElement('button');b.className='fs-tf-btn'+(tf===activeTf?' on':'');
     b.textContent=tf;b.onclick=()=>setFsTf(idx,tf);bar.appendChild(b);
-  });
-}
-
-function buildFsTfButtons(){
-  const c=document.getElementById('fsTfBtns');if(!c)return;c.innerHTML='';
-  ['1m','5m','15m','1h','4h','1d'].forEach(tf=>{
-    const b=document.createElement('button');b.className='tbtn'+(tf===S.tf?' on':'');
-    b.textContent=tf;b.dataset.tf=tf;b.onclick=()=>setTf(tf,b.id||'');c.appendChild(b);
   });
 }
 
@@ -3403,8 +3543,21 @@ async function loadMoreFsHistory(idx){
 function openFullscreenBySym(sym){
   if(!sym)return;
   S.fsSym=sym;S.fsOpen=true;
-  document.getElementById('fsView').classList.add('open');
-  document.getElementById('fsSym').textContent=sym.replace(/USDT$/,'');
+  const body=document.getElementById('body');
+  const fsBody=document.getElementById('fsBody');
+  if(body)body.style.display='none';
+  if(fsBody)fsBody.style.display='';
+  const fsExtras=document.getElementById('fsExtras');
+  if(fsExtras)fsExtras.style.display='flex';
+  const tfGroup=document.getElementById('tfGroup');
+  if(tfGroup)tfGroup.style.display='none';
+  // Ensure shared chart area width is the same in both modes
+  const cp=document.getElementById('cpanel');
+  const fsCA=document.getElementById('fsChartArea');
+  const sharedW=(cp&&cp.style.width)?cp.style.width:(S._savedCpW||'');
+  if(sharedW&&fsCA){fsCA.style.flex='none';fsCA.style.width=sharedW;S._savedFsCaW=sharedW;}
+  updateToggleScrBtn();
+  document.getElementById('fsSym').textContent=sym;
   setCoinIcon('fsSymIcon',sym);
   // Update FS color dot
   const fsCgDot=document.getElementById('fsCgDot');
@@ -3419,23 +3572,12 @@ function openFullscreenBySym(sym){
   document.getElementById('fsTrd').innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const corVal=m.corr14??m.corr;
   document.getElementById('fsCorr').innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
-  // Sync top-bar status info
-  const htime=document.getElementById('htime');
-  const fshtime=document.getElementById('fsHtime');
-  if(htime&&fshtime)fshtime.textContent=htime.textContent;
-  const hstatus=document.getElementById('hstatus');
-  const fshstatus=document.getElementById('fsHstatus');
-  if(hstatus&&fshstatus)fshstatus.textContent=hstatus.textContent;
-  const hcount=document.getElementById('hcount');
-  const fshcount=document.getElementById('fsHcount');
-  if(hcount&&fshcount)fshcount.textContent=hcount.textContent;
   // Build FS screener
   buildScreenerHeader(document.getElementById('fsShdr'));
   renderTable();
-  // Build TF buttons
-  buildFsTfButtons();
   // Build 3 FS charts
   for(let i=0;i<3;i++){buildFsTfBar(`fsTfBar${i}`,i);initFsChart(i);loadFsChart(i);}
+  refreshEMAButtonState();
   startFsWs();
   setTimeout(autoResizeScreener,100);
 }
@@ -3446,13 +3588,31 @@ function openFullscreen(slot){
 }
 
 function closeFullscreen(){
-  document.getElementById('fsView').classList.remove('open');
   S.fsOpen=false;
+  const body=document.getElementById('body');
+  const fsBody=document.getElementById('fsBody');
+  if(fsBody)fsBody.style.display='none';
+  if(body)body.style.display='';
+  const fsExtras=document.getElementById('fsExtras');
+  if(fsExtras)fsExtras.style.display='none';
+  const tfGroup=document.getElementById('tfGroup');
+  if(tfGroup)tfGroup.style.display='';
+  // Keep shared width consistent when returning
+  const cp=document.getElementById('cpanel');
+  const fsCA=document.getElementById('fsChartArea');
+  const sharedW=(fsCA&&fsCA.style.width)?fsCA.style.width:(S._savedFsCaW||'');
+  if(sharedW&&cp){cp.style.flex='none';cp.style.width=sharedW;S._savedCpW=sharedW;}
+  updateToggleScrBtn();
   if(S.fsWs){try{S.fsWs.close();}catch(e){}S.fsWs=null;}
   // Sync drawings back
   S.fsCharts.forEach(fch=>{rCanvas(fch);});
   // Refresh main grid drawings
   S.charts.forEach((ch,i)=>{if(ch.sym)ch.drawings=getSymDrawings(ch.sym);rCanvas(ch);});
+  refreshEMAButtonState();
+}
+
+function goHome(){
+  if(S.fsOpen)closeFullscreen();
 }
 
 async function setFsTf(idx,tf){
@@ -3505,7 +3665,8 @@ async function loadKlinesBackground(){
     const top=Object.entries(S.tk).filter(([s])=>S.syms.includes(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
     Object.assign(S.k5m,await batchKlines(top,'5m',300,null,null,20));
     Object.assign(S.k1h,await batchKlines(top,'1h',170,null,null,20));
-    Object.assign(S.k1m,await batchKlines(top.slice(0,60),'1m',70,null,null,20));
+    // Load 1m history for all symbols (previously it was only top-60).
+    Object.assign(S.k1m,await batchKlines(top,'1m',70,null,null,12));
     calcAll();renderTable();S.bgDone=true;
   }catch(e){console.warn('bg klines',e);}
 }
@@ -3541,7 +3702,7 @@ async function main(){
 
     ldSet('Вычисление метрик…',70);calcAll();
     ldSet('Готово!',100);
-    renderTable();updSortHdr();updTime();
+    renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
     updateCharts();startScreenerWS();loadKlinesBackground();
     setTimeout(autoResizeScreener,300);
@@ -3885,8 +4046,10 @@ window.clearFsDrawings    = clearFsDrawings;
 window.closeFullscreen    = closeFullscreen;
 window.openFullscreen     = openFullscreen;
 window.openFullscreenBySym= openFullscreenBySym;
+window.goHome             = goHome;
 window.onSearch           = onSearch;
 window.onVolFilter        = onVolFilter;
+window.onTrdFilter        = onTrdFilter;
 window.toggleDensity      = toggleDensity;
 window.renderAlertLog     = renderAlertLog;
 window.dragSpl            = dragSpl;
