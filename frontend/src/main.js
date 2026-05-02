@@ -2643,7 +2643,7 @@ function getTickerWorker(){
 let _wsBatchTimer=null;
 let _metricsRecalcTimer=null;
 const SCREENER_BATCH_MS=250;
-const METRICS_RECALC_DEBOUNCE_MS=2000;
+const METRICS_RECALC_DEBOUNCE_MS=1000;
 
 function scheduleRealtimeMetricRecalc(gen){
   if(_metricsRecalcTimer||!S.bgDone)return;
@@ -2751,7 +2751,7 @@ function _applyTickerUpdate(arr,gen){
         } else {
           // Use requestIdleCallback so table render never blocks click events
           if(typeof requestIdleCallback!=='undefined'){
-            requestIdleCallback(()=>renderTable(),{timeout:900});
+            requestIdleCallback(()=>renderTable(),{timeout:400});
           } else {
             setTimeout(renderTable,0); // yield to event loop first
           }
@@ -3862,8 +3862,12 @@ async function loadKlinesBackground(){
     Object.assign(S.k1h,await batchKlines(topFast,'1h',170,null,null,8));
     // 1m is the heaviest endpoint; keep a narrower universe.
     Object.assign(S.k1m,await batchKlines(top1m,'1m',70,null,null,6));
-    calcAll();renderTable();S.bgDone=true;
-  }catch(e){console.warn('bg klines',e);}
+    calcAll();renderTable();
+  }catch(e){
+    console.warn('bg klines',e);
+  }finally{
+    S.bgDone=true; // гарантируем true даже при ошибке
+  }
 }
 
 function loadScript(url){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
@@ -3899,7 +3903,9 @@ async function main(){
     ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
-    updateCharts();restartChartStreams(0);startScreenerWS();loadKlinesBackground();
+    updateCharts();restartChartStreams(0);startScreenerWS();
+    S.bgDone=true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
+    loadKlinesBackground();
     startRealtimeWatchdog();
     setTimeout(autoResizeScreener,300);
   }catch(err){
