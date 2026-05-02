@@ -277,13 +277,15 @@ function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0};
+    _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
+    livePriceLine:null};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
-    _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0};
+    _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
+    livePriceLine:null};
 }
 
 function activeCols(){
@@ -629,7 +631,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const container=document.getElementById(containerId);
   if(!container)return false;
   if(ch._ro){try{ch._ro.disconnect();}catch(e){}ch._ro=null;}
-  if(ch.lc){try{ch.lc.remove();}catch(e){}ch.lc=null;ch.cs=null;ch.vs=null;}
+  if(ch.lc){try{ch.lc.remove();}catch(e){}ch.lc=null;ch.cs=null;ch.vs=null;ch.livePriceLine=null;}
   if(ch._ab)ch._ab.abort();
   container.innerHTML='';
 
@@ -651,6 +653,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     wickUpColor:S.upColor,wickDownColor:'#e04040',
     priceFormat:{type:'custom',formatter:p=>fmtPrice(p),minMove:0.0000001},
   });
+  cs.applyOptions({lastValueVisible:false,priceLineVisible:false});
+  const pls=S.LC?.PriceLineSource?.LastBar;
+  if(pls!=null)cs.applyOptions({priceLineSource:pls});
   const vs=lc.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol',color:'#1fa89120'});
   // Hide the volume "last value" indicator (bottom-right) on small charts.
   // We keep histogram bars but remove any corner/scale label.
@@ -1020,6 +1025,7 @@ function paintSlotData(slot){
     ch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
     ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+    syncLivePriceLabel(ch,lp,ch.candles[ch.candles.length-1].o);
     ch.lc.timeScale().fitContent();
     updateChartHeader(slot,ch.sym);
     rCanvas(ch);
@@ -2385,6 +2391,8 @@ document.addEventListener('visibilitychange',()=>{
       }
       ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
       ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+      const lc=ch.candles[ch.candles.length-1];
+      if(lc)syncLivePriceLabel(ch,lc.c,lc.o);
       rCanvas(ch);
     }catch(e){}
   });
@@ -2397,6 +2405,8 @@ document.addEventListener('visibilitychange',()=>{
       for(const c of nc){const last=fch.candles[fch.candles.length-1];if(c.t===last?.t)fch.candles[fch.candles.length-1]=c;else if(c.t>last?.t)fch.candles.push(c);}
       fch.cs.setData(fch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
       fch.vs.setData(fch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+      const lc=fch.candles[fch.candles.length-1];
+      if(lc)syncLivePriceLabel(fch,lc.c,lc.o);
       rCanvas(fch);
     }catch(e){}
   });
@@ -2444,6 +2454,7 @@ function startChartWS(){
         try{
           ch.cs.update({time:toChartTime(c.t),open:c.o,high:c.h,low:c.l,close:c.c});
           ch.vs.update({time:toChartTime(c.t),value:c.qv,color:c.c>=c.o?'#1fa89122':'#e0404022'});
+          syncLivePriceLabel(ch,c.c,c.o);
         }catch(e){}
         ch.drawings.forEach(d=>{if(d.type==='aray'||d.type==='atline')checkAlerts(ch,d);});
         if(S.emaVisible)checkEMACrossovers(ch);
@@ -2473,6 +2484,16 @@ function tfMs(tf){
   if(tf==='4h')return 14400000;
   if(tf==='1d')return 86400000;
   return 300000;
+}
+
+function syncLivePriceLabel(ch,price,openPrice=null){
+  if(!ch?.cs||price==null||!isFinite(price))return;
+  const lineColor=(openPrice!=null&&isFinite(openPrice)&&price<openPrice)?'#e04040':'#1fa891';
+  const opts={price,color:lineColor,lineVisible:false,axisLabelVisible:true,title:''};
+  try{
+    if(!ch.livePriceLine)ch.livePriceLine=ch.cs.createPriceLine(opts);
+    else ch.livePriceLine.applyOptions(opts);
+  }catch(e){}
 }
 
 function startChartTradesWS(){
@@ -2519,6 +2540,7 @@ function startChartTradesWS(){
         if(!lc||!ch.cs)return;
         try{
           ch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
+          syncLivePriceLabel(ch,lc.c,lc.o);
           const cpEl=document.getElementById(`cp${slot}`);
           if(cpEl)cpEl.textContent=fmtPrice(lc.c);
           rCanvas(ch);
@@ -2583,6 +2605,8 @@ function getTickerWorker(){
 // Throttle screener WS updates
 let _wsBatchTimer=null;
 let _metricsRecalcTimer=null;
+const SCREENER_BATCH_MS=250;
+const METRICS_RECALC_DEBOUNCE_MS=2000;
 
 function scheduleRealtimeMetricRecalc(gen){
   if(_metricsRecalcTimer||!S.bgDone)return;
@@ -2609,7 +2633,7 @@ function scheduleRealtimeMetricRecalc(gen){
     };
     if(typeof requestIdleCallback!=='undefined')requestIdleCallback(run,{timeout:1200});
     else setTimeout(run,0);
-  },8000);
+  },METRICS_RECALC_DEBOUNCE_MS);
 }
 
 function startScreenerWS(){
@@ -2618,16 +2642,36 @@ function startScreenerWS(){
   const gen=++_wsScreenerGen;
   const ws=new WebSocket('wss://fstream.binance.com/ws/!ticker@arr');
   const worker=getTickerWorker();
+  let workerBusy=false;
+  let queuedRaw=null;
+  if(worker){
+    worker.onmessage=(we)=>{
+      if(gen!==_wsScreenerGen)return;
+      workerBusy=false;
+      _applyTickerUpdate(we.data,gen);
+      if(queuedRaw!=null){
+        const next=queuedRaw;
+        queuedRaw=null;
+        workerBusy=true;
+        worker.postMessage(next);
+      }
+    };
+    worker.onerror=()=>{
+      workerBusy=false;
+      queuedRaw=null;
+    };
+  }
   ws.onmessage=(evt)=>{
     _lastScreenerWsMsgAt=Date.now();
     if(gen!==_wsScreenerGen)return;
     const raw=evt.data;
     if(worker){
-      // Off-load JSON parsing to worker thread — zero main thread cost
-      worker.onmessage=(we)=>{
-        if(gen!==_wsScreenerGen)return;
-        _applyTickerUpdate(we.data,gen);
-      };
+      // Keep only the newest payload while worker parses to reduce UI latency under load.
+      if(workerBusy){
+        queuedRaw=raw;
+        return;
+      }
+      workerBusy=true;
       worker.postMessage(raw);
     } else {
       // Fallback: parse on next idle frame (no worker support)
@@ -2679,7 +2723,7 @@ function _applyTickerUpdate(arr,gen){
       if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
       // Only run alert checks when not panning — they also touch DOM
       if(!_anyChartPanning)checkAllAlerts();
-    },1000);
+    },SCREENER_BATCH_MS);
   }
 }
 
@@ -3618,6 +3662,8 @@ async function loadFsChart(idx){
     }
     fch.cs.setData(fch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     fch.vs.setData(fch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+    const lastFsCandle=fch.candles[fch.candles.length-1];
+    if(lastFsCandle)syncLivePriceLabel(fch,lastFsCandle.c,lastFsCandle.o);
     fch.lc.timeScale().fitContent();
     rCanvas(fch);
   }catch(e){console.warn('loadFsChart',e);}
@@ -3751,6 +3797,7 @@ function startFsWs(){
       try{
         fch.cs.update({time:toChartTime(candle.t),open:candle.o,high:candle.h,low:candle.l,close:candle.c});
         fch.vs.update({time:toChartTime(candle.t),value:candle.qv,color:candle.c>=candle.o?'#1fa89122':'#e0404022'});
+        syncLivePriceLabel(fch,candle.c,candle.o);
       }catch(e){}
       if(fch.candles.length&&fch.candles[fch.candles.length-1].t===candle.t)fch.candles[fch.candles.length-1]=candle;
       else if(fch.candles.length&&candle.t>fch.candles[fch.candles.length-1].t)fch.candles.push(candle);
