@@ -194,7 +194,8 @@ const API = 'https://fapi.binance.com/fapi/v1';
 // Timezone: offset candle times to device local time
 const TZ_OFFSET_S = -(new Date().getTimezoneOffset() * 60); // seconds to add to UTC
 function toChartTime(ms){ return Math.floor(ms/1000) + TZ_OFFSET_S; }
-const HIST_LIMIT = 500;
+const HIST_LIMIT = 500;   // свечей при подгрузке истории (листание влево)
+const HIST_INITIAL = 200; // свечей при первоначальной загрузке графика (быстрый старт)
 const HIST_TRIGGER = 15;
 const FS_TFS = ['1m','3m','5m','15m','30m','1h','4h','1d','3d','1w'];
 const DRAW_HIT = 8; // px threshold for hover detection
@@ -1009,7 +1010,7 @@ async function loadChart(slot,sym){
   initLCChart(slot);
   const wm=document.getElementById(`wm${slot}`);if(wm)wm.textContent=sym.replace(/USDT$/,'');
   try{
-    const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_LIMIT}`);
+    const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
     if(ch.sym!==sym)return;
     ch.candles=parseKlines(raw);
     paintSlotData(slot);
@@ -2510,8 +2511,10 @@ function closeChartTradesSockets(){
 
 function syncLivePriceLabel(ch,price,openPrice=null){
   if(!ch?.cs||price==null||!isFinite(price))return;
-  const lineColor=(openPrice!=null&&isFinite(openPrice)&&price<openPrice)?'#e04040':'#1fa891';
-  const opts={price,color:lineColor,lineVisible:false,axisLabelVisible:true,title:''};
+  const isDown=(openPrice!=null&&isFinite(openPrice)&&price<openPrice);
+  const lineColor=isDown?'#e04040':'#1fa891';
+  // lineStyle: 2 = Dashed в LightweightCharts
+  const opts={price,color:lineColor,lineVisible:true,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:''};
   try{
     if(!ch.livePriceLine)ch.livePriceLine=ch.cs.createPriceLine(opts);
     else ch.livePriceLine.applyOptions(opts);
@@ -3690,7 +3693,7 @@ async function loadFsChart(idx){
   const fch=S.fsCharts[idx];const sym=S.fsSym;
   if(!sym||!fch.cs||!fch.lc)return;
   try{
-    const raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_LIMIT}`);
+    const raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
     if(S.fsSym!==sym)return;
     fch.candles=parseKlines(raw);
     if(fch.candles.length){
