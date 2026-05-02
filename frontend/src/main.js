@@ -227,7 +227,7 @@ const GROUP_COLORS=['','#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf
 const S = {
   syms:[], tk:{}, k5m:{}, k1h:{}, k1m:{}, mx:{}, btcR:[],
   charts: Array.from({length:9},()=>mkChart()),
-  wsScreener:null, wsCharts:null,
+  wsScreener:null, wsCharts:null, wsChartTrades:null,
   sortId:'vol24', sortDir:'desc', sortAlpha:false,
   tf:'5m', q:'', page:0, LC:null, bgDone:false,
   drawMode:null, drawIdCounter:0,
@@ -303,6 +303,8 @@ function ldSet(t,p,d){
 }
 function ldErr(m){const e=document.getElementById('lerr');e.style.display='block';e.innerHTML='⚠ '+String(m).replace(/\n/g,'<br>');}
 function ldHide(){const el=document.getElementById('ld');document.getElementById('app').style.visibility='visible';el.style.opacity='0';el.style.transition='opacity .3s';setTimeout(()=>el.remove(),320);}
+function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
+function setHtml(id,val){const el=document.getElementById(id);if(el)el.innerHTML=val;}
 
 // ═══════════════════════════════════════════════════════════════
 //  FETCH
@@ -992,15 +994,15 @@ async function loadChart(slot,sym){
   const ch=S.charts[slot];
   if(!sym){
     ch.sym=null;ch.candles=[];ch.drawings=[];
-    document.getElementById(`cs${slot}`).textContent='—';
-    ['cp','cg','cv','ctd','cco'].forEach(p=>document.getElementById(`${p}${slot}`).textContent='');
+    setText(`cs${slot}`,'—');
+    ['cp','cg','cv','ctd','cco'].forEach(p=>setText(`${p}${slot}`,''));
     const cb=document.getElementById(`cb${slot}`);
     if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
     return;
   }
   ch.sym=sym;ch.candles=[];ch.histLoading=false;
   ch.drawings=getSymDrawings(sym); // shared reference
-  document.getElementById(`cs${slot}`).textContent=sym.replace(/USDT$/,'');
+  setText(`cs${slot}`,sym.replace(/USDT$/,''));
   setCoinIcon(`ci${slot}`,sym);
   const cb=document.getElementById(`cb${slot}`);
   if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
@@ -1035,13 +1037,13 @@ function paintSlotData(slot){
 function updateChartHeader(slot,sym){
   const t=S.tk[sym]||{};const m=S.mx[sym]||{};
   // price is hidden via CSS (.cprc{display:none}) - kept for compat
-  if(t.p)document.getElementById(`cp${slot}`).textContent=fmtPrice(t.p);
+  if(t.p)setText(`cp${slot}`,fmtPrice(t.p));
   const cg=document.getElementById(`cg${slot}`);
-  if(t.c24!=null){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
-  document.getElementById(`cv${slot}`).innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
-  document.getElementById(`ctd${slot}`).innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
+  if(t.c24!=null&&cg){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
+  setHtml(`cv${slot}`,t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'');
+  setHtml(`ctd${slot}`,t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'');
   const corVal=m.corr14??m.corr;
-  document.getElementById(`cco${slot}`).innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+  setHtml(`cco${slot}`,corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'');
   // Update color dot
   const dot=document.getElementById(`cgd${slot}`);
   if(dot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';dot.style.background=col||'var(--bg4)';dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';dot.style.display=sym?'':'none';}
@@ -2302,11 +2304,11 @@ function updateRulerTooltip(ch){
     }
   }
 
-  document.getElementById('rtPct').textContent=(isUp?'+':'')+pct.toFixed(3)+'%';
+  setText('rtPct',(isUp?'+':'')+pct.toFixed(3)+'%');
   document.getElementById('rtPct').style.color=col;
-  document.getElementById('rtBars').textContent=`Баров: ${bars}`;
-  document.getElementById('rtTime').textContent=`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`;
-  document.getElementById('rtVol').textContent=`Объём: ${fk(vol)} USDT`;
+  setText('rtBars',`Баров: ${bars}`);
+  setText('rtTime',`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`);
+  setText('rtVol',`Объём: ${fk(vol)} USDT`);
   // Candle-based change: open of first candle → close of last candle in range
   let cndPctTxt='—';
   if(rangeCl.length>=1){
@@ -2314,14 +2316,14 @@ function updateRulerTooltip(ch){
     const closePrice=rangeCl[rangeCl.length-1].c;
     const cndPct=(closePrice-openPrice)/openPrice*100;
     const cndCol=cndPct>=0?'#1fa891':'#e04040';
-    document.getElementById('rtNatr').textContent=`Свечи: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`;
+    setText('rtNatr',`Свечи: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`);
     document.getElementById('rtNatr').style.color=cndCol;
   } else {
-    document.getElementById('rtNatr').textContent='Свечи: —';
+    setText('rtNatr','Свечи: —');
     document.getElementById('rtNatr').style.color='';
   }
-  document.getElementById('rtVr').textContent=`NATR: ${natrTxt}`;
-  document.getElementById('rtTr').textContent=`ОБ*: ${vrTxt}  СД*: ${trTxt}`;
+  setText('rtVr',`NATR: ${natrTxt}`);
+  setText('rtTr',`ОБ*: ${vrTxt}  СД*: ${trTxt}`);
   const tw=175,th=120;
   tt.style.left=Math.min(r.mouseX+18,window.innerWidth-tw-8)+'px';
   tt.style.top=Math.max(r.mouseY-th-8,4)+'px';
@@ -2410,7 +2412,7 @@ document.addEventListener('visibilitychange',()=>{
       rCanvas(fch);
     }catch(e){}
   });
-  setTimeout(()=>{startChartWS();startChartTradesWS();startScreenerWS();},500);
+  setTimeout(()=>{restartChartStreams(0);startScreenerWS();},500);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -2424,6 +2426,16 @@ let _lastScreenerWsMsgAt=0;
 let _lastChartWsMsgAt=0;
 let _wsChartTradesGen=0;
 let _wsChartTradesReconnectTimer=null;
+let _chartWsRestartTimer=null;
+
+function restartChartStreams(delayMs=350){
+  if(_chartWsRestartTimer){clearTimeout(_chartWsRestartTimer);_chartWsRestartTimer=null;}
+  _chartWsRestartTimer=setTimeout(()=>{
+    _chartWsRestartTimer=null;
+    startChartWS();
+    startChartTradesWS();
+  },Math.max(0,delayMs|0));
+}
 
 function startChartWS(){
   // Cancel any pending reconnect
@@ -2486,6 +2498,16 @@ function tfMs(tf){
   return 300000;
 }
 
+function closeChartTradesSockets(){
+  const cur=S.wsChartTrades;
+  if(Array.isArray(cur)){
+    for(const ws of cur){try{ws.close();}catch(e){}}
+  }else if(cur){
+    try{cur.close();}catch(e){}
+  }
+  S.wsChartTrades=null;
+}
+
 function syncLivePriceLabel(ch,price,openPrice=null){
   if(!ch?.cs||price==null||!isFinite(price))return;
   const lineColor=(openPrice!=null&&isFinite(openPrice)&&price<openPrice)?'#e04040':'#1fa891';
@@ -2498,16 +2520,12 @@ function syncLivePriceLabel(ch,price,openPrice=null){
 
 function startChartTradesWS(){
   if(_wsChartTradesReconnectTimer){clearTimeout(_wsChartTradesReconnectTimer);_wsChartTradesReconnectTimer=null;}
-  if(S.wsChartTrades){try{S.wsChartTrades.close();}catch(e){}S.wsChartTrades=null;}
+  closeChartTradesSockets();
   const syms=S.charts.map(c=>c.sym).filter(Boolean);
   if(!syms.length||!S.LC)return;
   const gen=++_wsChartTradesGen;
-  const streams=syms.map(s=>`${s.toLowerCase()}@aggTrade`).join('/');
-  const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
-  ws.onmessage=(evt)=>{
+  const onTrade=(d)=>{
     if(gen!==_wsChartTradesGen)return;
-    let d;
-    try{d=JSON.parse(evt.data).data;}catch(e){return;}
     if(!d?.s||d.p==null)return;
     const slot=S.charts.findIndex(c=>c.sym===d.s);
     if(slot===-1)return;
@@ -2549,12 +2567,28 @@ function startChartTradesWS(){
     }
   };
   const schedReconnect=()=>{
-    if(gen!==_wsChartTradesGen)return;
-    _wsChartTradesReconnectTimer=setTimeout(startChartTradesWS,4000);
+    if(gen!==_wsChartTradesGen||_wsChartTradesReconnectTimer)return;
+    _wsChartTradesReconnectTimer=setTimeout(()=>{
+      _wsChartTradesReconnectTimer=null;
+      startChartTradesWS();
+    },2500);
   };
-  ws.onclose=()=>schedReconnect();
-  ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
-  S.wsChartTrades=ws;
+  const sockets=[];
+  syms.forEach(sym=>{
+    const ws=new WebSocket(`wss://fstream.binance.com/ws/${sym.toLowerCase()}@aggTrade`);
+    ws.onmessage=(evt)=>{
+      let d;
+      try{
+        d=JSON.parse(evt.data);
+        if(d?.data)d=d.data;
+      }catch(e){return;}
+      onTrade(d);
+    };
+    ws.onclose=()=>schedReconnect();
+    ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
+    sockets.push(ws);
+  });
+  S.wsChartTrades=sockets;
 }
 
 function startRealtimeWatchdog(){
@@ -2569,7 +2603,7 @@ function startRealtimeWatchdog(){
       if(S.wsCharts&&_lastChartWsMsgAt&&now-_lastChartWsMsgAt>20000){
         console.warn('Chart WS stale, restarting');
         try{S.wsCharts.close();}catch(e){}
-        try{S.wsChartTrades?.close();}catch(e){}
+        closeChartTradesSockets();
       }
     }
     updTime();
@@ -2910,7 +2944,7 @@ document.addEventListener('DOMContentLoaded',()=>{
 function renderTable(){
   const rows=sortedRows();
   const countTxt=rows.length+' монет';
-  document.getElementById('hcount').textContent=countTxt;
+  setText('hcount',countTxt);
   renderScreenerInto(document.getElementById('sbody'),rows);
   if(S.fsOpen&&S.fsScreenerVisible){
     renderScreenerInto(document.getElementById('fsSbody'),rows);
@@ -2925,7 +2959,7 @@ function updatePagination(total){
   ['pgInfo','fsPgInfo'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=`${S.page+1} / ${tp}`;});
   ['pgPrev','fsPgPrev'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=S.page===0;});
   ['pgNext','fsPgNext'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=S.page>=tp-1;});
-  document.getElementById('pgTotal').textContent=`(${total} монет)`;
+  setText('pgTotal',`(${total} монет)`);
 }
 
 function updSortHdr(){
@@ -2973,7 +3007,7 @@ function setTf(tf,btnId){
   const syms=S.charts.map(c=>c.sym);
   S.charts.forEach(c=>{c.sym=null;c.candles=[];});
   syms.forEach((sym,i)=>{if(sym)loadChart(i,sym);});
-  setTimeout(()=>{startChartWS();startChartTradesWS();},700);
+  restartChartStreams(700);
 }
 
 function onSearch(q){S.q=q;S.page=0;updateCharts();renderTable();}
@@ -3021,7 +3055,7 @@ function updateCharts(){
     const ns=pageSyms[i]||null;
     if(S.charts[i].sym!==ns){changed=true;loadChart(i,ns);}
   }
-  if(changed)setTimeout(()=>{startChartWS();startChartTradesWS();},600);
+  if(changed)restartChartStreams(600);
   updatePagination(rows.length);
 }
 
@@ -3607,7 +3641,7 @@ function setGridSize(n){
   if(S.gridSize===n)return;S.gridSize=n;
   S.charts=Array.from({length:n},()=>mkChart());
   buildChartGrid();if(S.LC)for(let i=0;i<n;i++)initLCChart(i);
-  S.page=0;updateCharts();startChartWS();startChartTradesWS();
+  S.page=0;updateCharts();restartChartStreams(0);
   renderSettingsGen(document.getElementById('smodal-body'));
 }
 
@@ -3860,7 +3894,7 @@ async function main(){
     ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
-    updateCharts();startChartTradesWS();startScreenerWS();loadKlinesBackground();
+    updateCharts();restartChartStreams(0);startScreenerWS();loadKlinesBackground();
     startRealtimeWatchdog();
     setTimeout(autoResizeScreener,300);
   }catch(err){
