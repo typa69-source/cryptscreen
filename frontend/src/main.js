@@ -311,7 +311,7 @@ function setHtml(id,val){const el=document.getElementById(id);if(el)el.innerHTML
 // ═══════════════════════════════════════════════════════════════
 // Global rate limiter — track if we're banned
 let _bnBannedUntil = 0;
-const _reqQueue = []; let _reqRunning = 0; const _reqMax = 8;
+const _reqQueue = []; let _reqRunning = 0; const _reqMax = 3;
 
 // ── Pan state tracking — skip heavy DOM work while user is dragging charts ──
 let _anyChartPanning = false;
@@ -385,7 +385,7 @@ async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
     const results=await Promise.allSettled(batch.map(s=>fj(`${API}/klines?symbol=${s}&interval=${iv}&limit=${lim}`).then(d=>[s,parseKlines(d)])));
     for(const r of results)if(r.status==='fulfilled')out[r.value[0]]=r.value[1];
     if(pFrom!=null)ldSet(null,pFrom+Math.round((i/syms.length)*(pTo-pFrom)),`${iv}: ${Math.min(i+bs,syms.length)}/${syms.length}`);
-    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,300+Math.random()*200));
+    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,900+Math.random()*600));
   }
   return out;
 }
@@ -2574,8 +2574,11 @@ function startChartTradesWS(){
     },2500);
   };
   const sockets=[];
-  syms.forEach(sym=>{
-    const ws=new WebSocket(`wss://fstream.binance.com/ws/${sym.toLowerCase()}@aggTrade`);
+  const chunkSize=4; // keep connection count low (browser/proxy friendly)
+  for(let i=0;i<syms.length;i+=chunkSize){
+    const chunk=syms.slice(i,i+chunkSize);
+    const streams=chunk.map(sym=>`${sym.toLowerCase()}@aggTrade`).join('/');
+    const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
     ws.onmessage=(evt)=>{
       let d;
       try{
@@ -2587,7 +2590,7 @@ function startChartTradesWS(){
     ws.onclose=()=>schedReconnect();
     ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
     sockets.push(ws);
-  });
+  }
   S.wsChartTrades=sockets;
 }
 
@@ -3853,10 +3856,12 @@ function startFsWs(){
 async function loadKlinesBackground(){
   try{
     const top=Object.entries(S.tk).filter(([s])=>S.syms.includes(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
-    Object.assign(S.k5m,await batchKlines(top,'5m',300,null,null,20));
-    Object.assign(S.k1h,await batchKlines(top,'1h',170,null,null,20));
-    // Load 1m history for all symbols (previously it was only top-60).
-    Object.assign(S.k1m,await batchKlines(top,'1m',70,null,null,12));
+    const topFast=top.slice(0,120); // avoid Binance 429 flood
+    const top1m=top.slice(0,80);
+    Object.assign(S.k5m,await batchKlines(topFast,'5m',300,null,null,8));
+    Object.assign(S.k1h,await batchKlines(topFast,'1h',170,null,null,8));
+    // 1m is the heaviest endpoint; keep a narrower universe.
+    Object.assign(S.k1m,await batchKlines(top1m,'1m',70,null,null,6));
     calcAll();renderTable();S.bgDone=true;
   }catch(e){console.warn('bg klines',e);}
 }
