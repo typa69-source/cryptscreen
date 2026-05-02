@@ -39,18 +39,18 @@ function buildAuthUI() {
         <button class="auth-tab on" data-tab="login">Войти</button>
         <button class="auth-tab" data-tab="register">Регистрация</button>
       </div>
-      <div id="authForm">
+      <form id="authForm">
         <div class="auth-field"><label class="auth-label">EMAIL</label><input class="auth-input" id="authEmail" type="email" placeholder="you@example.com" autocomplete="email"></div>
         <div class="auth-field"><label class="auth-label">ПАРОЛЬ</label><input class="auth-input" id="authPass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
         <div class="auth-field" id="authPassConfirmField" style="display:none"><label class="auth-label">ПОДТВЕРДИТЕ ПАРОЛЬ</label><input class="auth-input" id="authPassConfirm" type="password" placeholder="••••••••"></div>
-        <button class="auth-btn" id="authSubmit">ВОЙТИ</button>
+        <button class="auth-btn" id="authSubmit" type="submit">ВОЙТИ</button>
         <div class="auth-err" id="authErr"></div>
         <div class="auth-ok" id="authOk"></div>
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid #252530;text-align:center">
-          <button class="auth-guest" id="authGuest">войти без регистрации →</button>
+          <button class="auth-guest" id="authGuest" type="button">войти без регистрации →</button>
           <div style="font-size:9px;color:#454555;margin-top:5px">настройки не сохраняются</div>
         </div>
-      </div>
+      </form>
     </div>
     <style>
     .auth-guest{background:none;border:none;color:#454555;cursor:pointer;font:inherit;font-size:10px;transition:color .15s;padding:2px 0}
@@ -71,7 +71,8 @@ function buildAuthUI() {
     })
   })
 
-  document.getElementById('authSubmit').addEventListener('click', async () => {
+  document.getElementById('authForm').addEventListener('submit', async (e) => {
+    e.preventDefault()
     const email = document.getElementById('authEmail').value.trim()
     const password = document.getElementById('authPass').value
     const errEl = document.getElementById('authErr')
@@ -116,10 +117,7 @@ function buildAuthUI() {
     startApp()
   })
 
-  // Enter key support
-  el.querySelectorAll('.auth-input').forEach(inp => {
-    inp.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('authSubmit').click() })
-  })
+  // Native form submit handles Enter key in inputs
 }
 
 // Load user settings from backend
@@ -194,8 +192,9 @@ const API = 'https://fapi.binance.com/fapi/v1';
 // Timezone: offset candle times to device local time
 const TZ_OFFSET_S = -(new Date().getTimezoneOffset() * 60); // seconds to add to UTC
 function toChartTime(ms){ return Math.floor(ms/1000) + TZ_OFFSET_S; }
-const HIST_LIMIT = 500;   // свечей при подгрузке истории (листание влево)
-const HIST_INITIAL = 200; // свечей при первоначальной загрузке графика (быстрый старт)
+const HIST_LIMIT = 500;    // свечей при подгрузке истории (листание влево)
+const HIST_INITIAL = 1200; // свечей при первоначальной загрузке графика (чтобы реже ходить в API)
+const HIST_CACHE_MAX = 2000;
 const HIST_TRIGGER = 15;
 const FS_TFS = ['1m','3m','5m','15m','30m','1h','4h','1d','3d','1w'];
 const DRAW_HIT = 8; // px threshold for hover detection
@@ -270,6 +269,7 @@ const S = {
   emaSymOverrides:{},
   emaSymEnabled:{},
   emaAlertPairs:[],
+  histCache:{}, // key: "${tf}:${sym}" -> candles[]
 };
 const DRAW_HISTORY_LIMIT=60;
 let _lastDrawSym=null;
@@ -298,12 +298,23 @@ function activeCols(){
 //  LOADING UI
 // ═══════════════════════════════════════════════════════════════
 function ldSet(t,p,d){
-  if(t!=null)document.getElementById('ltxt').textContent=t;
-  if(p!=null)document.getElementById('lfill').style.width=p+'%';
-  if(d!=null)document.getElementById('llog').textContent=d;
+  const tEl=document.getElementById('ltxt');
+  const pEl=document.getElementById('lfill');
+  const dEl=document.getElementById('llog');
+  if(t!=null&&tEl)tEl.textContent=t;
+  if(p!=null&&pEl)pEl.style.width=p+'%';
+  if(d!=null&&dEl)dEl.textContent=d;
 }
-function ldErr(m){const e=document.getElementById('lerr');e.style.display='block';e.innerHTML='⚠ '+String(m).replace(/\n/g,'<br>');}
-function ldHide(){const el=document.getElementById('ld');document.getElementById('app').style.visibility='visible';el.style.opacity='0';el.style.transition='opacity .3s';setTimeout(()=>el.remove(),320);}
+function ldErr(m){const e=document.getElementById('lerr');if(!e)return;e.style.display='block';e.innerHTML='⚠ '+String(m).replace(/\n/g,'<br>');}
+function ldHide(){
+  const el=document.getElementById('ld');
+  const appEl=document.getElementById('app');
+  if(appEl)appEl.style.visibility='visible';
+  if(!el)return;
+  el.style.opacity='0';
+  el.style.transition='opacity .3s';
+  setTimeout(()=>el.remove(),320);
+}
 function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
 function setHtml(id,val){const el=document.getElementById(id);if(el)el.innerHTML=val;}
 
@@ -1009,10 +1020,19 @@ async function loadChart(slot,sym){
   if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
   initLCChart(slot);
   const wm=document.getElementById(`wm${slot}`);if(wm)wm.textContent=sym.replace(/USDT$/,'');
+  const cacheKey=`${S.tf}:${sym}`;
+  const cached=S.histCache[cacheKey];
+  if(Array.isArray(cached)&&cached.length){
+    ch.candles=cached.slice(-HIST_CACHE_MAX);
+    paintSlotData(slot);
+    if(S.showDensity)fetchOrderBook(sym);
+    return;
+  }
   try{
     const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
     if(ch.sym!==sym)return;
-    ch.candles=parseKlines(raw);
+    ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+    S.histCache[cacheKey]=ch.candles.slice();
     paintSlotData(slot);
     if(S.showDensity)fetchOrderBook(sym); // #1: pre-fetch OB for density
   }catch(e){
@@ -1059,7 +1079,8 @@ async function loadMoreHistory(slot){
     if(!raw||!raw.length){ch.histLoading=false;return;}
     const nc=parseKlines(raw);if(!ch.cs||!ch.lc)return;
     const vr=ch.lc.timeScale().getVisibleRange();
-    ch.candles=[...nc,...ch.candles];
+    ch.candles=[...nc,...ch.candles].slice(-HIST_CACHE_MAX);
+    S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice();
     // Schedule heavy setData on idle to avoid blocking pan interaction
     const merged=ch.candles;
     const doSet=()=>{
@@ -2457,6 +2478,8 @@ function startChartWS(){
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
     if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
     else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)ch.candles.push(candle);
+    ch._lastRtUpdateTs=Date.now();
+    S.histCache[`${S.tf}:${k.s}`]=ch.candles.slice(-HIST_CACHE_MAX);
     ch._pendingCandle=candle;
     if(!ch._rafPending){
       ch._rafPending=true;
@@ -2480,6 +2503,7 @@ function startChartWS(){
   };
   const schedReconnect=()=>{
     if(gen!==_wsChartsGen)return; // stale, don't reconnect
+    if(_wsChartsReconnectTimer)return;
     _wsChartsReconnectTimer=setTimeout(startChartWS,4000);
   };
   ws.onclose=()=>schedReconnect();
@@ -2553,6 +2577,8 @@ function startChartTradesWS(){
     }else{
       return;
     }
+    ch._lastRtUpdateTs=Date.now();
+    S.histCache[`${S.tf}:${d.s}`]=ch.candles.slice(-HIST_CACHE_MAX);
     if(!ch._tradeRafPending){
       ch._tradeRafPending=true;
       requestAnimationFrame(()=>{
@@ -2576,25 +2602,20 @@ function startChartTradesWS(){
       startChartTradesWS();
     },2500);
   };
-  const sockets=[];
-  const chunkSize=4; // keep connection count low (browser/proxy friendly)
-  for(let i=0;i<syms.length;i+=chunkSize){
-    const chunk=syms.slice(i,i+chunkSize);
-    const streams=chunk.map(sym=>`${sym.toLowerCase()}@aggTrade`).join('/');
-    const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
-    ws.onmessage=(evt)=>{
-      let d;
-      try{
-        d=JSON.parse(evt.data);
-        if(d?.data)d=d.data;
-      }catch(e){return;}
-      onTrade(d);
-    };
-    ws.onclose=()=>schedReconnect();
-    ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
-    sockets.push(ws);
-  }
-  S.wsChartTrades=sockets;
+  const streams=syms.map(sym=>`${sym.toLowerCase()}@aggTrade`).join('/');
+  const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
+  ws.onmessage=(evt)=>{
+    _lastChartWsMsgAt=Date.now();
+    let d;
+    try{
+      d=JSON.parse(evt.data);
+      if(d?.data)d=d.data;
+    }catch(e){return;}
+    onTrade(d);
+  };
+  ws.onclose=()=>schedReconnect();
+  ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
+  S.wsChartTrades=ws;
 }
 
 function startRealtimeWatchdog(){
@@ -2614,6 +2635,33 @@ function startRealtimeWatchdog(){
     }
     updTime();
   },1000);
+  if(S._rtCandleFallback)return;
+  S._rtCandleFallback=setInterval(()=>{
+    if(document.hidden)return;
+    const now=Date.now();
+    S.charts.forEach(ch=>{
+      if(!ch?.sym||!ch?.cs||!ch.candles?.length)return;
+      const staleFor=now-(ch._lastRtUpdateTs||0);
+      if(staleFor<5000)return;
+      fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=2`,6000,0).then(raw=>{
+        if(!ch?.cs||!ch.candles?.length)return;
+        const nc=parseKlines(raw);
+        for(const c of nc){
+          const last=ch.candles[ch.candles.length-1];
+          if(c.t===last?.t)ch.candles[ch.candles.length-1]=c;
+          else if(c.t>last?.t)ch.candles.push(c);
+        }
+        ch.candles=ch.candles.slice(-HIST_CACHE_MAX);
+        const lc=ch.candles[ch.candles.length-1];
+        if(!lc)return;
+        ch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
+        ch.vs.update({time:toChartTime(lc.t),value:lc.qv,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
+        syncLivePriceLabel(ch,lc.c,lc.o);
+        ch._lastRtUpdateTs=Date.now();
+        S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice();
+      }).catch(()=>{});
+    });
+  },2500);
 }
 
 // ── Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) ──
