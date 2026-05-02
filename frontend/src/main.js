@@ -195,6 +195,7 @@ function toChartTime(ms){ return Math.floor(ms/1000) + TZ_OFFSET_S; }
 const HIST_LIMIT = 500;    // свечей при подгрузке истории (листание влево)
 const HIST_INITIAL = 1200; // свечей при первоначальной загрузке графика (чтобы реже ходить в API)
 const HIST_CACHE_MAX = 2000;
+const MIN_CHART_CANDLES = 32; // меньше — считаем данные битым и перезапрашиваем
 const HIST_TRIGGER = 15;
 const FS_TFS = ['1m','3m','5m','15m','30m','1h','4h','1d','3d','1w'];
 const DRAW_HIT = 8; // px threshold for hover detection
@@ -202,7 +203,7 @@ const DRAW_HIT = 8; // px threshold for hover detection
 const ALL_COLS = [
   {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены за 24 часа (%)'},
   {id:'cday',   l:'ИЗМ',  s:'день%',  tip:'Изменение цены за текущий день (%)'},
-  {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Дневной диапазон (High-Low)/Low%'},
+  {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Диапазон с начала локального календарного дня (5м свечи с полуночи по времени устройства)'},
   {id:'r24',    l:'РЕНЖ', s:'24ч',    tip:'Диапазон за 24ч по 5м свечам'},
   {id:'r7d',    l:'РЕНЖ', s:'7д',     tip:'Диапазон за 7 дней по 1ч свечам'},
   {id:'na30',   l:'NATR', s:'1м/30',  tip:'Нормализованный ATR(30) на 1м ТФ'},
@@ -234,6 +235,8 @@ const S = {
   symDrawings:{},      // drawings per symbol, shared between grid & FS
   drawUndo:{},         // sym -> [drawings snapshot...]
   drawRedo:{},         // sym -> [drawings snapshot...]
+  chartRightOffset:10, // пустые бары справа (Binance timeScale rightOffset)
+  chartVisibleBars:96, // сколько последних свечей показывать по умолчанию (масштаб)
   minVol:0, minTrd:0, gridSize:9, upColor:'#1fa891', wmVisible:true, sortAbs:true,
   screenerVisible:true, fsScreenerVisible:true,
   colOrder: ALL_COLS.map(c=>c.id),
@@ -273,6 +276,52 @@ const S = {
 };
 const DRAW_HISTORY_LIMIT=60;
 let _lastDrawSym=null;
+let _undoSymOrder=[];
+let _redoSymOrder=[];
+
+function loadChartViewPrefs(){
+  try{
+    const raw=localStorage.getItem('cs_chartView');
+    if(!raw)return;
+    const j=JSON.parse(raw);
+    if(j.chartRightOffset!=null)S.chartRightOffset=Math.max(0,Math.min(40,+j.chartRightOffset));
+    if(j.chartVisibleBars!=null)S.chartVisibleBars=Math.max(40,Math.min(220,+j.chartVisibleBars));
+  }catch(e){}
+}
+function saveChartViewPrefs(){
+  try{
+    localStorage.setItem('cs_chartView',JSON.stringify({
+      chartRightOffset:S.chartRightOffset,
+      chartVisibleBars:S.chartVisibleBars,
+    }));
+  }catch(e){}
+}
+
+/** После setData: отступ справа + «зум» по числу видимых свечей */
+function applyDefaultChartView(ch){
+  if(!ch?.lc||!ch.candles?.length)return;
+  const len=ch.candles.length;
+  const vis=Math.max(12,Math.min(S.chartVisibleBars|0,len));
+  const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+  try{
+    ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
+    if(len<=vis)ch.lc.timeScale().fitContent();
+    else ch.lc.timeScale().setVisibleLogicalRange({from:len-vis,to:len-1});
+    ch.lc.timeScale().applyOptions({rightOffset:ro});
+  }catch(e){}
+}
+
+function applyDefaultChartViewAll(){
+  S.charts.forEach(ch=>{if(ch.lc&&ch.candles?.length)applyDefaultChartView(ch);});
+  if(S.fsOpen)S.fsCharts.forEach(ch=>{if(ch.lc&&ch.candles?.length)applyDefaultChartView(ch);});
+}
+
+function calcRangeFromCandles(candles){
+  if(!candles||!candles.length)return null;
+  const H=candles.reduce((m,k)=>Math.max(m,k.h),-Infinity);
+  const L=candles.reduce((m,k)=>Math.min(m,k.l),Infinity);
+  return L>0?(H-L)/L*100:null;
+}
 
 function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
@@ -472,9 +521,11 @@ function calcAll(){
       if(todayCandle)cday=(t.p-todayCandle.o)/todayCandle.o*100;
     }
     const corr14=k5&&k5.length>=15&&btcR14.length?calcCorr(calcRets(k5.slice(-15)),btcR14):null;
+    const k5today=k5&&k5.length?k5.filter(c=>c.t>=dayStartMs):[];
+    const rtd=calcRangeFromCandles(k5today);
     const m={
       sym,price:t.p,ch24:t.c24,cday,
-      rtd:(t.h24&&t.l24)?(t.h24-t.l24)/t.l24*100:null,
+      rtd,
       r24:calcRange(k5,288),r7d:calcRange(k1h,168),
       na30:calcNATRFlexible(k1m,30),na14:calcNATRFlexible(k5,14),r1m5:calcRangeFlexible(k1m,5),
       tr5:calcRel(k5,14,'tr'),tr1h:calcRel(k1h,24,'tr'),
@@ -955,10 +1006,41 @@ function _getDrawStack(map,sym){
 }
 function pushDrawUndo(sym){
   if(!sym)return;
+  S.drawRedo={};
+  _redoSymOrder=[];
   const st=_getDrawStack(S.drawUndo,sym);
   st.push(cloneDrawings(getSymDrawings(sym)));
   if(st.length>DRAW_HISTORY_LIMIT)st.shift();
-  S.drawRedo[sym]=[];
+  _undoSymOrder.push(sym);
+  if(_undoSymOrder.length>DRAW_HISTORY_LIMIT)_undoSymOrder.shift();
+}
+function undoLastDrawingAction(){
+  while(_undoSymOrder.length){
+    const sym=_undoSymOrder[_undoSymOrder.length-1];
+    const st=_getDrawStack(S.drawUndo,sym);
+    if(!st.length){_undoSymOrder.pop();continue;}
+    _undoSymOrder.pop();
+    _getDrawStack(S.drawRedo,sym).push(cloneDrawings(getSymDrawings(sym)));
+    applySymDrawings(sym,st.pop());
+    _lastDrawSym=sym;
+    _redoSymOrder.push(sym);
+    return true;
+  }
+  return false;
+}
+function redoLastDrawingAction(){
+  while(_redoSymOrder.length){
+    const sym=_redoSymOrder[_redoSymOrder.length-1];
+    const rst=_getDrawStack(S.drawRedo,sym);
+    if(!rst.length){_redoSymOrder.pop();continue;}
+    _redoSymOrder.pop();
+    _getDrawStack(S.drawUndo,sym).push(cloneDrawings(getSymDrawings(sym)));
+    applySymDrawings(sym,rst.pop());
+    _lastDrawSym=sym;
+    _undoSymOrder.push(sym);
+    return true;
+  }
+  return false;
 }
 function applySymDrawings(sym,drawings){
   if(!sym)return;
