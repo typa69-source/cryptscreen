@@ -2473,13 +2473,14 @@ function startChartWS(){
     let k;
     try{k=JSON.parse(evt.data).data?.k;}catch(e){return;}
     if(!k)return;
-    const slot=S.charts.findIndex(c=>c.sym===k.s);if(slot===-1)return;
+    const symU=String(k.s||'').toUpperCase();
+    const slot=S.charts.findIndex(c=>c.sym===symU);if(slot===-1)return;
     const ch=S.charts[slot];if(!ch.cs)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
     if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
     else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)ch.candles.push(candle);
     ch._lastRtUpdateTs=Date.now();
-    S.histCache[`${S.tf}:${k.s}`]=ch.candles.slice(-HIST_CACHE_MAX);
+    S.histCache[`${S.tf}:${symU}`]=ch.candles.slice(-HIST_CACHE_MAX);
     ch._pendingCandle=candle;
     if(!ch._rafPending){
       ch._rafPending=true;
@@ -2495,7 +2496,7 @@ function startChartWS(){
         ch.drawings.forEach(d=>{if(d.type==='aray'||d.type==='atline')checkAlerts(ch,d);});
         if(S.emaVisible)checkEMACrossovers(ch);
         const cpEl=document.getElementById(`cp${slot}`);if(cpEl)cpEl.textContent=fmtPrice(c.c);
-        const t=S.tk[k.s];const cg=document.getElementById(`cg${slot}`);
+        const t=S.tk[symU];const cg=document.getElementById(`cg${slot}`);
         if(t?.c24!=null&&cg){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
         rCanvas(ch);
       });
@@ -2521,6 +2522,29 @@ function tfMs(tf){
   if(tf==='4h')return 14400000;
   if(tf==='1d')return 86400000;
   return 300000;
+}
+
+/** Обновить текущую (формирующуюся) свечу по «живой» цене (book mid / last trade). */
+function applyLivePriceToCandle(ch,tfStr,price,tsMs){
+  if(!ch?.candles?.length)return false;
+  if(price==null||!isFinite(price))return false;
+  const ms=tfMs(tfStr);
+  const ts=tsMs||Date.now();
+  const bucketTs=Math.floor(ts/ms)*ms;
+  let c=ch.candles[ch.candles.length-1];
+  if(!c)return false;
+  if(bucketTs===c.t){
+    c.c=price;
+    if(price>c.h)c.h=price;
+    if(price<c.l)c.l=price;
+  }else if(bucketTs>c.t){
+    const nc={t:bucketTs,o:c.c,h:Math.max(c.c,price),l:Math.min(c.c,price),c:price,qv:c.qv||0,v:c.v||0,tr:c.tr||0};
+    ch.candles.push(nc);
+    if(ch.candles.length>HIST_CACHE_MAX)ch.candles.splice(0,ch.candles.length-HIST_CACHE_MAX);
+  }else{
+    return false;
+  }
+  return true;
 }
 
 function closeChartTradesSockets(){
@@ -2551,34 +2575,25 @@ function startChartTradesWS(){
   const syms=S.charts.map(c=>c.sym).filter(Boolean);
   if(!syms.length||!S.LC)return;
   const gen=++_wsChartTradesGen;
-  const onTrade=(d)=>{
+  const onBookTicker=(d)=>{
     if(gen!==_wsChartTradesGen)return;
-    if(!d?.s||d.p==null)return;
-    const slot=S.charts.findIndex(c=>c.sym===d.s);
+    if(!d||d.e!=='bookTicker')return;
+    const symU=String(d.s||'').toUpperCase();
+    if(!symU)return;
+    const bid=+d.b,ask=+d.a;
+    let price=null;
+    if(isFinite(bid)&&isFinite(ask)&&bid>0&&ask>0)price=(bid+ask)/2;
+    else if(isFinite(bid)&&bid>0)price=bid;
+    else if(isFinite(ask)&&ask>0)price=ask;
+    if(price==null)return;
+    const slot=S.charts.findIndex(c=>c.sym===symU);
     if(slot===-1)return;
     const ch=S.charts[slot];
-    if(!ch?.cs||!Array.isArray(ch.candles)||!ch.candles.length)return;
-    const price=+d.p;
-    if(!isFinite(price))return;
-    const ms=tfMs(S.tf);
-    const ts=(+d.T||Date.now());
-    const bucketTs=Math.floor(ts/ms)*ms;
-    let c=ch.candles[ch.candles.length-1];
-    if(!c)return;
-    if(bucketTs===c.t){
-      c.c=price;
-      if(price>c.h)c.h=price;
-      if(price<c.l)c.l=price;
-    }else if(bucketTs>c.t){
-      const nc={t:bucketTs,o:c.c,h:Math.max(c.c,price),l:Math.min(c.c,price),c:price,qv:c.qv||0,v:c.v||0,tr:c.tr||0};
-      ch.candles.push(nc);
-      c=nc;
-      if(ch.candles.length>1500)ch.candles.splice(0,ch.candles.length-1500);
-    }else{
-      return;
-    }
+    if(!ch?.cs||!ch.candles?.length)return;
+    const ts=+(d.T||d.E)||Date.now();
+    if(!applyLivePriceToCandle(ch,S.tf,price,ts))return;
     ch._lastRtUpdateTs=Date.now();
-    S.histCache[`${S.tf}:${d.s}`]=ch.candles.slice(-HIST_CACHE_MAX);
+    S.histCache[`${S.tf}:${symU}`]=ch.candles.slice(-HIST_CACHE_MAX);
     if(!ch._tradeRafPending){
       ch._tradeRafPending=true;
       requestAnimationFrame(()=>{
@@ -2602,16 +2617,15 @@ function startChartTradesWS(){
       startChartTradesWS();
     },2500);
   };
-  const streams=syms.map(sym=>`${sym.toLowerCase()}@aggTrade`).join('/');
+  const streams=syms.map(sym=>`${sym.toLowerCase()}@bookTicker`).join('/');
   const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
   ws.onmessage=(evt)=>{
     _lastChartWsMsgAt=Date.now();
-    let d;
-    try{
-      d=JSON.parse(evt.data);
-      if(d?.data)d=d.data;
-    }catch(e){return;}
-    onTrade(d);
+    let wrap;
+    try{wrap=JSON.parse(evt.data);}catch(e){return;}
+    const d=wrap?.data;
+    if(!d)return;
+    onBookTicker(d);
   };
   ws.onclose=()=>schedReconnect();
   ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
@@ -3873,11 +3887,40 @@ function startFsWs(){
   if(!S.fsSym||!S.fsOpen)return;
   const gen=++_wsFsGen;
   const tfs=[...new Set(S.fsCharts.map(c=>c.tf))];
-  const streams=tfs.map(tf=>`${S.fsSym.toLowerCase()}@kline_${tf}`).join('/');
+  const symL=S.fsSym.toLowerCase();
+  const klinePart=tfs.map(tf=>`${symL}@kline_${tf}`).join('/');
+  const streams=`${klinePart}/${symL}@bookTicker`;
   const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${streams}`);
   ws.onmessage=(evt)=>{
     if(gen!==_wsFsGen)return;
-    const k=JSON.parse(evt.data).data?.k;if(!k)return;
+    let data;
+    try{data=JSON.parse(evt.data).data;}catch(e){return;}
+    if(!data)return;
+    if(data.e==='bookTicker'){
+      if(String(data.s||'').toUpperCase()!==String(S.fsSym||'').toUpperCase())return;
+      const bid=+data.b,ask=+data.a;
+      let price=null;
+      if(isFinite(bid)&&isFinite(ask)&&bid>0&&ask>0)price=(bid+ask)/2;
+      else if(isFinite(bid)&&bid>0)price=bid;
+      else if(isFinite(ask)&&ask>0)price=ask;
+      if(price==null)return;
+      const ts=+(data.T||data.E)||Date.now();
+      S.fsCharts.forEach(fch=>{
+        if(!fch.cs||!fch.candles?.length)return;
+        if(!applyLivePriceToCandle(fch,fch.tf,price,ts))return;
+        fch._lastRtUpdateTs=Date.now();
+        S.histCache[`${fch.tf}:${S.fsSym}`]=fch.candles.slice(-HIST_CACHE_MAX);
+        try{
+          const lc=fch.candles[fch.candles.length-1];
+          fch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
+          syncLivePriceLabel(fch,lc.c,lc.o);
+        }catch(e){}
+        rCanvas(fch);
+      });
+      return;
+    }
+    if(data.e!=='kline'||!data.k)return;
+    const k=data.k;
     const tf=k.i;
     S.fsCharts.forEach(fch=>{
       if(fch.tf!==tf||!fch.cs)return;
@@ -3889,6 +3932,8 @@ function startFsWs(){
       }catch(e){}
       if(fch.candles.length&&fch.candles[fch.candles.length-1].t===candle.t)fch.candles[fch.candles.length-1]=candle;
       else if(fch.candles.length&&candle.t>fch.candles[fch.candles.length-1].t)fch.candles.push(candle);
+      fch._lastRtUpdateTs=Date.now();
+      S.histCache[`${fch.tf}:${S.fsSym}`]=fch.candles.slice(-HIST_CACHE_MAX);
       rCanvas(fch);
     });
   };
