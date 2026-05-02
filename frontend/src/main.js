@@ -306,7 +306,7 @@ function applyDefaultChartView(ch){
   try{
     ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
     if(len<=vis)ch.lc.timeScale().fitContent();
-    else ch.lc.timeScale().setVisibleLogicalRange({from:len-vis,to:len-1});
+    else ch.lc.timeScale().setVisibleLogicalRange({from:Math.max(0,len-vis),to:len-1});
     ch.lc.timeScale().applyOptions({rightOffset:ro});
   }catch(e){}
 }
@@ -514,7 +514,7 @@ function calcAll(){
   for(const sym of S.syms){
     const t=S.tk[sym];if(!t)continue;
     const k5=S.k5m[sym],k1h=S.k1h[sym],k1m=S.k1m[sym];
-    // cday: change from first 1h candle of current UTC day
+    // cday: от первой 1ч свечи локального календарного дня
     let cday=null;
     if(k1h&&k1h.length>0){
       const todayCandle=k1h.find(c=>c.t>=dayStartMs);
@@ -1054,36 +1054,6 @@ function applySymDrawings(sym,drawings){
     }
   });
 }
-function undoDrawings(sym){
-  const st=_getDrawStack(S.drawUndo,sym);if(!st.length)return false;
-  _getDrawStack(S.drawRedo,sym).push(cloneDrawings(getSymDrawings(sym)));
-  applySymDrawings(sym,st.pop());
-  return true;
-}
-function redoDrawings(sym){
-  const st=_getDrawStack(S.drawRedo,sym);if(!st.length)return false;
-  _getDrawStack(S.drawUndo,sym).push(cloneDrawings(getSymDrawings(sym)));
-  applySymDrawings(sym,st.pop());
-  return true;
-}
-function resolveUndoSym(){
-  if(_lastDrawSym)return _lastDrawSym;
-  if(S.fsOpen&&S.fsSym)return S.fsSym;
-  const hov=S.charts.find(ch=>ch.hoverX>0&&ch.hoverY>0&&ch.sym);
-  return hov?.sym||S.charts.find(ch=>ch.sym)?.sym||null;
-}
-function resolveUndoCandidates(){
-  const out=[];
-  const push=sym=>{if(sym&&!out.includes(sym))out.push(sym);};
-  push(_lastDrawSym);
-  if(S.fsOpen)push(S.fsSym);
-  const hov=S.charts.find(ch=>ch.hoverX>0&&ch.hoverY>0&&ch.sym);
-  push(hov?.sym);
-  S.charts.forEach(ch=>push(ch.sym));
-  Object.keys(S.symDrawings||{}).forEach(push);
-  return out;
-}
-
 async function loadChart(slot,sym){
   const ch=S.charts[slot];
   if(!sym){
@@ -1104,17 +1074,23 @@ async function loadChart(slot,sym){
   const wm=document.getElementById(`wm${slot}`);if(wm)wm.textContent=sym.replace(/USDT$/,'');
   const cacheKey=`${S.tf}:${sym}`;
   const cached=S.histCache[cacheKey];
-  if(Array.isArray(cached)&&cached.length){
+  if(Array.isArray(cached)&&cached.length>=MIN_CHART_CANDLES){
     ch.candles=cached.slice(-HIST_CACHE_MAX);
     paintSlotData(slot);
     if(S.showDensity)fetchOrderBook(sym);
     return;
   }
+  if(Array.isArray(cached)&&cached.length&&cached.length<MIN_CHART_CANDLES)delete S.histCache[cacheKey];
   try{
-    const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
+    let raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
     if(ch.sym!==sym)return;
     ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
-    S.histCache[cacheKey]=ch.candles.slice();
+    if(ch.candles.length<MIN_CHART_CANDLES){
+      raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      if(ch.sym!==sym)return;
+      ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+    }
+    if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[cacheKey]=ch.candles.slice();
     paintSlotData(slot);
     if(S.showDensity)fetchOrderBook(sym); // #1: pre-fetch OB for density
   }catch(e){
@@ -1125,13 +1101,31 @@ async function loadChart(slot,sym){
 function paintSlotData(slot){
   const ch=S.charts[slot];
   if(!ch.candles.length||!ch.cs)return;
+  if(ch.candles.length<MIN_CHART_CANDLES){
+    ch._thinPaintRetries=(ch._thinPaintRetries||0)+1;
+    if(ch._thinPaintRetries<=3&&ch.sym){
+      const sym=ch.sym,ck=`${S.tf}:${sym}`,tf=S.tf;
+      delete S.histCache[ck];
+      (async()=>{
+        try{
+          const raw=await fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+          if(ch.sym!==sym||!ch.cs)return;
+          ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+          if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[ck]=ch.candles.slice();
+          paintSlotData(slot);
+        }catch(e){}
+      })();
+    }
+    return;
+  }
+  ch._thinPaintRetries=0;
   try{
     const lp=ch.candles[ch.candles.length-1].c;
     ch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
     ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
     syncLivePriceLabel(ch,lp,ch.candles[ch.candles.length-1].o);
-    ch.lc.timeScale().fitContent();
+    applyDefaultChartView(ch);
     updateChartHeader(slot,ch.sym);
     rCanvas(ch);
   }catch(e){console.warn('paintSlotData',e);}
@@ -2434,6 +2428,85 @@ function updateRulerTooltip(ch){
   tt.style.display='block';
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  БЫСТРЫЙ ПОИСК МОНЕТЫ (печать с клавиатуры)
+// ═══════════════════════════════════════════════════════════════
+function ensureQuickFindUI(){
+  if(document.getElementById('quickFindModal'))return;
+  const d=document.createElement('div');
+  d.id='quickFindModal';
+  d.style.cssText='display:none;position:fixed;inset:0;z-index:8000;background:rgba(0,0,0,.5);align-items:flex-start;justify-content:center;padding-top:10vh;';
+  d.innerHTML=`<div style="background:#111113;border:1px solid #252530;border-radius:8px;width:min(440px,94vw);box-shadow:0 12px 40px #000;">
+  <div style="padding:10px 12px;border-bottom:1px solid #252530;font-size:11px;color:#80808f">Переход к монете</div>
+  <div style="padding:10px 12px">
+    <input id="qfInput" type="text" autocomplete="off" spellcheck="false" placeholder="Начните вводить тикер…"
+      style="width:100%;box-sizing:border-box;background:#161619;border:1px solid #252530;border-radius:4px;padding:8px 10px;color:#e2e8f0;font:inherit;font-size:12px;outline:none">
+    <div id="qfList" style="max-height:240px;overflow:auto;margin-top:8px;font-size:11px"></div>
+    <div style="font-size:9px;color:#454555;margin-top:8px">Enter — выбрать первую · Esc — закрыть</div>
+  </div></div>`;
+  document.body.appendChild(d);
+  d.addEventListener('mousedown',ev=>{if(ev.target===d)closeQuickFind();});
+  const inp=document.getElementById('qfInput');
+  inp.addEventListener('input',renderQuickFindList);
+  inp.addEventListener('keydown',ev=>{
+    if(ev.key==='Enter'){
+      const first=document.querySelector('#qfList .qf-item');
+      if(first?.dataset?.sym)jumpToSymbol(first.dataset.sym);
+    }
+  });
+}
+function openQuickFind(seed){
+  ensureQuickFindUI();
+  const m=document.getElementById('quickFindModal');
+  const inp=document.getElementById('qfInput');
+  inp.value=seed!=null&&seed!==''?String(seed).slice(0,24):'';
+  renderQuickFindList();
+  m.style.display='flex';
+  inp.focus();inp.select();
+}
+function closeQuickFind(){
+  const m=document.getElementById('quickFindModal');
+  if(m){m.style.display='none';}
+}
+function renderQuickFindList(){
+  const list=document.getElementById('qfList');
+  const inp=document.getElementById('qfInput');
+  if(!list||!inp)return;
+  const q=inp.value.trim().toUpperCase();
+  if(!q){list.innerHTML='<div style="padding:8px;color:#606070">Введите символы тикера</div>';return;}
+  if(!S.syms.length){list.innerHTML='<div style="padding:8px;color:#606070">Список монет ещё не загружен</div>';return;}
+  const rows=S.syms.filter(s=>s.includes(q)).slice(0,50);
+  if(!rows.length){list.innerHTML='<div style="padding:8px;color:#606070">Нет совпадений</div>';return;}
+  list.innerHTML=rows.map(s=>{
+    const base=s.replace(/USDT$/,'');
+    return`<div class="qf-item" data-sym="${s}" style="padding:7px 9px;cursor:pointer;border-radius:4px;color:#e2e8f0">${base}</div>`;
+  }).join('');
+  list.querySelectorAll('.qf-item').forEach(el=>{
+    el.onmouseenter=()=>{el.style.background='#1c1c22';};
+    el.onmouseleave=()=>{el.style.background='';};
+    el.onclick=()=>jumpToSymbol(el.dataset.sym);
+  });
+}
+function jumpToSymbol(sym){
+  if(!sym)return;
+  const rows=sortedRows();
+  let idx=rows.findIndex(r=>r.sym===sym);
+  if(idx<0){
+    if(S.syms.includes(sym)){
+      S.q=sym.replace(/USDT$/i,'');
+      S.page=0;
+      closeQuickFind();
+      updateCharts();renderTable();
+      return;
+    }
+    closeQuickFind();
+    return;
+  }
+  S.page=Math.floor(idx/S.charts.length);
+  closeQuickFind();
+  updateCharts();renderTable();
+}
+
 document.addEventListener('keydown',e=>{
   const tgt=e.target;
   const editable=tgt&&((tgt.tagName==='INPUT')||(tgt.tagName==='TEXTAREA')||tgt.isContentEditable);
@@ -2442,19 +2515,33 @@ document.addEventListener('keydown',e=>{
   const code=(e.code||'').toLowerCase();
   const isZ=code==='keyz'||key==='z'||key==='я';
   const isY=code==='keyy'||key==='y'||key==='н';
-  if(mod&&(isZ||isY)){
-    const wantRedo=e.shiftKey||isY;
-    const cand=resolveUndoCandidates();
-    for(const sym of cand){
-      const ok=wantRedo?redoDrawings(sym):undoDrawings(sym);
-      if(ok){
-        e.preventDefault();
-        _lastDrawSym=sym;
-        return;
-      }
+  const qfOpen=document.getElementById('quickFindModal')&&document.getElementById('quickFindModal').style.display==='flex';
+  if(qfOpen&&e.key==='Escape'){
+    closeQuickFind();
+    e.preventDefault();
+    return;
+  }
+  if(mod&&!e.altKey&&(isZ||isY)&&!editable){
+    const wantRedo=(e.shiftKey&&isZ)||isY;
+    const ok=wantRedo?redoLastDrawingAction():undoLastDrawingAction();
+    if(ok)e.preventDefault();
+    return;
+  }
+  if(!qfOpen&&!editable&&!S.drawMode&&!mod&&!e.altKey&&e.key.length===1&&/[a-z0-9]/i.test(e.key)){
+    const rulerOn=[...S.charts,...S.fsCharts].some(c=>c.ruler?.active);
+    const blocks=document.getElementById('settingsModal')?.classList.contains('open')||!!document.getElementById('emaEditorModal')||!!document.getElementById('alertPctOverlay');
+    if(!blocks&&!rulerOn){
+      openQuickFind(e.key);
+      e.preventDefault();
+      return;
     }
   }
   if(e.key==='Escape'){
+    if(document.getElementById('quickFindModal')?.style.display==='flex'){
+      closeQuickFind();
+      e.preventDefault();
+      return;
+    }
     // Fullscreen should feel like the same app: Esc closes fullscreen first
     // (but don't hijack Esc while user edits inputs or a modal is open)
     const settingsOpen=document.getElementById('settingsModal')?.classList.contains('open');
@@ -3719,6 +3806,22 @@ function renderSettingsGen(body){
       ${tbtnHtml('sabsOff','Выкл',"setSortAbs(false)",!S.sortAbs)}
     </div>
   </div>
+  <div class="smodal-row">
+    <span class="smodal-lbl">Отступ справа (бары пустоты)</span>
+    <div style="display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end;max-width:280px">
+      <input type="range" id="chartRoSlider" min="0" max="28" step="1" value="${S.chartRightOffset}"
+        oninput="setChartRightOffset(this.value)" style="flex:1;max-width:180px">
+      <span id="chartRoVal" style="font-size:10px;color:var(--text3);min-width:20px">${S.chartRightOffset}</span>
+    </div>
+  </div>
+  <div class="smodal-row">
+    <span class="smodal-lbl">Видимых свечей (масштаб)</span>
+    <div style="display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end;max-width:280px">
+      <input type="range" id="chartVisSlider" min="48" max="200" step="4" value="${S.chartVisibleBars}"
+        oninput="setChartVisibleBars(this.value)" style="flex:1;max-width:180px">
+      <span id="chartVisVal" style="font-size:10px;color:var(--text3);min-width:28px">${S.chartVisibleBars}</span>
+    </div>
+  </div>
   <div class="smodal-ver">CryptScreen v1.4 · Binance Futures</div>`;
 }
 
@@ -3811,6 +3914,21 @@ function setSortAbs(on){
   renderSettingsGen(document.getElementById('smodal-body'));
 }
 
+function setChartRightOffset(v){
+  S.chartRightOffset=Math.max(0,Math.min(36,+v));
+  saveChartViewPrefs();
+  applyDefaultChartViewAll();
+  const el=document.getElementById('chartRoVal');if(el)el.textContent=String(S.chartRightOffset);
+  const sl=document.getElementById('chartRoSlider');if(sl)sl.value=String(S.chartRightOffset);
+}
+function setChartVisibleBars(v){
+  S.chartVisibleBars=Math.max(40,Math.min(220,+v));
+  saveChartViewPrefs();
+  applyDefaultChartViewAll();
+  const el=document.getElementById('chartVisVal');if(el)el.textContent=String(S.chartVisibleBars);
+  const sl=document.getElementById('chartVisSlider');if(sl)sl.value=String(S.chartVisibleBars);
+}
+
 // ═══════════════════════════════════════════════════════════════
 //  FULLSCREEN ANALYSIS
 // ═══════════════════════════════════════════════════════════════
@@ -3837,9 +3955,15 @@ async function loadFsChart(idx){
   const fch=S.fsCharts[idx];const sym=S.fsSym;
   if(!sym||!fch.cs||!fch.lc)return;
   try{
-    const raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
+    let raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
     if(S.fsSym!==sym)return;
-    fch.candles=parseKlines(raw);
+    let candles=parseKlines(raw);
+    if(candles.length<MIN_CHART_CANDLES){
+      raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      if(S.fsSym!==sym)return;
+      candles=parseKlines(raw);
+    }
+    fch.candles=candles.slice(-HIST_CACHE_MAX);
     if(fch.candles.length){
       const lp=fch.candles[fch.candles.length-1].c;
       fch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
@@ -3848,7 +3972,7 @@ async function loadFsChart(idx){
     fch.vs.setData(fch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
     const lastFsCandle=fch.candles[fch.candles.length-1];
     if(lastFsCandle)syncLivePriceLabel(fch,lastFsCandle.c,lastFsCandle.o);
-    fch.lc.timeScale().fitContent();
+    applyDefaultChartView(fch);
     rCanvas(fch);
   }catch(e){console.warn('loadFsChart',e);}
 }
@@ -4055,6 +4179,7 @@ function loadScript(url){return new Promise((res,rej)=>{const s=document.createE
 // ═══════════════════════════════════════════════════════════════
 async function main(){
   try{
+    loadChartViewPrefs();
     ldSet('Загрузка библиотеки графиков…',5);
     for(const url of['https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js','https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js']){
       try{await loadScript(url);if(typeof LightweightCharts!=='undefined'){S.LC=LightweightCharts;break;}}catch(e){}
@@ -4062,6 +4187,7 @@ async function main(){
 
     ldSet('Построение интерфейса…',12);
     buildChartGrid();
+    ensureQuickFindUI();
     buildScreenerHeader(document.getElementById('shdr'));
     updSortHdr();
     if(S.LC)for(let i=0;i<S.gridSize;i++)initLCChart(i);
@@ -4437,6 +4563,8 @@ window.setGridSize        = setGridSize;
 window.setUpColor         = setUpColor;
 window.setWatermark       = setWatermark;
 window.setSortAbs         = setSortAbs;
+window.setChartRightOffset= setChartRightOffset;
+window.setChartVisibleBars= setChartVisibleBars;
 window.toggleCol          = toggleCol;
 window.resetDensitySettings = resetDensitySettings;
 window.showGroupPicker    = showGroupPicker;
