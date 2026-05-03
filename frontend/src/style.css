@@ -180,6 +180,7 @@ html,body{
 .ccell{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;user-select:none;}
 .chead{height:24px;padding:0 4px 0 6px;display:flex;flex-direction:row;align-items:center;gap:5px;
   background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0;user-select:none;overflow:hidden}
+.chead-stats{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-width:0;font-size:10px;line-height:1.2}
 .chead-r1{display:contents}
 .chead-r2{display:contents}
 .csym{font-size:11px;font-weight:600;color:#fff;flex-shrink:0}
@@ -189,6 +190,9 @@ html,body{
 .cvol{color:#d4901a;font-weight:500;font-size:10px;white-space:nowrap}
 .ctrd{color:#7878b8;font-weight:500;font-size:10px;white-space:nowrap}
 .ccorr{color:#3a9ad4;font-weight:500;font-size:10px;white-space:nowrap}
+.cnatr{color:#94a3b8;font-weight:500;font-size:10px;white-space:nowrap}
+.fs-head-stats{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-width:0}
+.fs-stat{font-size:10px}
 .chead-gap{flex:1}
 .cbody{flex:1;min-height:0;overflow:hidden;position:relative;touch-action:none;}
 .cph{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
@@ -301,7 +305,7 @@ html,body{
 #fsBody{flex:1;display:flex;overflow:hidden;min-height:0}
 #fsSym{font-size:13px;font-weight:600;color:#fff;}
 #fsPrc{font-size:11px;color:var(--text);font-variant-numeric:tabular-nums;}
-#fsChg{font-size:10px;}
+#fsHeadStats .cchg{font-size:10px;}
 #fsMain{flex:1;display:flex;overflow:hidden;min-height:0}
 #fsChartArea{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
 #fsTop{flex:1;display:flex;flex-direction:column;border-bottom:2px solid var(--accent);min-height:0;}

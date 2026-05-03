@@ -16,6 +16,7 @@
   <div class="rt-row" id="rtVr"></div>
   <div class="rt-row" id="rtTr"></div>
 </div>
+<div id="chartIndTooltip" style="display:none;position:fixed;z-index:901;pointer-events:none;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:6px 9px;font-size:9px;color:var(--text2);max-width:280px;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.55)"></div>
 
 <div id="ld">
   <div class="ld-logo">⬛ CRYPTSCREEN</div>
@@ -46,6 +47,7 @@
     </div>
     <div class="smodal-tabs">
       <button class="smodal-tab on" id="stab-gen" onclick="switchSettingsTab('gen')">Общие</button>
+      <button class="smodal-tab" id="stab-chead" onclick="switchSettingsTab('chead')">Шапка граф.</button>
       <button class="smodal-tab" id="stab-ind" onclick="switchSettingsTab('ind')">Индикаторы</button>
       <button class="smodal-tab" id="stab-density" onclick="switchSettingsTab('density')">Плотности</button>
       <button class="smodal-tab" id="stab-alerts" onclick="switchSettingsTab('alerts')">Алерты</button>
@@ -84,10 +86,7 @@
       <img id="fsSymIcon" src="" alt="" style="display:none;width:18px;height:18px;border-radius:50%;flex-shrink:0">
       <span id="fsSym" style="font-weight:600;color:#fff;cursor:pointer" title="Нажмите чтобы скопировать BTCUSDT" onclick="copyTicker(S.fsSym)"></span>
       <span id="fsPrc" style="margin-left:6px"></span>
-      <span id="fsChg" style="margin-left:4px"></span>
-      <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
-      <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
-      <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
+      <div id="fsHeadStats" class="fs-head-stats" style="margin-left:4px;display:flex;align-items:center;gap:5px;flex-wrap:wrap"></div>
       <div class="tsep"></div>
     </div>
 
@@ -118,15 +117,15 @@
       <div class="brush-color" style="background:#e2e8f0" title="Белый" onclick="setBrushColor('#e2e8f0',this)"></div>
       <input type="number" class="brush-size" id="brushSizeInput" min="1" max="12" value="2" title="Толщина" onchange="setBrushWidth(+this.value)">
     </div>
-    <div id="linePalette" title="Цвет линий">
-      <div class="line-color active" style="background:#f97316" title="Оранжевый" onclick="setLineColor('#f97316',this)"></div>
-      <div class="line-color" style="background:#ef4444" title="Красный" onclick="setLineColor('#ef4444',this)"></div>
-      <div class="line-color" style="background:#eab308" title="Жёлтый" onclick="setLineColor('#eab308',this)"></div>
-      <div class="line-color" style="background:#22c55e" title="Зелёный" onclick="setLineColor('#22c55e',this)"></div>
-      <div class="line-color" style="background:#3b82f6" title="Синий" onclick="setLineColor('#3b82f6',this)"></div>
-      <div class="line-color" style="background:#a855f7" title="Фиолетовый" onclick="setLineColor('#a855f7',this)"></div>
-      <div class="line-color" style="background:#ec4899" title="Розовый" onclick="setLineColor('#ec4899',this)"></div>
-      <div class="line-color" style="background:#e2e8f0" title="Белый" onclick="setLineColor('#e2e8f0',this)"></div>
+    <div id="linePalette" title="Цвет для выбранного типа линии (сохраняется отдельно для луча, тренда, алерт-луча и алерт-тренда)">
+      <div class="line-color active" data-c="#f97316" style="background:#f97316" title="Оранжевый" onclick="setLineColor('#f97316',this)"></div>
+      <div class="line-color" data-c="#ef4444" style="background:#ef4444" title="Красный" onclick="setLineColor('#ef4444',this)"></div>
+      <div class="line-color" data-c="#eab308" style="background:#eab308" title="Жёлтый" onclick="setLineColor('#eab308',this)"></div>
+      <div class="line-color" data-c="#22c55e" style="background:#22c55e" title="Зелёный" onclick="setLineColor('#22c55e',this)"></div>
+      <div class="line-color" data-c="#3b82f6" style="background:#3b82f6" title="Синий" onclick="setLineColor('#3b82f6',this)"></div>
+      <div class="line-color" data-c="#a855f7" style="background:#a855f7" title="Фиолетовый" onclick="setLineColor('#a855f7',this)"></div>
+      <div class="line-color" data-c="#ec4899" style="background:#ec4899" title="Розовый" onclick="setLineColor('#ec4899',this)"></div>
+      <div class="line-color" data-c="#e2e8f0" style="background:#e2e8f0" title="Белый" onclick="setLineColor('#e2e8f0',this)"></div>
     </div>
     <button class="tbtn" id="draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч (звук при достижении %)">🔔─</button>
     <button class="tbtn" id="draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия (звук при достижении %)">🔔╱</button>

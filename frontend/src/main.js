@@ -209,26 +209,36 @@ function hexToRgbA(hex,a){
 }
 
 const ALL_COLS = [
-  {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены за 24 часа (%)'},
-  {id:'cday',   l:'ИЗМ',  s:'день%',  tip:'Изменение цены за текущий день (%)'},
-  {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Диапазон с начала локального календарного дня (5м свечи с полуночи по времени устройства)'},
-  {id:'r24',    l:'РЕНЖ', s:'24ч',    tip:'Диапазон за 24ч по 5м свечам'},
-  {id:'r7d',    l:'РЕНЖ', s:'7д',     tip:'Диапазон за 7 дней по 1ч свечам'},
-  {id:'na30',   l:'NATR', s:'1м/30',  tip:'Нормализованный ATR(30) на 1м ТФ'},
-  {id:'na14',   l:'NATR', s:'5м/14',  tip:'Нормализованный ATR(14) на 5м ТФ'},
-  {id:'r1m5',   l:'РЕНЖ', s:'1м/5',   tip:'Диапазон последних 5 минутных свечей'},
-  {id:'tr5',    l:'СД*',  s:'5м/14',  tip:'Сделки 5м свечи ÷ среднее(14)'},
-  {id:'tr1h',   l:'СД*',  s:'1ч/24',  tip:'Сделки 1ч свечи ÷ среднее(24)'},
-  {id:'vr5',    l:'ОБ*',  s:'5м/14',  tip:'Объём 5м свечи ÷ среднее(14)'},
-  {id:'vr1h',   l:'ОБ*',  s:'1ч/24',  tip:'Объём 1ч свечи ÷ среднее(24)'},
-  {id:'ch7d',   l:'ИЗМ',  s:'7д',     tip:'Изменение цены за 7 дней (%)'},
-  {id:'trd24',  l:'СДЛК', s:'24ч',    tip:'Число сделок за 24 часа'},
-  {id:'vol24',  l:'ОБЪЕМ',s:'24ч',    tip:'Объём торгов за 24ч (USDT)'},
-  {id:'corr',   l:'КРЛЦ', s:'24ч',    tip:'Корреляция с BTC за 24ч'},
-  {id:'corr14', l:'КРЛЦ', s:'5м/14',  tip:'Корреляция с BTC за последние 14 свечей 5м'},
-  {id:'v15m',   l:'ОБ',   s:'1м/15',  tip:'Накопл. объём за 15 минут (USDT)'},
-  {id:'v60m',   l:'ОБ',   s:'1м/60',  tip:'Накопл. объём за 60 минут (USDT)'},
+  {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены относительно цены 24 часа назад по данным Binance Futures (rolling 24h), в процентах. Положительное — рост, отрицательное — падение.'},
+  {id:'cday',   l:'ИЗМ',  s:'день%',  tip:'Изменение цены от первой 5-минутной свечи текущего календарного дня по локальному времени устройства до последней цены, в процентах.'},
+  {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Диапазон (макс−мин)/цена в процентах с начала локального календарного дня: 5-минутные свечи с полуночи по времени устройства.'},
+  {id:'r24',    l:'РЕНЖ', s:'24ч',    tip:'Диапазон за последние 24 часа по 5-минутным свечам: насколько широко ходила цена относительно текущей, в процентах.'},
+  {id:'r7d',    l:'РЕНЖ', s:'7д',     tip:'Диапазон за 7 дней по часовым свечам: отношение (high−low) к цене, в процентах — оценка волатильности недели.'},
+  {id:'na30',   l:'NATR', s:'1м/30',  tip:'NATR на 1м: ATR за 30 периодов, делённый на последнюю цену и умноженный на 100. Показывает типичный «размер шага» рынка относительно цены на минутном таймфрейме.'},
+  {id:'na14',   l:'NATR', s:'5м/14',  tip:'NATR на 5м: ATR(14) по пятиминутным свечам, нормализованный к цене (%). Удобно сравнивать волатильность разных монет независимо от абсолютной цены.'},
+  {id:'r1m5',   l:'РЕНЖ', s:'1м/5',   tip:'Диапазон последних пяти закрытых минутных свечей к текущей цене, в процентах — краткосрочный «микро-ренж».'},
+  {id:'tr5',    l:'СД*',  s:'5м/14',  tip:'Отношение числа сделок на последней 5-минутной свече к среднему числу сделок за предыдущие 14 закрытых пятиминуток. >1 — активность выше недавней нормы.'},
+  {id:'tr1h',   l:'СД*',  s:'1ч/24',  tip:'Отношение числа сделок на последней часовой свече к среднему за 24 предыдущих часа. Показывает всплеск или просадку торговой активности на 1ч ТФ.'},
+  {id:'vr5',    l:'ОБ*',  s:'5м/14',  tip:'Объём (в USDT) последней 5-минутной свечи, делённый на средний объём за 14 предыдущих пятиминуток. >1 — объём выше обычного для этого ТФ.'},
+  {id:'vr1h',   l:'ОБ*',  s:'1ч/24',  tip:'Объём последней часовой свечи к среднему часовому объёму за 24 закрытых часа. Индикатор всплеска или затишья на часовике.'},
+  {id:'ch7d',   l:'ИЗМ',  s:'7д',     tip:'Изменение цены за 7 дней по дневным (или агрегированным) данным, в процентах — среднесрочный тренд.'},
+  {id:'trd24',  l:'СДЛК', s:'24ч',    tip:'Суммарное число сделок (агрессивных обновлений книги) за 24 часа по данным тикера — ликвидность и интерес участников.'},
+  {id:'vol24',  l:'ОБЪЕМ',s:'24ч',    tip:'Совокупный объём торгов в USDT за 24 часа (quote volume). Сравнение ликвидности инструментов между собой.'},
+  {id:'corr',   l:'КРЛЦ', s:'24ч',    tip:'Коэффициент корреляции доходностей этой монеты и BTC за последние 24 часа по 5-минутным доходностям: ближе к 1 — движение с рынком, к 0 — своё движение.'},
+  {id:'corr14', l:'КРЛЦ', s:'5м/14',  tip:'Корреляция с BTC по последним 14 пятиминутным свечам — краткосрочное «следование» или расхождение с биткоином.'},
+  {id:'v15m',   l:'ОБ',   s:'1м/15',  tip:'Сумма объёма в USDT за последние 15 минут по минутным свечам — недавний приток/отток ликвидности без учёта направления цены.'},
+  {id:'v60m',   l:'ОБ',   s:'1м/60',  tip:'Сумма объёма в USDT за последний час по минутным свечам — более широкое окно, чем 15м, для оценки недавней активности.'},
 ];
+
+/** Плашки над мини-графиками и в полноэкранной шапке (отдельно от колонок скринера) */
+const CHART_HEAD_DEFS=[
+  {id:'chg', cls:'cchg', tip:'Изменение цены за 24 ч (тикер Binance Futures), %. Зелёный/красный — направление.'},
+  {id:'vol', cls:'cvol', tip:'Объём торгов в USDT за 24 ч по тикеру — ликвидность инструмента.'},
+  {id:'trd', cls:'ctrd', tip:'Число сделок за 24 ч — насколько «шумно» и часто обновляется рынок.'},
+  {id:'natr',cls:'cnatr',tip:'NATR 5м/14 (%): нормализованный ATR по пятиминуткам; типичная волатильность относительно цены.'},
+  {id:'corr',cls:'ccorr',tip:'Корреляция с BTC (краткий период или 24ч): насколько движение совпадает с биткоином.'},
+];
+const CHART_HEAD_IDS=CHART_HEAD_DEFS.map(d=>d.id);
 
 const GROUP_COLORS=['','#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899'];
 // index 0=none, 1=red,2=orange,3=yellow,4=green,5=blue,6=violet,7=pink
@@ -249,6 +259,10 @@ const S = {
   screenerVisible:true, fsScreenerVisible:true,
   colOrder: ALL_COLS.map(c=>c.id),
   colVisible: new Set(ALL_COLS.map(c=>c.id)),
+  chartHeadOrder:['chg','vol','trd','natr','corr'],
+  chartHeadVisible:new Set(['chg','vol','trd','natr']),
+  /** Цвет линий рисования по типу (не лонг/шорт) */
+  lineColors:{hray:'#e8a020',tline:'#3b82f6',aray:'#a855f7',atline:'#a855f7'},
   fsSym:null, fsOpen:false, fsWs:null,
   fsCharts:[
     mkFsChart('5m'), mkFsChart('1h'), mkFsChart('4h'),
@@ -305,6 +319,52 @@ function saveChartViewPrefs(){
   }catch(e){}
 }
 
+function loadChartHeadPrefs(){
+  try{
+    const raw=localStorage.getItem('cs_chartHead');
+    if(!raw)return;
+    const j=JSON.parse(raw);
+    if(Array.isArray(j.order)){
+      const seen=new Set();
+      const ord=[];
+      for(const id of j.order)if(CHART_HEAD_IDS.includes(id)&&!seen.has(id)){seen.add(id);ord.push(id);}
+      for(const id of CHART_HEAD_IDS)if(!seen.has(id))ord.push(id);
+      if(ord.length)S.chartHeadOrder=ord;
+    }
+    if(Array.isArray(j.visible)){
+      const nv=new Set(j.visible.filter(id=>CHART_HEAD_IDS.includes(id)));
+      if(nv.size)S.chartHeadVisible=nv;
+    }
+    const seen=new Set(S.chartHeadOrder);
+    for(const id of CHART_HEAD_IDS){if(!seen.has(id)){S.chartHeadOrder.push(id);seen.add(id);}}
+  }catch(e){}
+}
+function saveChartHeadPrefs(){
+  try{
+    localStorage.setItem('cs_chartHead',JSON.stringify({
+      order:S.chartHeadOrder,
+      visible:[...S.chartHeadVisible],
+    }));
+  }catch(e){}
+}
+
+function loadLineColorPrefs(){
+  try{
+    const raw=localStorage.getItem('cs_lineColors');
+    if(!raw)return;
+    const j=JSON.parse(raw);
+    for(const k of['hray','tline','aray','atline'])if(typeof j[k]==='string'&&j[k].startsWith('#'))S.lineColors[k]=j[k];
+  }catch(e){}
+}
+function saveLineColorPrefs(){
+  try{localStorage.setItem('cs_lineColors',JSON.stringify(S.lineColors));}catch(e){}
+}
+
+function lineColorForType(type){
+  const c=S.lineColors?.[type];
+  return(typeof c==='string'&&c.startsWith('#'))?c:null;
+}
+
 /** После setData: отступ справа + «зум» по числу видимых свечей */
 function applyDefaultChartView(ch){
   if(!ch?.lc||!ch.candles?.length)return;
@@ -314,10 +374,19 @@ function applyDefaultChartView(ch){
     try{ch.lc.timeScale().fitContent();}catch(e){}
     return;
   }
-  const want=Math.max(12,Math.min(S.chartVisibleBars|0,len));
+  const isFs=S.fsCharts&&S.fsCharts.includes(ch);
+  const plotW=ch.canvas?.clientWidth||ch.canvas?.width||400;
+  const refW=300;
+  const fsBoost=isFs?Math.min(2.15,Math.sqrt(Math.max(1,plotW/refW))):1;
+  let want=Math.round((S.chartVisibleBars|0)*fsBoost);
+  want=Math.max(12,Math.min(want,len));
   const targetBars=Math.min(len,Math.max(want,MIN_CHART_CANDLES));
   const from=Math.max(0,len-targetBars);
-  const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+  let ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+  if(isFs){
+    const roShrink=Math.max(0.5,Math.min(1,refW/Math.max(plotW*0.48,refW)));
+    ro=Math.max(0,Math.min(36,Math.round(ro*roShrink)));
+  }
   try{
     ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
     ch.lc.timeScale().setVisibleLogicalRange({from,to:len-1});
@@ -662,10 +731,7 @@ function buildChartGrid(){
           <img class="coin-icon" id="ci${i}" src="" alt="" style="display:none;width:14px;height:14px;border-radius:50%;flex-shrink:0">
           <span class="csym" id="cs${i}" title="Нажмите для копирования" onclick="copyTicker(this.textContent)" style="cursor:pointer">—</span>
           <span class="cprc" id="cp${i}"></span>
-          <span class="cchg" id="cg${i}"></span>
-          <span class="cvol" id="cv${i}"></span>
-          <span class="ctrd" id="ctd${i}"></span>
-          <span class="ccorr" id="cco${i}"></span>
+          <div class="chead-stats" id="chs${i}"></div>
           <span class="chead-gap"></span>
           <button class="fs-open-btn" onclick="openFullscreen(${i})" title="На весь экран">⤡</button>
         </div>
@@ -673,6 +739,49 @@ function buildChartGrid(){
           <div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">ожидание</span></div>
         </div>
       </div>`);
+  }
+  for(let i=0;i<n;i++)initChartHeadSlot(i);
+}
+
+function initChartHeadSlot(slot){
+  const el=document.getElementById(`chs${slot}`);
+  if(!el)return;
+  el.innerHTML='';
+  for(const def of CHART_HEAD_DEFS){
+    const s=document.createElement('span');
+    s.id=`chs${slot}-${def.id}`;
+    s.className=def.cls;
+    s.title=def.tip;
+    el.appendChild(s);
+  }
+  applyChartHeadLayoutForSlot(slot);
+}
+
+function applyChartHeadLayoutForSlot(slot){
+  const order=S.chartHeadOrder.filter(id=>CHART_HEAD_IDS.includes(id));
+  const vis=S.chartHeadVisible;
+  for(const id of CHART_HEAD_IDS){
+    const s=document.getElementById(`chs${slot}-${id}`);
+    if(!s)continue;
+    const oi=order.indexOf(id);
+    s.style.display=vis.has(id)&&oi>=0?'':'none';
+    if(oi>=0)s.style.order=String(oi);
+  }
+}
+
+function applyChartHeadLayoutAll(){
+  for(let i=0;i<S.gridSize;i++)applyChartHeadLayoutForSlot(i);
+  layoutFsHeadStats();
+}
+
+function clearChartHeadValues(slot){
+  setText(`cp${slot}`,'');
+  for(const id of CHART_HEAD_IDS){
+    const el=document.getElementById(`chs${slot}-${id}`);
+    if(!el)continue;
+    el.textContent='';
+    el.innerHTML='';
+    if(id==='chg')el.className='cchg';
   }
 }
 
@@ -820,10 +929,13 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       }
     }
     rCanvas(ch);
+    if(!S.drawMode&&!ch.draggingDraw&&!ch.ruler?.active&&!_anyChartPanning)updateChartIndTooltip(ch,e.clientX,e.clientY,container);
+    else hideChartIndTooltip();
   },{signal:sig});
   container.addEventListener('mouseleave',()=>{
     ch.hoveredIdx=-1;
     ch.hoverX=0;ch.hoverY=0;
+    hideChartIndTooltip();
     rCanvas(ch);
   },{signal:sig});
   container.addEventListener('mousedown',e=>{if(e.button===1){e.preventDefault();onRulerStart(ch,e,container);}},{capture:true,signal:sig});
@@ -1098,7 +1210,7 @@ async function loadChart(slot,sym){
     ch.sym=null;ch.candles=[];ch.drawings=[];ch._histBootstrapDone=false;
     setSlotLoading(slot,false);
     setText(`cs${slot}`,'—');
-    ['cp','cg','cv','ctd','cco'].forEach(p=>setText(`${p}${slot}`,''));
+    clearChartHeadValues(slot);
     const cb=document.getElementById(`cb${slot}`);
     if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
     return;
@@ -1177,15 +1289,26 @@ function paintSlotData(slot){
 
 function updateChartHeader(slot,sym){
   const t=S.tk[sym]||{};const m=S.mx[sym]||{};
-  // price is hidden via CSS (.cprc{display:none}) - kept for compat
   if(t.p)setText(`cp${slot}`,fmtPrice(t.p));
-  const cg=document.getElementById(`cg${slot}`);
-  if(t.c24!=null&&cg){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
-  setHtml(`cv${slot}`,t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'');
-  setHtml(`ctd${slot}`,t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'');
+  const elChg=document.getElementById(`chs${slot}-chg`);
+  if(elChg){
+    if(t.c24!=null){
+      elChg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';
+      elChg.className='cchg '+(t.c24>=0?'p':'n');
+    }else{elChg.textContent='';elChg.className='cchg';}
+  }
+  const elVol=document.getElementById(`chs${slot}-vol`);
+  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
+  const elTrd=document.getElementById(`chs${slot}-trd`);
+  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
+  const elNatr=document.getElementById(`chs${slot}-natr`);
+  if(elNatr){
+    const na=m.na14;
+    elNatr.textContent=na!=null?`${fn(na,2)}%`:'';
+  }
   const corVal=m.corr14??m.corr;
-  setHtml(`cco${slot}`,corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'');
-  // Update color dot
+  const elCorr=document.getElementById(`chs${slot}-corr`);
+  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
   const dot=document.getElementById(`cgd${slot}`);
   if(dot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';dot.style.background=col||'var(--bg4)';dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';dot.style.display=sym?'':'none';}
 }
@@ -1505,6 +1628,7 @@ function rCanvas(ch){
 
 function _rCanvasImmediate(ch){
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
+  ch._emaHoverZones=[];
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
   // #3: clip drawing area so we don't overdraw the axes (price/time)
@@ -1628,16 +1752,55 @@ function drawCustomCrosshair(ctx,ch,W,H){
   ctx.restore();
 }
 
+function drawingLineColor(d){
+  if(d?.color&&typeof d.color==='string'&&d.color.startsWith('#'))return d.color;
+  const k=d.type==='hray'?'hray':d.type==='tline'?'tline':d.type==='aray'?'aray':d.type==='atline'?'atline':null;
+  if(k){const c=lineColorForType(k);if(c)return c;}
+  return'#888888';
+}
+
+function emaHoverTip(period){
+  return`EMA ${period} — экспоненциальная скользящая средняя по ${period} закрытиям свечи. Сглаживает ценовой шум и показывает локальный тренд; расхождение и пересечение нескольких EMA помогают оценить силу движения.`;
+}
+
+function hideChartIndTooltip(){
+  const tt=document.getElementById('chartIndTooltip');
+  if(tt)tt.style.display='none';
+}
+function updateChartIndTooltip(ch,clientX,clientY,container){
+  const tt=document.getElementById('chartIndTooltip');
+  if(!tt||!ch?.canvas)return;
+  const sym=ch.sym||S.fsSym;
+  const symEnabled=!!(sym&&S.emaSymEnabled[sym]);
+  if(!S.emaVisible&&!symEnabled){hideChartIndTooltip();return;}
+  const{x,y}=getCoords(container,clientX,clientY);
+  const drawW=ch.canvas.width-PRICE_AXIS_W;
+  const drawH=ch.canvas.height-TIME_AXIS_H;
+  if(x<=0||y<=0||x>=drawW||y>=drawH){hideChartIndTooltip();return;}
+  const zones=ch._emaHoverZones;
+  if(!zones||!zones.length){hideChartIndTooltip();return;}
+  for(const z of zones){
+    if(x>=z.x1&&x<=z.x2&&y>=z.y1&&y<=z.y2){
+      tt.textContent=z.tip;
+      tt.style.display='block';
+      tt.style.left=(clientX+14)+'px';
+      tt.style.top=(clientY+14)+'px';
+      return;
+    }
+  }
+  hideChartIndTooltip();
+}
+
 function drawHRay(ctx,ch,d,W,hov){
   const y=ch.cs.priceToCoordinate(d.p1.price);if(y===null)return;
   const x0=timeToCoordX(ch,d.p1.time)??0;
-  const col=d.color||'#e8a020';
+  const col=drawingLineColor(d);
   // Clamp x0 so ray always starts left-of or at current position, draws rightward
   const xs=Math.max(0,x0);
   ctx.save();
   if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
-  ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=hov?2:1;ctx.setLineDash([5,3]);
-  ctx.moveTo(xs,y);ctx.lineTo(W,y);ctx.stroke();ctx.setLineDash([]);
+  ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=hov?2:1;
+  ctx.moveTo(xs,y);ctx.lineTo(W,y);ctx.stroke();
   ctx.fillStyle=col;ctx.font='9px JetBrains Mono,monospace';ctx.textAlign='right';
   ctx.fillText(fmtPrice(d.p1.price),W-3,y-3);ctx.textAlign='left';
   ctx.beginPath();ctx.arc(xs,y,3,0,Math.PI*2);ctx.fill();
@@ -1650,7 +1813,7 @@ function drawTLine(ctx,ch,d,hov){
   const x2=timeToCoordX(ch,d.p2.time);
   const y2=ch.cs.priceToCoordinate(d.p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
-  const col=d.color||'#3b82f6';
+  const col=drawingLineColor(d);
   ctx.save();
   if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
   ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=hov?2.5:1.2;
@@ -1685,7 +1848,7 @@ function drawAlertRay(ctx,ch,d,W,hov){
   const y=ch.cs.priceToCoordinate(d.p1.price);if(y===null)return;
   const x0=timeToCoordX(ch,d.p1.time)??0;
   const xs=Math.max(0,x0);
-  const col=d.color||'#a855f7';
+  const col=drawingLineColor(d);
   ctx.save();
   if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
   if(d.alertPct!=null&&d.alertPct>0){
@@ -1710,7 +1873,7 @@ function drawAlertTLine(ctx,ch,d,hov){
   const x2=timeToCoordX(ch,d.p2.time);
   const y2=ch.cs.priceToCoordinate(d.p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
-  const col=d.color||'#a855f7';
+  const col=drawingLineColor(d);
   ctx.save();
   if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
   // #7: Draw ±alertPct% band
@@ -1773,8 +1936,6 @@ function drawBrushStroke(ctx,ch,d,hov){
 // Current brush color (shared across charts)
 let _brushColor='#f97316';
 let _brushWidth=2;
-/** Цвет для луча / тренда / алерт-линий / лонг-шорт (общий как у кисти по умолчанию) */
-let _lineColor='#f97316';
 
 // ── Trade helpers ──────────────────────────────────────────────
 // Returns entry/tp/sl as absolute prices (migrates old rr-based format)
@@ -1817,7 +1978,7 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   const lx=Math.min(x1,x2),rx=Math.max(x1,x2);
   const tpCol='#1fa891';
   const slCol='#e04040';
-  const dirCol=d.color||(isLong?'#1fa891':'#e04040');
+  const dirCol=isLong?'#1fa891':'#e04040';
   const alpha=preview?0.4:(hov?0.7:0.5);
   const rr=Math.abs(tpPrice-entryPrice)/Math.max(0.000001,Math.abs(slPrice-entryPrice));
 
@@ -1842,23 +2003,6 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   // Outer border
   ctx.strokeStyle=dirCol+'44';ctx.lineWidth=1;
   ctx.strokeRect(lx,Math.min(yTp,ySl),rx-lx,Math.abs(yTp-ySl));
-
-  // Horizontal resize/move handles (show on hover)
-  if(hov&&!preview){
-    const handleH=Math.abs(yTp-ySl);
-    const handleY=Math.min(yTp,ySl)+handleH*0.35;
-    const handleH2=handleH*0.3;
-    ctx.fillStyle=dirCol;ctx.globalAlpha=0.7;
-    // Left handle (resize left edge)
-    ctx.fillRect(lx-4,handleY,7,handleH2);
-    ctx.fillRect(rx-3,handleY,7,handleH2);
-    // Move indicator in centre
-    ctx.globalAlpha=0.4;
-    ctx.font='10px JetBrains Mono,monospace';ctx.textAlign='center';
-    ctx.fillStyle='#fff';
-    ctx.fillText('⟺',(lx+rx)/2,Math.min(yTp,ySl)+handleH*0.75);
-    ctx.globalAlpha=1;
-  }
 
   // Labels
   ctx.font='bold 9px JetBrains Mono,monospace';
@@ -1956,11 +2100,14 @@ function drawEMAs(ctx,ch,W,H){
       lastPy=py;
     }
     ctx.stroke();
-    // Label near right edge
+    // Label near right edge (+ hover target for tooltip)
     if(lastPy!=null&&lastPy>5&&lastPy<plotH-5){
       ctx.font='bold 8px JetBrains Mono,monospace';ctx.fillStyle=cfg.color;
       ctx.globalAlpha=0.95;ctx.textAlign='left';
-      ctx.fillText(`EMA${cfg.period}`,4,lastPy-3);
+      const label=`EMA${cfg.period}`;
+      const tw=ctx.measureText(label).width;
+      ctx.fillText(label,4,lastPy-3);
+      ch._emaHoverZones.push({x1:1,y1:lastPy-11,x2:10+tw,y2:lastPy+5,tip:emaHoverTip(cfg.period)});
     }
   }
   ctx.globalAlpha=1;ctx.restore();
@@ -2170,7 +2317,7 @@ function onInteractClick(ch,e,container){
   const drawSym=getChartSym(ch);
   if(S.drawMode==='hray'){
     if(drawSym)pushDrawUndo(drawSym);
-    ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:_lineColor});
+    ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:S.lineColors.hray});
     _lastDrawSym=drawSym||_lastDrawSym;
     rCanvas(ch);
     setDrawMode(null);
@@ -2178,13 +2325,13 @@ function onInteractClick(ch,e,container){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
       if(drawSym)pushDrawUndo(drawSym);
-      ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:_lineColor});
+      ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:S.lineColors.tline});
       _lastDrawSym=drawSym||_lastDrawSym;
       ch.pendingP1=null;rCanvas(ch);
       setDrawMode(null);
     }
   }else if(S.drawMode==='aray'){
-    const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0,color:_lineColor};
+    const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0,color:S.lineColors.aray};
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push(d);rCanvas(ch);
     _lastDrawSym=drawSym||_lastDrawSym;
@@ -2193,7 +2340,7 @@ function onInteractClick(ch,e,container){
   }else if(S.drawMode==='atline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
-      const d={id:++S.drawIdCounter,type:'atline',p1:ch.pendingP1,p2:pt,alertPct:null,_lastAlert:0,color:_lineColor};
+      const d={id:++S.drawIdCounter,type:'atline',p1:ch.pendingP1,p2:pt,alertPct:null,_lastAlert:0,color:S.lineColors.atline};
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=drawSym||_lastDrawSym;
@@ -2209,7 +2356,7 @@ function onInteractClick(ch,e,container){
       const rr=2;
       const slPrice=isLong?entryPrice-slDist:entryPrice+slDist;
       const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
-      const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice,color:_lineColor};
+      const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice};
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=drawSym||_lastDrawSym;
@@ -2228,12 +2375,14 @@ function setDrawMode(mode){
    ['fs-draw-aray','aray'],['fs-draw-atline','atline']].forEach(([id,m])=>{
     const el=document.getElementById(id);if(el)el.classList.toggle('on',m===mode);
   });
-  // Палитра для луча / линии / алертов / лонг-шорт
+  // Палитра для луча / линии / алертов (не лонг-шорт)
   const lp=document.getElementById('linePalette');
   if(lp){
-    const lineModes=['hray','tline','aray','atline','long','short'];
+    const lineModes=['hray','tline','aray','atline'];
     lp.classList.toggle('visible',mode&&mode!=='brush'&&lineModes.includes(mode));
   }
+  if(mode&&['hray','tline','aray','atline'].includes(mode))syncLinePaletteForDrawMode();
+  if(!mode)hideChartIndTooltip();
   // Show/hide brush palette (main and FS toolbars)
   const bp=document.getElementById('brushPalette');
   if(bp)bp.classList.toggle('visible',mode==='brush');
@@ -2754,8 +2903,7 @@ function startChartWS(){
         ch.drawings.forEach(d=>{if(d.type==='aray'||d.type==='atline')checkAlerts(ch,d);});
         if(S.emaVisible)checkEMACrossovers(ch);
         const cpEl=document.getElementById(`cp${slot}`);if(cpEl)cpEl.textContent=fmtPrice(c.c);
-        const t=S.tk[symU];const cg=document.getElementById(`cg${slot}`);
-        if(t?.c24!=null&&cg){cg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';cg.className='cchg '+(t.c24>=0?'p':'n');}
+        updateChartHeader(slot,symU);
         rCanvas(ch);
       });
     }
@@ -3107,14 +3255,59 @@ function _applyTickerUpdate(arr,gen){
   }
 }
 
+function ensureFsHeadStatsDom(){
+  const wrap=document.getElementById('fsHeadStats');
+  if(!wrap||wrap.dataset.inited==='1')return;
+  wrap.innerHTML='';
+  for(const def of CHART_HEAD_DEFS){
+    const s=document.createElement('span');
+    s.id=`fsStat-${def.id}`;
+    s.className=`${def.cls} fs-stat`;
+    s.title=def.tip;
+    wrap.appendChild(s);
+  }
+  wrap.dataset.inited='1';
+}
+
+function layoutFsHeadStats(){
+  const wrap=document.getElementById('fsHeadStats');
+  if(!wrap||!wrap.dataset.inited)return;
+  wrap.style.display='flex';
+  const order=S.chartHeadOrder.filter(id=>CHART_HEAD_IDS.includes(id));
+  const vis=S.chartHeadVisible;
+  for(const id of CHART_HEAD_IDS){
+    const s=document.getElementById(`fsStat-${id}`);
+    if(!s)continue;
+    const oi=order.indexOf(id);
+    s.style.display=vis.has(id)&&oi>=0?'':'none';
+    if(oi>=0)s.style.order=String(oi);
+  }
+}
+
 function updateFsHeaderValues(){
-  const t=S.tk[S.fsSym];const m=S.mx[S.fsSym]||{};
+  const t=S.tk[S.fsSym]||{};const m=S.mx[S.fsSym]||{};
+  ensureFsHeadStatsDom();
+  layoutFsHeadStats();
   const fsp=document.getElementById('fsPrc');if(fsp)fsp.textContent=fmtPrice(t.p);
-  const ce=document.getElementById('fsChg');if(ce){ce.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';ce.className='cchg '+(t.c24>=0?'p':'n');}
-  const fv=document.getElementById('fsVol');if(fv)fv.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
-  const ft=document.getElementById('fsTrd');if(ft)ft.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
-  const corVal=m.corr14??m.corr;const fc=document.getElementById('fsCorr');
-  if(fc)fc.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+  const elChg=document.getElementById('fsStat-chg');
+  if(elChg){
+    if(t.c24!=null){
+      elChg.textContent=(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%';
+      elChg.className='cchg fs-stat '+(t.c24>=0?'p':'n');
+    }else{elChg.textContent='';elChg.className='cchg fs-stat';}
+  }
+  const elVol=document.getElementById('fsStat-vol');
+  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
+  const elTrd=document.getElementById('fsStat-trd');
+  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
+  const elNatr=document.getElementById('fsStat-natr');
+  if(elNatr){
+    const na=m.na14;
+    elNatr.textContent=na!=null?`${fn(na,2)}%`:'';
+  }
+  const corVal=m.corr14??m.corr;
+  const elCorr=document.getElementById('fsStat-corr');
+  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -3886,11 +4079,12 @@ function closeSettings(){document.getElementById('settingsModal').classList.remo
 
 function switchSettingsTab(tab){
   S.settingsTab=tab;
-  ['gen','ind','density','alerts'].forEach(t=>{
+  ['gen','chead','ind','density','alerts'].forEach(t=>{
     const el=document.getElementById(`stab-${t}`);if(el)el.classList.toggle('on',t===tab);
   });
   const body=document.getElementById('smodal-body');
   if(tab==='gen')renderSettingsGen(body);
+  else if(tab==='chead')renderSettingsChartHead(body);
   else if(tab==='ind')renderSettingsInd(body);
   else if(tab==='density')renderSettingsDensity(body);
   else renderSettingsAlerts(body);
@@ -3944,7 +4138,58 @@ function renderSettingsGen(body){
       <span id="chartVisVal" style="font-size:10px;color:var(--text3);min-width:28px">${S.chartVisibleBars}</span>
     </div>
   </div>
+  <div class="smodal-row" style="border-bottom:none;padding-top:0">
+    <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">На полноэкранных графиках масштаб и отступ справа подстраиваются по ширине окна: показывается больше свечей, «пустые» бары справа слегка ужимаются — чтобы крупный график не казался чрезмерно «растянутым».</span>
+  </div>
   <div class="smodal-ver">CryptScreen v1.4 · Binance Futures</div>`;
+}
+
+function renderSettingsChartHead(body){
+  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Индикаторы»). Перетащите порядок, ✓ — показать/скрыть.</div>';
+  const list=document.createElement('div');list.className='ind-list';list.id='chartHeadList';
+  S.chartHeadOrder.forEach(id=>{
+    const def=CHART_HEAD_DEFS.find(d=>d.id===id);if(!def)return;
+    const item=document.createElement('div');
+    item.className='ind-item';item.dataset.id=id;item.draggable=true;
+    const visible=S.chartHeadVisible.has(id);
+    item.innerHTML=`<span class="ind-handle" title="Перетащить">⣿</span>
+      <span class="ind-check${visible?' checked':''}" onclick="toggleChartHeadCol('${id}',this)">✓</span>
+      <span class="ind-name">${def.id==='chg'?'Рост':def.id==='vol'?'Объём':def.id==='trd'?'Сделки':def.id==='natr'?'NATR':'Корр.'}</span>
+      <span class="ind-sub" style="opacity:.75">${def.id==='chg'?'24ч %':def.id==='vol'?'USDT 24ч':def.id==='trd'?'кол-во 24ч':def.id==='natr'?'5м/14 %':'к BTC'}</span>`;
+    item.addEventListener('dragstart',e=>{e.dataTransfer.setData('text',id);item.style.opacity='0.4';});
+    item.addEventListener('dragend',()=>{item.style.opacity='';document.querySelectorAll('#chartHeadList .ind-item').forEach(i=>i.classList.remove('drag-over'));});
+    item.addEventListener('dragover',e=>{e.preventDefault();item.classList.add('drag-over');});
+    item.addEventListener('dragleave',()=>item.classList.remove('drag-over'));
+    item.addEventListener('drop',e=>{
+      e.preventDefault();item.classList.remove('drag-over');
+      const fromId=e.dataTransfer.getData('text');const toId=id;
+      if(fromId===toId)return;
+      const fi=S.chartHeadOrder.indexOf(fromId);const ti=S.chartHeadOrder.indexOf(toId);
+      if(fi<0||ti<0)return;
+      S.chartHeadOrder.splice(fi,1);S.chartHeadOrder.splice(ti,0,fromId);
+      saveChartHeadPrefs();
+      renderSettingsChartHead(body);
+      applyChartHeadLayoutAll();
+      for(let s=0;s<S.gridSize;s++){
+        const sym=S.charts[s]?.sym;if(sym)updateChartHeader(s,sym);
+      }
+      if(S.fsOpen&&S.fsSym)updateFsHeaderValues();
+    });
+    list.appendChild(item);
+  });
+  body.appendChild(list);
+}
+
+function toggleChartHeadCol(id,el){
+  if(S.chartHeadVisible.has(id)){if(S.chartHeadVisible.size>1)S.chartHeadVisible.delete(id);}
+  else S.chartHeadVisible.add(id);
+  el.classList.toggle('checked',S.chartHeadVisible.has(id));
+  saveChartHeadPrefs();
+  applyChartHeadLayoutAll();
+  for(let s=0;s<S.gridSize;s++){
+    const sym=S.charts[s]?.sym;if(sym)updateChartHeader(s,sym);
+  }
+  if(S.fsOpen&&S.fsSym)updateFsHeaderValues();
 }
 
 function renderSettingsInd(body){
@@ -4153,18 +4398,7 @@ function openFullscreenBySym(sym){
   // Update FS color dot
   const fsCgDot=document.getElementById('fsCgDot');
   if(fsCgDot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
-  const t=S.tk[sym]||{};const m=S.mx[sym]||{};
-  const fsPrcEl=document.getElementById('fsPrc');if(fsPrcEl)fsPrcEl.textContent=fmtPrice(t.p);
-  const ce=document.getElementById('fsChg');
-  if(ce){
-    ce.textContent=t.c24!=null?(t.c24>=0?'+':'')+t.c24.toFixed(2)+'%':'';
-    ce.className='cchg '+(t.c24>=0?'p':'n');
-  }
-  // Extra indicators
-  const fsVolEl=document.getElementById('fsVol');if(fsVolEl)fsVolEl.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
-  const fsTrdEl=document.getElementById('fsTrd');if(fsTrdEl)fsTrdEl.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
-  const corVal=m.corr14??m.corr;
-  const fsCorrEl=document.getElementById('fsCorr');if(fsCorrEl)fsCorrEl.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+  updateFsHeaderValues();
   // Build FS screener
   buildScreenerHeader(document.getElementById('fsShdr'));
   renderTable();
@@ -4181,6 +4415,7 @@ function openFullscreen(slot){
 }
 
 function closeFullscreen(){
+  hideChartIndTooltip();
   S.fsOpen=false;
   const body=document.getElementById('body');
   const fsBody=document.getElementById('fsBody');
@@ -4308,6 +4543,8 @@ function loadScript(url){return new Promise((res,rej)=>{const s=document.createE
 async function main(){
   try{
     loadChartViewPrefs();
+    loadChartHeadPrefs();
+    loadLineColorPrefs();
     ldSet('Загрузка библиотеки графиков…',5);
     for(const url of['https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js','https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js']){
       try{await loadScript(url);if(typeof LightweightCharts!=='undefined'){S.LC=LightweightCharts;break;}}catch(e){}
@@ -4661,10 +4898,25 @@ function setBrushColor(col,el){
   document.querySelectorAll('.brush-color').forEach(d=>d.classList.remove('active'));
   if(el)el.classList.add('active');
 }
+function syncLinePaletteForDrawMode(){
+  const m=S.drawMode;
+  const want=(m&&['hray','tline','aray','atline'].includes(m))?S.lineColors[m]:null;
+  document.querySelectorAll('#linePalette .line-color').forEach(d=>{
+    const c=d.dataset?.c||'';
+    d.classList.toggle('active',!!want&&c.toLowerCase()===String(want).toLowerCase());
+  });
+}
+
 function setLineColor(col,el){
-  _lineColor=col;
-  document.querySelectorAll('.line-color').forEach(d=>d.classList.remove('active'));
+  const m=S.drawMode;
+  if(m&&['hray','tline','aray','atline'].includes(m)){
+    S.lineColors[m]=col;
+    saveLineColorPrefs();
+  }
+  document.querySelectorAll('#linePalette .line-color').forEach(d=>d.classList.remove('active'));
   if(el)el.classList.add('active');
+  else syncLinePaletteForDrawMode();
+  [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
 }
 function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 
@@ -4699,6 +4951,7 @@ window.setSortAbs         = setSortAbs;
 window.setChartRightOffset= setChartRightOffset;
 window.setChartVisibleBars= setChartVisibleBars;
 window.toggleCol          = toggleCol;
+window.toggleChartHeadCol = toggleChartHeadCol;
 window.resetDensitySettings = resetDensitySettings;
 window.showGroupPicker    = showGroupPicker;
 window.showChartGroupPicker = showChartGroupPicker;
