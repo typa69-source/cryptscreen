@@ -118,6 +118,16 @@
       <div class="brush-color" style="background:#e2e8f0" title="Белый" onclick="setBrushColor('#e2e8f0',this)"></div>
       <input type="number" class="brush-size" id="brushSizeInput" min="1" max="12" value="2" title="Толщина" onchange="setBrushWidth(+this.value)">
     </div>
+    <div id="linePalette" title="Цвет линий">
+      <div class="line-color active" style="background:#f97316" title="Оранжевый" onclick="setLineColor('#f97316',this)"></div>
+      <div class="line-color" style="background:#ef4444" title="Красный" onclick="setLineColor('#ef4444',this)"></div>
+      <div class="line-color" style="background:#eab308" title="Жёлтый" onclick="setLineColor('#eab308',this)"></div>
+      <div class="line-color" style="background:#22c55e" title="Зелёный" onclick="setLineColor('#22c55e',this)"></div>
+      <div class="line-color" style="background:#3b82f6" title="Синий" onclick="setLineColor('#3b82f6',this)"></div>
+      <div class="line-color" style="background:#a855f7" title="Фиолетовый" onclick="setLineColor('#a855f7',this)"></div>
+      <div class="line-color" style="background:#ec4899" title="Розовый" onclick="setLineColor('#ec4899',this)"></div>
+      <div class="line-color" style="background:#e2e8f0" title="Белый" onclick="setLineColor('#e2e8f0',this)"></div>
+    </div>
     <button class="tbtn" id="draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч (звук при достижении %)">🔔─</button>
     <button class="tbtn" id="draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия (звук при достижении %)">🔔╱</button>
     <button class="tbtn" id="draw-long" onclick="setDrawMode('long')" title="Лонг: вход → СЛ → ТП 2:1">▲Л</button>

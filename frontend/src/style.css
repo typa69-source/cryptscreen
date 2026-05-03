@@ -451,13 +451,13 @@ html,body{
 .fs-back:active{transform:translateY(1px);}
 
 /* Brush color palette (shown in toolbar when brush active) */
-#brushPalette{
+#brushPalette,#linePalette{
   display:none;align-items:center;gap:3px;padding:0 3px;
 }
-#brushPalette.visible{display:flex}
-.brush-color{width:13px;height:13px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .1s}
-.brush-color:hover{transform:scale(1.25)}
-.brush-color.active{border-color:#fff}
+#brushPalette.visible,#linePalette.visible{display:flex}
+.brush-color,.line-color{width:13px;height:13px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .1s}
+.brush-color:hover,.line-color:hover{transform:scale(1.25)}
+.brush-color.active,.line-color.active{border-color:#fff}
 .brush-size{width:28px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;
   color:var(--text);font:inherit;font-size:9px;padding:1px 3px;text-align:center}
 

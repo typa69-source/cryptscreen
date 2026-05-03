@@ -199,6 +199,14 @@ const MIN_CHART_CANDLES = 32; // меньше — считаем данные б
 const HIST_TRIGGER = 15;
 const FS_TFS = ['1m','3m','5m','15m','30m','1h','4h','1d','3d','1w'];
 const DRAW_HIT = 8; // px threshold for hover detection
+function hexToRgbA(hex,a){
+  if(!hex||typeof hex!=='string')return`rgba(168,85,247,${a})`;
+  let h=hex.replace('#','');
+  if(h.length===3)h=h.split('').map(c=>c+c).join('');
+  const n=parseInt(h,16);
+  if(isNaN(n))return`rgba(168,85,247,${a})`;
+  return`rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
 
 const ALL_COLS = [
   {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены за 24 часа (%)'},
@@ -301,12 +309,18 @@ function saveChartViewPrefs(){
 function applyDefaultChartView(ch){
   if(!ch?.lc||!ch.candles?.length)return;
   const len=ch.candles.length;
-  const vis=Math.max(12,Math.min(S.chartVisibleBars|0,len));
-  const targetBars=Math.max(vis,MIN_CHART_CANDLES);
+  // Мало баров — только fit, без «логического зума» на 32+ пустых слотов
+  if(len<MIN_CHART_CANDLES){
+    try{ch.lc.timeScale().fitContent();}catch(e){}
+    return;
+  }
+  const want=Math.max(12,Math.min(S.chartVisibleBars|0,len));
+  const targetBars=Math.min(len,Math.max(want,MIN_CHART_CANDLES));
+  const from=Math.max(0,len-targetBars);
   const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
   try{
     ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
-    ch.lc.timeScale().setVisibleLogicalRange({from:len-targetBars,to:len-1});
+    ch.lc.timeScale().setVisibleLogicalRange({from,to:len-1});
     ch.lc.timeScale().applyOptions({rightOffset:ro});
   }catch(e){}
 }
@@ -328,14 +342,14 @@ function mkChart(){
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
     _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
-    livePriceLine:null};
+    livePriceLine:null,_histBootstrapDone:false};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
     _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
-    livePriceLine:null};
+    livePriceLine:null,_histBootstrapDone:false};
 }
 function getChartSym(ch){
   if(ch?.sym)return ch.sym;
@@ -1081,7 +1095,7 @@ function setSlotLoading(slot,on,text='Загрузка данных...'){
 async function loadChart(slot,sym){
   const ch=S.charts[slot];
   if(!sym){
-    ch.sym=null;ch.candles=[];ch.drawings=[];
+    ch.sym=null;ch.candles=[];ch.drawings=[];ch._histBootstrapDone=false;
     setSlotLoading(slot,false);
     setText(`cs${slot}`,'—');
     ['cp','cg','cv','ctd','cco'].forEach(p=>setText(`${p}${slot}`,''));
@@ -1089,7 +1103,7 @@ async function loadChart(slot,sym){
     if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
     return;
   }
-  ch.sym=sym;ch.candles=[];ch.histLoading=false;
+  ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
   ch.drawings=getSymDrawings(sym); // shared reference
   setText(`cs${slot}`,sym.replace(/USDT$/,''));
   setCoinIcon(`ci${slot}`,sym);
@@ -1128,6 +1142,7 @@ function paintSlotData(slot){
   const ch=S.charts[slot];
   if(!ch.candles.length||!ch.cs)return;
   if(ch.candles.length<MIN_CHART_CANDLES){
+    ch._histBootstrapDone=false;
     setSlotLoading(slot,true,'Догружаем историю...');
     ch._thinPaintRetries=(ch._thinPaintRetries||0)+1;
     if(ch._thinPaintRetries<=3&&ch.sym){
@@ -1145,6 +1160,7 @@ function paintSlotData(slot){
     }
     return;
   }
+  ch._histBootstrapDone=true;
   setSlotLoading(slot,false);
   ch._thinPaintRetries=0;
   try{
@@ -1615,13 +1631,14 @@ function drawCustomCrosshair(ctx,ch,W,H){
 function drawHRay(ctx,ch,d,W,hov){
   const y=ch.cs.priceToCoordinate(d.p1.price);if(y===null)return;
   const x0=timeToCoordX(ch,d.p1.time)??0;
+  const col=d.color||'#e8a020';
   // Clamp x0 so ray always starts left-of or at current position, draws rightward
   const xs=Math.max(0,x0);
   ctx.save();
-  if(hov){ctx.shadowColor=d.color;ctx.shadowBlur=6;}
-  ctx.beginPath();ctx.strokeStyle=d.color;ctx.lineWidth=hov?2:1;ctx.setLineDash([5,3]);
+  if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
+  ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=hov?2:1;ctx.setLineDash([5,3]);
   ctx.moveTo(xs,y);ctx.lineTo(W,y);ctx.stroke();ctx.setLineDash([]);
-  ctx.fillStyle=d.color;ctx.font='9px JetBrains Mono,monospace';ctx.textAlign='right';
+  ctx.fillStyle=col;ctx.font='9px JetBrains Mono,monospace';ctx.textAlign='right';
   ctx.fillText(fmtPrice(d.p1.price),W-3,y-3);ctx.textAlign='left';
   ctx.beginPath();ctx.arc(xs,y,3,0,Math.PI*2);ctx.fill();
   ctx.restore();
@@ -1633,11 +1650,12 @@ function drawTLine(ctx,ch,d,hov){
   const x2=timeToCoordX(ch,d.p2.time);
   const y2=ch.cs.priceToCoordinate(d.p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
+  const col=d.color||'#3b82f6';
   ctx.save();
-  if(hov){ctx.shadowColor=d.color;ctx.shadowBlur=6;}
-  ctx.beginPath();ctx.strokeStyle=d.color;ctx.lineWidth=hov?2.5:1.2;
+  if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
+  ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=hov?2.5:1.2;
   ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
-  ctx.beginPath();ctx.fillStyle=d.color;ctx.arc(x1,y1,3,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.fillStyle=col;ctx.arc(x1,y1,3,0,Math.PI*2);ctx.fill();
   ctx.beginPath();ctx.arc(x2,y2,3,0,Math.PI*2);ctx.fill();
   ctx.restore();
 }
@@ -1667,12 +1685,12 @@ function drawAlertRay(ctx,ch,d,W,hov){
   const y=ch.cs.priceToCoordinate(d.p1.price);if(y===null)return;
   const x0=timeToCoordX(ch,d.p1.time)??0;
   const xs=Math.max(0,x0);
-  const col='#a855f7';
+  const col=d.color||'#a855f7';
   ctx.save();
   if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
   if(d.alertPct!=null&&d.alertPct>0){
     const bandH=Math.abs((ch.cs.priceToCoordinate(d.p1.price*(1-d.alertPct/100))??y)-y);
-    ctx.fillStyle='rgba(168,85,247,0.06)';
+    ctx.fillStyle=hexToRgbA(col,0.06);
     ctx.fillRect(xs,y-bandH,W-xs,bandH*2);
   }
   ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=hov?2:1.2;ctx.setLineDash([6,3]);
@@ -1692,7 +1710,7 @@ function drawAlertTLine(ctx,ch,d,hov){
   const x2=timeToCoordX(ch,d.p2.time);
   const y2=ch.cs.priceToCoordinate(d.p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
-  const col='#a855f7';
+  const col=d.color||'#a855f7';
   ctx.save();
   if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
   // #7: Draw ±alertPct% band
@@ -1708,9 +1726,9 @@ function drawAlertTLine(ctx,ch,d,hov){
       ctx.beginPath();
       ctx.moveTo(x1,y1u);ctx.lineTo(x2,y2u);
       ctx.lineTo(x2,y2l);ctx.lineTo(x1,y1l);ctx.closePath();
-      ctx.fillStyle='rgba(168,85,247,0.06)';ctx.fill();
+      ctx.fillStyle=hexToRgbA(col,0.06);ctx.fill();
       // Upper & lower dashed lines
-      ctx.beginPath();ctx.strokeStyle='rgba(168,85,247,0.35)';ctx.lineWidth=0.8;ctx.setLineDash([4,4]);
+      ctx.beginPath();ctx.strokeStyle=hexToRgbA(col,0.35);ctx.lineWidth=0.8;ctx.setLineDash([4,4]);
       ctx.moveTo(x1,y1u);ctx.lineTo(x2,y2u);ctx.stroke();
       ctx.beginPath();ctx.moveTo(x1,y1l);ctx.lineTo(x2,y2l);ctx.stroke();
       ctx.setLineDash([]);
@@ -1755,6 +1773,8 @@ function drawBrushStroke(ctx,ch,d,hov){
 // Current brush color (shared across charts)
 let _brushColor='#f97316';
 let _brushWidth=2;
+/** Цвет для луча / тренда / алерт-линий / лонг-шорт (общий как у кисти по умолчанию) */
+let _lineColor='#f97316';
 
 // ── Trade helpers ──────────────────────────────────────────────
 // Returns entry/tp/sl as absolute prices (migrates old rr-based format)
@@ -1797,7 +1817,7 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   const lx=Math.min(x1,x2),rx=Math.max(x1,x2);
   const tpCol='#1fa891';
   const slCol='#e04040';
-  const dirCol=isLong?'#1fa891':'#e04040';
+  const dirCol=d.color||(isLong?'#1fa891':'#e04040');
   const alpha=preview?0.4:(hov?0.7:0.5);
   const rr=Math.abs(tpPrice-entryPrice)/Math.max(0.000001,Math.abs(slPrice-entryPrice));
 
@@ -2150,7 +2170,7 @@ function onInteractClick(ch,e,container){
   const drawSym=getChartSym(ch);
   if(S.drawMode==='hray'){
     if(drawSym)pushDrawUndo(drawSym);
-    ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:'#e8a020'});
+    ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:_lineColor});
     _lastDrawSym=drawSym||_lastDrawSym;
     rCanvas(ch);
     setDrawMode(null);
@@ -2158,13 +2178,13 @@ function onInteractClick(ch,e,container){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
       if(drawSym)pushDrawUndo(drawSym);
-      ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:'#3b82f6'});
+      ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:_lineColor});
       _lastDrawSym=drawSym||_lastDrawSym;
       ch.pendingP1=null;rCanvas(ch);
       setDrawMode(null);
     }
   }else if(S.drawMode==='aray'){
-    const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0};
+    const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0,color:_lineColor};
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push(d);rCanvas(ch);
     _lastDrawSym=drawSym||_lastDrawSym;
@@ -2173,7 +2193,7 @@ function onInteractClick(ch,e,container){
   }else if(S.drawMode==='atline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
-      const d={id:++S.drawIdCounter,type:'atline',p1:ch.pendingP1,p2:pt,alertPct:null,_lastAlert:0};
+      const d={id:++S.drawIdCounter,type:'atline',p1:ch.pendingP1,p2:pt,alertPct:null,_lastAlert:0,color:_lineColor};
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=drawSym||_lastDrawSym;
@@ -2189,7 +2209,7 @@ function onInteractClick(ch,e,container){
       const rr=2;
       const slPrice=isLong?entryPrice-slDist:entryPrice+slDist;
       const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
-      const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice};
+      const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice,color:_lineColor};
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=drawSym||_lastDrawSym;
@@ -2208,6 +2228,12 @@ function setDrawMode(mode){
    ['fs-draw-aray','aray'],['fs-draw-atline','atline']].forEach(([id,m])=>{
     const el=document.getElementById(id);if(el)el.classList.toggle('on',m===mode);
   });
+  // Палитра для луча / линии / алертов / лонг-шорт
+  const lp=document.getElementById('linePalette');
+  if(lp){
+    const lineModes=['hray','tline','aray','atline','long','short'];
+    lp.classList.toggle('visible',mode&&mode!=='brush'&&lineModes.includes(mode));
+  }
   // Show/hide brush palette (main and FS toolbars)
   const bp=document.getElementById('brushPalette');
   if(bp)bp.classList.toggle('visible',mode==='brush');
@@ -2612,8 +2638,6 @@ document.addEventListener('keydown',e=>{
     });
   }
 });
-document.addEventListener('keydown',e=>{handleUndoRedoShortcut(e);},{capture:true});
-
 // FIX 7: Reconnect WebSocket and refresh candles after tab was hidden (sleep/background)
 let _lastHiddenAt=0;
 async function backfillChartGap(ch,sym,tf,limit=500){
@@ -2633,6 +2657,7 @@ async function backfillChartGap(ch,sym,tf,limit=500){
 }
 function repaintChartSeries(ch,cacheKey=''){
   if(!ch?.cs||!ch?.vs||!ch?.candles?.length)return;
+  ch._histBootstrapDone=ch.candles.length>=MIN_CHART_CANDLES;
   ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
   const lc=ch.candles[ch.candles.length-1];
@@ -2708,7 +2733,7 @@ function startChartWS(){
     if(!k)return;
     const symU=String(k.s||'').toUpperCase();
     const slot=S.charts.findIndex(c=>c.sym===symU);if(slot===-1)return;
-    const ch=S.charts[slot];if(!ch.cs)return;
+    const ch=S.charts[slot];if(!ch.cs||!ch._histBootstrapDone)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
     if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
     else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)ch.candles.push(candle);
@@ -2822,7 +2847,7 @@ function startChartTradesWS(){
     const slot=S.charts.findIndex(c=>c.sym===symU);
     if(slot===-1)return;
     const ch=S.charts[slot];
-    if(!ch?.cs||!ch.candles?.length)return;
+    if(!ch?.cs||!ch._histBootstrapDone||!ch.candles?.length)return;
     const ts=+(d.T||d.E)||Date.now();
     if(!applyLivePriceToCandle(ch,S.tf,price,ts))return;
     ch._lastRtUpdateTs=Date.now();
@@ -3118,15 +3143,18 @@ function buildScreenerHeader(hdrEl){
 
 function sortedRows(){
   let rows=Object.values(S.mx);
-  if(!rows.length&&S.syms.length){
-    rows=S.syms.map(sym=>{
+  // Подмешиваем монеты без записи в mx (гонка calcAll / partial tk) — иначе пустые слоты и «—».
+  if(S.syms.length){
+    const have=new Set(rows.map(r=>r.sym));
+    for(const sym of S.syms){
+      if(have.has(sym))continue;
       const t=S.tk[sym]||{};
-      return{
+      rows.push({
         sym,price:t.p??null,ch24:t.c24??null,cday:null,rtd:null,r24:null,r7d:null,
         na30:null,na14:null,r1m5:null,tr5:null,tr1h:null,vr5:null,vr1h:null,
         ch7d:null,trd24:t.tr??null,vol24:t.qv??null,corr:null,corr14:null,v15m:null,v60m:null
-      };
-    });
+      });
+    }
   }
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
@@ -4039,6 +4067,7 @@ function buildFsTfBar(barId,idx){
 function initFsChart(idx){
   if(!S.LC)return;
   const fch=S.fsCharts[idx];
+  fch._histBootstrapDone=false;
   fch.drawings=S.fsSym?getSymDrawings(S.fsSym):[];
   initLCChart(null,true,idx);
   const wm=document.getElementById(`fswm${idx}`);
@@ -4048,6 +4077,7 @@ function initFsChart(idx){
 async function loadFsChart(idx){
   const fch=S.fsCharts[idx];const sym=S.fsSym;
   if(!sym||!fch.cs||!fch.lc)return;
+  fch._histBootstrapDone=false;
   try{
     let raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
     if(S.fsSym!==sym)return;
@@ -4058,6 +4088,12 @@ async function loadFsChart(idx){
       candles=parseKlines(raw);
     }
     fch.candles=candles.slice(-HIST_CACHE_MAX);
+    if(fch.candles.length<MIN_CHART_CANDLES){
+      fch._histBootstrapDone=false;
+      console.warn('loadFsChart thin',sym,fch.tf,fch.candles.length);
+      return;
+    }
+    fch._histBootstrapDone=true;
     if(fch.candles.length){
       const lp=fch.candles[fch.candles.length-1].c;
       fch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
@@ -4206,7 +4242,7 @@ function startFsWs(){
       if(price==null)return;
       const ts=+(data.T||data.E)||Date.now();
       S.fsCharts.forEach(fch=>{
-        if(!fch.cs||!fch.candles?.length)return;
+        if(!fch.cs||!fch._histBootstrapDone||!fch.candles?.length)return;
         if(!applyLivePriceToCandle(fch,fch.tf,price,ts))return;
         fch._lastRtUpdateTs=Date.now();
         S.histCache[`${fch.tf}:${S.fsSym}`]=fch.candles.slice(-HIST_CACHE_MAX);
@@ -4223,7 +4259,7 @@ function startFsWs(){
     const k=data.k;
     const tf=k.i;
     S.fsCharts.forEach(fch=>{
-      if(fch.tf!==tf||!fch.cs)return;
+      if(fch.tf!==tf||!fch.cs||!fch._histBootstrapDone)return;
       const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
       try{
         fch.cs.update({time:toChartTime(candle.t),open:candle.o,high:candle.h,low:candle.l,close:candle.c});
@@ -4625,6 +4661,11 @@ function setBrushColor(col,el){
   document.querySelectorAll('.brush-color').forEach(d=>d.classList.remove('active'));
   if(el)el.classList.add('active');
 }
+function setLineColor(col,el){
+  _lineColor=col;
+  document.querySelectorAll('.line-color').forEach(d=>d.classList.remove('active'));
+  if(el)el.classList.add('active');
+}
 function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 
 // ═══════════════════════════════════════════════════════════════
@@ -4676,8 +4717,6 @@ window.deletePotPreset      = deletePotPreset;
 window.clearPotentialMatches= clearPotentialMatches;
 window.setBrushColor        = setBrushColor;
 window.setBrushWidth        = setBrushWidth;
+window.setLineColor         = setLineColor;
 window.toggleEMA            = toggleEMA;
 window.openEMAEditor        = openEMAEditor;
-
-
-main();
