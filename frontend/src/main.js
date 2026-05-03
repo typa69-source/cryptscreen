@@ -337,6 +337,11 @@ function mkFsChart(tf){
     _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
     livePriceLine:null};
 }
+function getChartSym(ch){
+  if(ch?.sym)return ch.sym;
+  if(S.fsCharts.includes(ch))return S.fsSym||null;
+  return null;
+}
 
 function activeCols(){
   return S.colOrder.filter(id=>S.colVisible.has(id))
@@ -754,10 +759,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     e.preventDefault();
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     const pt=pixelToPoint(ch,x,y);if(!pt)return;
-    if(ch.sym)pushDrawUndo(ch.sym);
+    const drawSym=getChartSym(ch);
+    if(drawSym)pushDrawUndo(drawSym);
     const stroke={id:++S.drawIdCounter,type:'brush',pts:[pt],color:_brushColor,width:_brushWidth,opacity:0.85};
     ch.drawings.push(stroke);
-    _lastDrawSym=ch.sym||_lastDrawSym;
+    _lastDrawSym=drawSym||_lastDrawSym;
     ch._brushStroke=stroke;
   });
   interact.addEventListener('mousemove',e=>{
@@ -909,10 +915,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   },{capture:true,signal:sig});
   container.addEventListener('mousemove',e=>{
     if(!ch.draggingDraw)return;
-    if(!ch.draggingDraw._undoPushed&&ch.sym){
-      pushDrawUndo(ch.sym);
+    if(!ch.draggingDraw._undoPushed){
+      const drawSym=getChartSym(ch);
+      if(drawSym)pushDrawUndo(drawSym);
       ch.draggingDraw._undoPushed=true;
-      _lastDrawSym=ch.sym;
+      _lastDrawSym=drawSym||_lastDrawSym;
     }
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     const d=ch.drawings[ch.draggingDraw.drawIdx];
@@ -1054,10 +1061,28 @@ function applySymDrawings(sym,drawings){
     }
   });
 }
+function setSlotLoading(slot,on,text='Загрузка данных...'){
+  const cb=document.getElementById(`cb${slot}`);
+  if(!cb)return;
+  let m=cb.querySelector('.chart-load-mask');
+  if(!on){
+    if(m)m.remove();
+    return;
+  }
+  if(!m){
+    m=document.createElement('div');
+    m.className='chart-load-mask';
+    m.style.cssText='position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none;background:linear-gradient(to bottom,rgba(10,10,11,.10),rgba(10,10,11,.45));z-index:7';
+    m.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
+    cb.appendChild(m);
+  }
+  m.title=text;
+}
 async function loadChart(slot,sym){
   const ch=S.charts[slot];
   if(!sym){
     ch.sym=null;ch.candles=[];ch.drawings=[];
+    setSlotLoading(slot,false);
     setText(`cs${slot}`,'—');
     ['cp','cg','cv','ctd','cco'].forEach(p=>setText(`${p}${slot}`,''));
     const cb=document.getElementById(`cb${slot}`);
@@ -1071,6 +1096,7 @@ async function loadChart(slot,sym){
   const cb=document.getElementById(`cb${slot}`);
   if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
   initLCChart(slot);
+  setSlotLoading(slot,true);
   const wm=document.getElementById(`wm${slot}`);if(wm)wm.textContent=sym.replace(/USDT$/,'');
   const cacheKey=`${S.tf}:${sym}`;
   const cached=S.histCache[cacheKey];
@@ -1102,6 +1128,7 @@ function paintSlotData(slot){
   const ch=S.charts[slot];
   if(!ch.candles.length||!ch.cs)return;
   if(ch.candles.length<MIN_CHART_CANDLES){
+    setSlotLoading(slot,true,'Догружаем историю...');
     ch._thinPaintRetries=(ch._thinPaintRetries||0)+1;
     if(ch._thinPaintRetries<=3&&ch.sym){
       const sym=ch.sym,ck=`${S.tf}:${sym}`,tf=S.tf;
@@ -1118,6 +1145,7 @@ function paintSlotData(slot){
     }
     return;
   }
+  setSlotLoading(slot,false);
   ch._thinPaintRetries=0;
   try{
     const lp=ch.candles[ch.candles.length-1].c;
@@ -1312,9 +1340,10 @@ function removeDrawingAtCursor(ch){
   if(ch.pendingP1){ch.pendingP1=null;rCanvas(ch);return;}
   const idx=ch.hoveredIdx;
   if(idx>=0&&idx<ch.drawings.length){
-    if(ch.sym)pushDrawUndo(ch.sym);
+    const drawSym=getChartSym(ch);
+    if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.splice(idx,1);ch.hoveredIdx=-1;
-    _lastDrawSym=ch.sym||_lastDrawSym;
+    _lastDrawSym=drawSym||_lastDrawSym;
     rCanvas(ch);
   }
 }
@@ -2118,35 +2147,36 @@ function onInteractClick(ch,e,container){
   if(!S.drawMode)return;
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   const pt=snapPoint(ch,x,y,e.ctrlKey);if(!pt)return;
+  const drawSym=getChartSym(ch);
   if(S.drawMode==='hray'){
-    if(ch.sym)pushDrawUndo(ch.sym);
+    if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:'#e8a020'});
-    _lastDrawSym=ch.sym||_lastDrawSym;
+    _lastDrawSym=drawSym||_lastDrawSym;
     rCanvas(ch);
     setDrawMode(null);
   }else if(S.drawMode==='tline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
-      if(ch.sym)pushDrawUndo(ch.sym);
+      if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:'#3b82f6'});
-      _lastDrawSym=ch.sym||_lastDrawSym;
+      _lastDrawSym=drawSym||_lastDrawSym;
       ch.pendingP1=null;rCanvas(ch);
       setDrawMode(null);
     }
   }else if(S.drawMode==='aray'){
     const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0};
-    if(ch.sym)pushDrawUndo(ch.sym);
+    if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push(d);rCanvas(ch);
-    _lastDrawSym=ch.sym||_lastDrawSym;
+    _lastDrawSym=drawSym||_lastDrawSym;
     showAlertPctInput(ch,d,container);
     setDrawMode(null);
   }else if(S.drawMode==='atline'){
     if(!ch.pendingP1)ch.pendingP1=pt;
     else{
       const d={id:++S.drawIdCounter,type:'atline',p1:ch.pendingP1,p2:pt,alertPct:null,_lastAlert:0};
-      if(ch.sym)pushDrawUndo(ch.sym);
+      if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
-      _lastDrawSym=ch.sym||_lastDrawSym;
+      _lastDrawSym=drawSym||_lastDrawSym;
       showAlertPctInput(ch,d,container);
       setDrawMode(null);
     }
@@ -2160,9 +2190,9 @@ function onInteractClick(ch,e,container){
       const slPrice=isLong?entryPrice-slDist:entryPrice+slDist;
       const tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
       const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice};
-      if(ch.sym)pushDrawUndo(ch.sym);
+      if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
-      _lastDrawSym=ch.sym||_lastDrawSym;
+      _lastDrawSym=drawSym||_lastDrawSym;
       setDrawMode(null);
     }
   }
@@ -3088,6 +3118,16 @@ function buildScreenerHeader(hdrEl){
 
 function sortedRows(){
   let rows=Object.values(S.mx);
+  if(!rows.length&&S.syms.length){
+    rows=S.syms.map(sym=>{
+      const t=S.tk[sym]||{};
+      return{
+        sym,price:t.p??null,ch24:t.c24??null,cday:null,rtd:null,r24:null,r7d:null,
+        na30:null,na14:null,r1m5:null,tr5:null,tr1h:null,vr5:null,vr1h:null,
+        ch7d:null,trd24:t.tr??null,vol24:t.qv??null,corr:null,corr14:null,v15m:null,v60m:null
+      };
+    });
+  }
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
   if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||getSymGroup(r.sym)>0);
