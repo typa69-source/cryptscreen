@@ -534,7 +534,7 @@ async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
     const results=await Promise.allSettled(batch.map(s=>fj(`${API}/klines?symbol=${s}&interval=${iv}&limit=${lim}`).then(d=>[s,parseKlines(d)])));
     for(const r of results)if(r.status==='fulfilled')out[r.value[0]]=r.value[1];
     if(pFrom!=null)ldSet(null,pFrom+Math.round((i/syms.length)*(pTo-pFrom)),`${iv}: ${Math.min(i+bs,syms.length)}/${syms.length}`);
-    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,900+Math.random()*600));
+    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,120+Math.random()*120));
   }
   return out;
 }
@@ -590,6 +590,24 @@ function applyLiveKlineUpdate(sym,price,nowMs){
   updateLiveKlineSeries(S.k1m[sym],60000,price,nowMs);
   updateLiveKlineSeries(S.k5m[sym],300000,price,nowMs);
   updateLiveKlineSeries(S.k1h[sym],3600000,price,nowMs);
+}
+
+function appendCandleWithGaps(arr,candle,stepMs){
+  if(!arr||!candle)return;
+  if(!arr.length){arr.push(candle);return;}
+  const prev=arr[arr.length-1];
+  if(!prev?.t){arr.push(candle);return;}
+  if(candle.t<=prev.t){
+    if(candle.t===prev.t)arr[arr.length-1]=candle;
+    return;
+  }
+  if(stepMs>0){
+    for(let ts=prev.t+stepMs;ts<candle.t;ts+=stepMs){
+      const base=arr[arr.length-1]?.c??prev.c;
+      arr.push({t:ts,o:base,h:base,l:base,c:base,v:0,tr:0,qv:0,_synthetic:true});
+    }
+  }
+  arr.push(candle);
 }
 
 function calcAll(){
@@ -2883,9 +2901,9 @@ function startChartWS(){
     const symU=String(k.s||'').toUpperCase();
     const slot=S.charts.findIndex(c=>c.sym===symU);if(slot===-1)return;
     const ch=S.charts[slot];if(!ch.cs||!ch._histBootstrapDone)return;
-    const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
+    const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q,v:+k.v,tr:+k.n};
     if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
-    else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)ch.candles.push(candle);
+    else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)appendCandleWithGaps(ch.candles,candle,tfMs(S.tf));
     ch._lastRtUpdateTs=Date.now();
     S.histCache[`${S.tf}:${symU}`]=ch.candles.slice(-HIST_CACHE_MAX);
     ch._pendingCandle=candle;
@@ -2944,8 +2962,8 @@ function applyLivePriceToCandle(ch,tfStr,price,tsMs){
     if(price>c.h)c.h=price;
     if(price<c.l)c.l=price;
   }else if(bucketTs>c.t){
-    const nc={t:bucketTs,o:c.c,h:Math.max(c.c,price),l:Math.min(c.c,price),c:price,qv:c.qv||0,v:c.v||0,tr:c.tr||0};
-    ch.candles.push(nc);
+    const nc={t:bucketTs,o:c.c,h:Math.max(c.c,price),l:Math.min(c.c,price),c:price,qv:0,v:0,tr:0,_synthetic:true};
+    appendCandleWithGaps(ch.candles,nc,ms);
     if(ch.candles.length>HIST_CACHE_MAX)ch.candles.splice(0,ch.candles.length-HIST_CACHE_MAX);
   }else{
     return false;
@@ -3008,6 +3026,7 @@ function startChartTradesWS(){
         if(!lc||!ch.cs)return;
         try{
           ch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
+          ch.vs.update({time:toChartTime(lc.t),value:lc.qv||0,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
           syncLivePriceLabel(ch,lc.c,lc.o);
           const cpEl=document.getElementById(`cp${slot}`);
           if(cpEl)cpEl.textContent=fmtPrice(lc.c);
@@ -3135,6 +3154,60 @@ let _wsBatchTimer=null;
 let _metricsRecalcTimer=null;
 const SCREENER_BATCH_MS=250;
 const METRICS_RECALC_DEBOUNCE_MS=1000;
+let _metricsSyncBusy=false;
+let _metricsSyncCursor=0;
+let _metricsSyncInterval=null;
+
+function priorityMetricSyms(limit=90){
+  const pinned=[...S.charts.map(c=>c.sym).filter(Boolean),...(S.fsOpen&&S.fsSym?[S.fsSym]:[])];
+  const byVol=Object.entries(S.tk).filter(([sym])=>S.syms.includes(sym)).sort((a,b)=>(b[1]?.qv||0)-(a[1]?.qv||0)).map(([sym])=>sym);
+  const seen=new Set();
+  const out=[];
+  for(const s of[...pinned,...byVol]){
+    if(!s||seen.has(s))continue;
+    seen.add(s);out.push(s);
+    if(out.length>=limit)break;
+  }
+  return out;
+}
+
+async function refreshMetricKlinesSlice(){
+  if(_metricsSyncBusy||!S.syms.length)return;
+  _metricsSyncBusy=true;
+  try{
+    const universe=priorityMetricSyms(Math.min(180,S.syms.length));
+    if(!universe.length)return;
+    const sliceSize=36;
+    if(_metricsSyncCursor>=universe.length)_metricsSyncCursor=0;
+    const slice=universe.slice(_metricsSyncCursor,_metricsSyncCursor+sliceSize);
+    _metricsSyncCursor+=slice.length;
+    if(!slice.length)return;
+    const [k5,k1h,k1m]=await Promise.all([
+      batchKlines(slice,'5m',300,null,null,10),
+      batchKlines(slice,'1h',170,null,null,10),
+      batchKlines(slice,'1m',70,null,null,10),
+    ]);
+    Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
+    calcAll();
+    if(!document.hidden){
+      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
+      else scheduleRender();
+    }
+    if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
+  }catch(e){
+    console.warn('metric sync slice failed',e);
+  }finally{
+    _metricsSyncBusy=false;
+  }
+}
+
+function ensureMetricsSyncLoop(){
+  if(_metricsSyncInterval)return;
+  _metricsSyncInterval=setInterval(()=>{
+    if(document.hidden)return;
+    refreshMetricKlinesSlice();
+  },22000);
+}
 
 function scheduleRealtimeMetricRecalc(gen){
   if(_metricsRecalcTimer||!S.bgDone)return;
@@ -3216,6 +3289,7 @@ function startScreenerWS(){
   ws.onclose=()=>schedReconnect();
   ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
   S.wsScreener=ws;
+  ensureMetricsSyncLoop();
 }
 
 function _applyTickerUpdate(arr,gen){
@@ -4484,6 +4558,7 @@ function startFsWs(){
         try{
           const lc=fch.candles[fch.candles.length-1];
           fch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
+          fch.vs.update({time:toChartTime(lc.t),value:lc.qv||0,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
           syncLivePriceLabel(fch,lc.c,lc.o);
         }catch(e){}
         rCanvas(fch);
@@ -4495,14 +4570,14 @@ function startFsWs(){
     const tf=k.i;
     S.fsCharts.forEach(fch=>{
       if(fch.tf!==tf||!fch.cs||!fch._histBootstrapDone)return;
-      const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q};
+      const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q,v:+k.v,tr:+k.n};
       try{
         fch.cs.update({time:toChartTime(candle.t),open:candle.o,high:candle.h,low:candle.l,close:candle.c});
         fch.vs.update({time:toChartTime(candle.t),value:candle.qv,color:candle.c>=candle.o?'#1fa89122':'#e0404022'});
         syncLivePriceLabel(fch,candle.c,candle.o);
       }catch(e){}
       if(fch.candles.length&&fch.candles[fch.candles.length-1].t===candle.t)fch.candles[fch.candles.length-1]=candle;
-      else if(fch.candles.length&&candle.t>fch.candles[fch.candles.length-1].t)fch.candles.push(candle);
+      else if(fch.candles.length&&candle.t>fch.candles[fch.candles.length-1].t)appendCandleWithGaps(fch.candles,candle,tfMs(fch.tf));
       fch._lastRtUpdateTs=Date.now();
       S.histCache[`${fch.tf}:${S.fsSym}`]=fch.candles.slice(-HIST_CACHE_MAX);
       rCanvas(fch);
@@ -4528,6 +4603,7 @@ async function loadKlinesBackground(){
     Object.assign(S.k1h,await batchKlines(all,'1h',170,null,null,8));
     Object.assign(S.k1m,await batchKlines(all,'1m',70,null,null,6));
     calcAll();renderTable();
+    refreshMetricKlinesSlice();
   }catch(e){
     console.warn('bg klines',e);
   }finally{
