@@ -72,6 +72,7 @@
       <span id="htime"></span>
       <div class="hsep"></div>
       <button class="hbtn hbtn-fast" id="fastBtn" onclick="toggleFastMode()" type="button" title="Fast: чаще обновлять таблицу и синхрон сетки графиков (нагрузка на CPU выше)">⚡ Fast</button>
+      <button class="hbtn" id="chartSyncBtn" onclick="toggleChartAutoSync()" type="button" title="Когда выкл — список обновляется, но мини-графики 3×3 не подменяются при смене топа по сортировке">Графы·авто</button>
       <button class="hbtn on" id="toggleScrBtn" onclick="toggleScreener()">▶ Список</button>
       <button class="hbtn" onclick="toggleAlertLog()" title="История алертов">🔔<span id="alertBadge"></span></button>
       <button class="hbtn" id="potBtn" onclick="togglePotentialPanel()" title="Потенциал — мониторинг условий">⚡ Потенциал<span id="potBadge" style="display:none;background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;margin-left:3px"></span></button>

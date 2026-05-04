@@ -189,6 +189,7 @@ if (getToken()) {
 //  CONSTANTS
 // ═══════════════════════════════════════════════════════════════
 const API = 'https://fapi.binance.com/fapi/v1';
+const API_FDATA = 'https://fapi.binance.com/futures/data';
 // Timezone: offset candle times to device local time
 const TZ_OFFSET_S = -(new Date().getTimezoneOffset() * 60); // seconds to add to UTC
 function toChartTime(ms){ return Math.floor(ms/1000) + TZ_OFFSET_S; }
@@ -229,7 +230,12 @@ const ALL_COLS = [
   {id:'corr14', l:'КРЛЦ', s:'5м/14',  tip:'Корреляция с BTC по последним 14 пятиминутным свечам — краткосрочное «следование» или расхождение с биткоином.'},
   {id:'v15m',   l:'ОБ',   s:'1м/15',  tip:'Сумма объёма в USDT за последние 15 минут по минутным свечам — недавний приток/отток ликвидности без учёта направления цены.'},
   {id:'v60m',   l:'ОБ',   s:'1м/60',  tip:'Сумма объёма в USDT за последний час по минутным свечам — более широкое окно, чем 15м, для оценки недавней активности.'},
+  {id:'fund',   l:'ФНД',  s:'8ч',     tip:'Ставка финансирования (lastFundingRate) с Binance Futures, в % за период ~8ч. Положительная — лонги платят шортам, отрицательная — наоборот. Обновляется пакетом раз в минуту.'},
+  {id:'oi1h',   l:'OIΔ',  s:'1ч%',    tip:'Изменение open interest за ~1 час по часовым снимкам Binance (openInterestHist, period=1h). Показывает приток/отток позиций относительно час назад.'},
+  {id:'oi4h',   l:'OIΔ',  s:'4ч%',    tip:'Изменение open interest за ~4 часа по тем же снимкам (сравнение с 4 барами назад). Догружается по очереди для части списка, чтобы не ловить лимиты API.'},
 ];
+/** Колонки скринера по умолчанию скрытые (включаются в Настройки → Индикаторы). */
+const COLS_HIDDEN_BY_DEFAULT=new Set(['fund','oi1h','oi4h']);
 
 /** Плашки над мини-графиками и в полноэкранной шапке (отдельно от колонок скринера) */
 const CHART_HEAD_DEFS=[
@@ -260,7 +266,10 @@ const S = {
   minVol:0, minTrd:0, gridSize:9, upColor:'#1fa891', wmVisible:true, sortAbs:true,
   screenerVisible:true, fsScreenerVisible:true,
   colOrder: ALL_COLS.map(c=>c.id),
-  colVisible: new Set(ALL_COLS.map(c=>c.id)),
+  colVisible: new Set(ALL_COLS.map(c=>c.id).filter(id=>!COLS_HIDDEN_BY_DEFAULT.has(id))),
+  chartAutoSync:true,
+  /** Подсветка строк по торговым сессиям (границы в UTC, как у бирж). */
+  sessionFx:{enabled:false,asia:true,london:true,ny:true},
   chartHeadOrder:['chg','vol','trd','natr','corr'],
   chartHeadVisible:new Set(['chg','vol','trd','natr']),
   /** Цвет линий рисования по типу (не лонг/шорт) */
@@ -361,6 +370,23 @@ function loadLineColorPrefs(){
 function saveLineColorPrefs(){
   try{localStorage.setItem('cs_lineColors',JSON.stringify(S.lineColors));}catch(e){}
 }
+
+function loadUiPrefs(){
+  try{
+    const cs=localStorage.getItem('cs_chart_autosync');
+    if(cs!=null)S.chartAutoSync=cs==='1';
+    const sx=localStorage.getItem('cs_sess_fx');
+    if(sx){
+      const j=JSON.parse(sx);
+      if(typeof j.enabled==='boolean')S.sessionFx.enabled=j.enabled;
+      if(typeof j.asia==='boolean')S.sessionFx.asia=j.asia;
+      if(typeof j.london==='boolean')S.sessionFx.london=j.london;
+      if(typeof j.ny==='boolean')S.sessionFx.ny=j.ny;
+    }
+  }catch(e){}
+}
+function saveChartAutoSyncPref(){try{localStorage.setItem('cs_chart_autosync',S.chartAutoSync?'1':'0');}catch(e){}}
+function saveSessionFxPref(){try{localStorage.setItem('cs_sess_fx',JSON.stringify(S.sessionFx));}catch(e){}}
 
 function lineColorForType(type){
   const c=S.lineColors?.[type];
@@ -590,6 +616,30 @@ function sparkHeatBackground(pct){
   if(t>=0)return`rgba(34,197,94,${0.06+t*0.26})`;
   return`rgba(239,68,68,${0.06+(-t)*0.26})`;
 }
+/** Последние period закрытий на k5 → SMA, полосы Боллинджера, относительная ширина полос. */
+function bollingerOnTail(k5,period=20,mult=2){
+  if(!k5||k5.length<period)return null;
+  const w=k5.slice(-period);
+  const closes=w.map(x=>+x.c).filter(c=>isFinite(c)&&c>0);
+  if(closes.length<period)return null;
+  const sma=closes.reduce((a,b)=>a+b,0)/period;
+  let v=0;for(const x of closes)v+=(x-sma)*(x-sma);
+  const sd=Math.sqrt(v/period);
+  const upper=sma+mult*sd,lower=sma-mult*sd;
+  if(!isFinite(sma)||sma<=0)return null;
+  return{sma,upper,lower,width:(upper-lower)/sma,lastC:closes[closes.length-1]};
+}
+/** Узкая полоса vs предыдущий бар + всплеск vr5 + выход за полосу на последней свече. */
+function calcSqueezePop(k5,vr5){
+  const period=20,mult=2;
+  if(!k5||k5.length<period+3||vr5==null||!isFinite(vr5))return 0;
+  const cur=bollingerOnTail(k5,period,mult);
+  const prev=bollingerOnTail(k5.slice(0,-1),period,mult);
+  if(!cur||!prev)return 0;
+  const squeezed=cur.width<prev.width*0.88&&cur.width<0.045;
+  const breakout=cur.lastC>cur.upper*1.00005||cur.lastC<cur.lower*0.99995;
+  return(squeezed&&vr5>=1.25&&breakout)?1:0;
+}
 function calcNATRFlexible(kl,n){
   if(!kl||kl.length<3)return null;
   const p=Math.min(n,Math.max(2,kl.length-1));
@@ -674,6 +724,8 @@ function calcAll(){
     const k5today=k5&&k5.length?k5.filter(c=>c.t>=dayStartMs):[];
     const rtd=calcRangeFromCandles(k5today);
     const sp=spark5mSnapshot(k5,30);
+    const vr5v=calcRel(k5,14,'qv');
+    const oiE=_oiDelta[sym];
     const m={
       sym,price:t.p,ch24:t.c24,cday,
       sp5:sp.sp5,sp5d:sp.sp5d,
@@ -681,7 +733,11 @@ function calcAll(){
       r24:calcRange(k5,288),r7d:calcRange(k1h,168),
       na30:calcNATRFlexible(k1m,30),na14:calcNATRFlexible(k5,14),r1m5:calcRangeFlexible(k1m,5),
       tr5:calcRel(k5,14,'tr'),tr1h:calcRel(k1h,24,'tr'),
-      vr5:calcRel(k5,14,'qv'),vr1h:calcRel(k1h,24,'qv'),
+      vr5:vr5v,vr1h:calcRel(k1h,24,'qv'),
+      sqzPop:calcSqueezePop(k5,vr5v),
+      fund:_fundRates[sym]??null,
+      oi1h:oiE?.oi1h??null,
+      oi4h:oiE?.oi4h??null,
       ch7d:null,trd24:t.tr,vol24:t.qv,
       corr:S.btcR.length>10&&k5?calcCorr(calcRets(k5),S.btcR):null,
       corr14,
@@ -701,6 +757,8 @@ function fk(v){if(v==null||isNaN(v))return'—';const a=Math.abs(v);if(a>=1e9)re
 function fv(v,id){
   if(v==null||isNaN(v))return'—';
   if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5')return(v>0?'+':'')+fn(v,2)+'%';
+  if(id==='fund')return(v==null||!isFinite(v))?'—':(v*100).toFixed(3)+'%';
+  if(id==='oi1h'||id==='oi4h')return(v==null||!isFinite(v))?'—':(v>0?'+':'')+fn(v,2)+'%';
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return fn(v,1);
   if(id==='na30'||id==='na14')return fn(v,2);
   if(id==='tr5'||id==='tr1h'||id==='vr5'||id==='vr1h')return fn(v,1)+'×';
@@ -712,12 +770,25 @@ function fv(v,id){
 function fc(v,id){
   if(v==null||isNaN(v))return'd';
   if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5')return v>0?'p':v<0?'n':'w';
+  if(id==='fund')return'w';
+  if(id==='oi1h'||id==='oi4h')return v>0?'p':v<0?'n':'w';
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return v>15?'y':'w';
   if(id==='na30'||id==='na14')return v>0.5?'y':'w';
   if(id==='corr'||id==='corr14')return v>0.75?'d':v<-0.2?'n':'w';
   return'w';
 }
-function fh(v,id){if(!['tr5','tr1h','vr5','vr1h'].includes(id)||v==null||isNaN(v))return'';if(v>4)return'hv3';if(v>2.5)return'hv2';if(v>1.5)return'hv1';if(v<0.3)return'hr3';if(v<0.5)return'hr2';if(v<0.7)return'hr1';return'';}
+function fh(v,id){
+  if(v==null||isNaN(v))return'';
+  if(id==='oi1h'||id==='oi4h'){
+    const a=Math.abs(v);
+    if(a>=10)return'hv3';
+    if(a>=5)return'hv2';
+    if(a>=2.5)return'hv1';
+    return'';
+  }
+  if(!['tr5','tr1h','vr5','vr1h'].includes(id))return'';
+  if(v>4)return'hv3';if(v>2.5)return'hv2';if(v>1.5)return'hv1';if(v<0.3)return'hr3';if(v<0.5)return'hr2';if(v<0.7)return'hr1';return'';
+}
 
 function fmtPrice(p){
   if(p==null||isNaN(p)||p===0)return'—';
@@ -3240,6 +3311,69 @@ let _metricsSyncCursor=0;
 let _metricsSyncInterval=null;
 let _tickerRestFallbackInterval=null;
 let _lastTickerRestAt=0;
+/** lastFundingRate (доля, не %) по символу */
+let _fundRates={};
+/** {oi1h, oi4h} в % от openInterestHist 1h */
+let _oiDelta={};
+let _fundOiSymIdx=0;
+let _fundOiBusy=false;
+let _fundOiInterval=null;
+
+async function refreshPremiumFundingAll(){
+  if(document.hidden)return;
+  try{
+    const raw=await fj(`${API}/premiumIndex`,22000,1);
+    const arr=Array.isArray(raw)?raw:[raw];
+    const next={};
+    for(const row of arr){
+      const sym=row.symbol;
+      if(!sym||!sym.endsWith('USDT'))continue;
+      const r=+row.lastFundingRate;
+      if(isFinite(r))next[sym]=r;
+    }
+    _fundRates=next;
+  }catch(e){}
+}
+
+async function refreshOpenInterestHistSlice(){
+  if(document.hidden||!S.syms.length||_fundOiBusy)return;
+  const syms=priorityMetricSyms(Math.min(120,S.syms.length));
+  if(!syms.length)return;
+  const batch=6;
+  const start=_fundOiSymIdx%syms.length;
+  const slice=[];
+  for(let i=0;i<batch;i++)slice.push(syms[(start+i)%syms.length]);
+  _fundOiSymIdx=(start+batch)%(syms.length*100+1);
+  _fundOiBusy=true;
+  try{
+    for(const sym of slice){
+      try{
+        const h=await fj(`${API_FDATA}/openInterestHist?symbol=${encodeURIComponent(sym)}&period=1h&limit=8`,14000,0);
+        if(!Array.isArray(h)||h.length<4)continue;
+        const o0=+h[h.length-1]?.sumOpenInterest;
+        const o1=+h[h.length-2]?.sumOpenInterest;
+        const o4=+h[h.length-5]?.sumOpenInterest;
+        if(!isFinite(o0)||!isFinite(o1)||o1<=0)continue;
+        const p1=(o0/o1-1)*100;
+        const p4=isFinite(o4)&&o4>0?(o0/o4-1)*100:null;
+        _oiDelta[sym]={oi1h:p1,oi4h:p4};
+      }catch(e){}
+      await new Promise(r=>setTimeout(r,60));
+    }
+  }finally{
+    _fundOiBusy=false;
+  }
+}
+
+function ensureFundOiLoop(){
+  if(_fundOiInterval)return;
+  refreshPremiumFundingAll();
+  refreshOpenInterestHistSlice();
+  _fundOiInterval=setInterval(()=>{
+    refreshPremiumFundingAll();
+    refreshOpenInterestHistSlice();
+  },32000);
+}
 
 function priorityMetricSyms(limit=90){
   const pinned=[...S.charts.map(c=>c.sym).filter(Boolean),...(S.fsOpen&&S.fsSym?[S.fsSym]:[])];
@@ -3537,7 +3671,18 @@ function buildScreenerHeader(hdrEl){
   cols.forEach(c=>{
     const d=document.createElement('div');
     d.className='mhcol';d.id=`hc-${c.id}`;d.title=c.tip;d.style.flex='1';d.style.minWidth='32px';
-    if(c.id==='sp5'){d.style.minWidth='86px';d.style.flex='1.2';}
+    if(c.id==='sp5'){
+      d.classList.add('mhcol-fixed-sp5');
+      d.style.flex='0 0 90px';
+      d.style.minWidth='90px';
+      d.style.maxWidth='90px';
+      d.style.width='90px';
+    }else if(c.id==='fund'||c.id==='oi1h'||c.id==='oi4h'){
+      d.style.flex='0 0 64px';
+      d.style.minWidth='64px';
+      d.style.maxWidth='64px';
+      d.style.width='64px';
+    }
     d.innerHTML=`<div class="ht">${c.l}</div><div class="hb">${c.s}</div>`;
     d.onclick=()=>doSort(c.id);mg.appendChild(d);
   });
@@ -3558,7 +3703,7 @@ function sortedRows(){
         sym,price:t.p??null,ch24:t.c24??null,cday:null,rtd:null,r24:null,r7d:null,
         na30:null,na14:null,r1m5:null,tr5:null,tr1h:null,vr5:null,vr1h:null,
         ch7d:null,trd24:t.tr??null,vol24:t.qv??null,corr:null,corr14:null,v15m:null,v60m:null,
-        sp5:null,sp5d:''
+        sp5:null,sp5d:'',fund:null,oi1h:null,oi4h:null,sqzPop:0
       });
     }
   }
@@ -3579,7 +3724,7 @@ function sortedRows(){
       const r=a.sym.localeCompare(b.sym);return S.sortDir==='asc'?r:-r;
     }
     let va=a[S.sortId],vb=b[S.sortId];
-    if(S.sortAbs&&(S.sortId==='ch24'||S.sortId==='ch7d'||S.sortId==='cday'||S.sortId==='sp5')){
+    if(S.sortAbs&&(S.sortId==='ch24'||S.sortId==='ch7d'||S.sortId==='cday'||S.sortId==='sp5'||S.sortId==='oi1h'||S.sortId==='oi4h')){
       va=va!=null&&!isNaN(va)?Math.abs(va):va;vb=vb!=null&&!isNaN(vb)?Math.abs(vb):vb;
     }
     if(va==null||isNaN(va))return 1;if(vb==null||isNaN(vb))return-1;
@@ -3637,16 +3782,38 @@ function buildScreenerRow(m,cols){
   for(const c of cols){
     const cell=document.createElement('div');
     cell.className='mc d';
+    if(c.id==='sp5'){
+      cell.classList.add('spark-col');
+      cell.style.flex='0 0 90px';
+      cell.style.minWidth='90px';
+      cell.style.maxWidth='90px';
+      cell.style.width='90px';
+    }else if(c.id==='fund'||c.id==='oi1h'||c.id==='oi4h'){
+      cell.style.flex='0 0 64px';
+      cell.style.minWidth='64px';
+      cell.style.maxWidth='64px';
+      cell.style.width='64px';
+    }
     rg.appendChild(cell);cellArr.push(cell);
   }
   row._cells=cellArr;row._rg=rg;row.appendChild(rg);
   return row;
 }
 
+/** Полоска сессии по UTC (Asia / London / NY), приоритет NY > London > Asia; «мёртвая» зона — sess-dead. */
+function sessionRowStripClass(){
+  if(!S.sessionFx?.enabled)return'';
+  const h=new Date().getUTCHours()+new Date().getUTCMinutes()/60;
+  if(S.sessionFx.ny!==false&&h>=13&&h<22)return' sess-ny';
+  if(S.sessionFx.london!==false&&h>=8&&h<17)return' sess-ld';
+  if(S.sessionFx.asia!==false&&h>=0&&h<9)return' sess-as';
+  return' sess-dead';
+}
+
 function updateScreenerRow(row,m,cols,inChart){
   const grp=getSymGroup(m.sym);
   const grpCol=GROUP_COLORS[grp]||'';
-  const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
+  const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'')+sessionRowStripClass();
   if(row.className!==newCls)row.className=newCls;
   row._sym=m.sym;
   const gdot=row._gdot;
@@ -3671,6 +3838,18 @@ function updateScreenerRow(row,m,cols,inChart){
     for(const c of cols){
       const cell=document.createElement('div');
       cell.className='mc d';
+      if(c.id==='sp5'){
+        cell.classList.add('spark-col');
+        cell.style.flex='0 0 90px';
+        cell.style.minWidth='90px';
+        cell.style.maxWidth='90px';
+        cell.style.width='90px';
+      }else if(c.id==='fund'||c.id==='oi1h'||c.id==='oi4h'){
+        cell.style.flex='0 0 64px';
+        cell.style.minWidth='64px';
+        cell.style.maxWidth='64px';
+        cell.style.width='64px';
+      }
       row._rg.appendChild(cell);
       row._cells.push(cell);
     }
@@ -3699,11 +3878,16 @@ function updateScreenerRow(row,m,cols,inChart){
     // While some derived metrics are being (re)computed, keep the previous value instead of flashing zeros/dashes.
     // This is especially noticeable for СД*/ОБ* ratios.
     const holdDuringRecalc = (c.id==='tr5'||c.id==='tr1h'||c.id==='vr5'||c.id==='vr1h');
+    const holdOiDuring = (_fundOiBusy&&(c.id==='oi1h'||c.id==='oi4h'));
     if(holdDuringRecalc){
       const vBad = (v==null||!isFinite(v)) || (_metricsSyncBusy && v===0);
       if(vBad && cell.textContent && cell.textContent!=='—'){
         return;
       }
+    }
+    if(holdOiDuring){
+      const vBad=v==null||!isFinite(v);
+      if(vBad&&cell.textContent&&cell.textContent!=='—')return;
     }
     if(cell.textContent!==newTxt)cell.textContent=newTxt;
     if(cell.className!==newCls)cell.className=newCls;
@@ -3753,6 +3937,7 @@ function renderTable(){
 let _lastChartSyncAt=0;
 function maybeSyncChartsToTopRows(rows){
   if(document.hidden||_anyChartPanning)return;
+  if(!S.chartAutoSync)return;
   // Only meaningful when we're showing the screener and not sorting alphabetically.
   if(!S.screenerVisible||S.sortAlpha)return;
   const now=Date.now();
@@ -3848,11 +4033,19 @@ function onTrdFilter(val){
 
 const STREAM_STALE_MS=20000;
 
+let _lastSessionUiKey=-1;
 function updTime(){
   const d=new Date();const pad=n=>n.toString().padStart(2,'0');
   const timeStr=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   const ht=document.getElementById('htime');if(ht)ht.textContent=timeStr;
   updateHeaderStreamStatus();
+  if(S.sessionFx?.enabled){
+    const key=d.getUTCHours()*60+d.getUTCMinutes();
+    if(key!==_lastSessionUiKey){
+      _lastSessionUiKey=key;
+      if(!document.hidden&&!_scrolling)scheduleRender();
+    }
+  }
 }
 
 function _setHeaderLiveDot(mode){
@@ -3921,6 +4114,21 @@ function toggleFastMode(){
   syncFastBtnUi();
   // Force a quick refresh.
   if(!document.hidden)renderTable();
+}
+
+function syncChartSyncBtnUi(){
+  const b=document.getElementById('chartSyncBtn');
+  if(!b)return;
+  b.classList.toggle('on',S.chartAutoSync);
+  b.textContent=S.chartAutoSync?'Графы·авто':'Графы·стоп';
+  b.title=S.chartAutoSync
+    ?'Вкл: мини-графики 3×3 подстраиваются под текущий топ страницы при живой сортировке. Список всегда обновляется.'
+    :'Выкл: список обновляется, но символы в сетке графиков не меняются сами — пока не перелистнёте страницу или не смените сортировку вручную.';
+}
+function toggleChartAutoSync(){
+  S.chartAutoSync=!S.chartAutoSync;
+  saveChartAutoSyncPref();
+  syncChartSyncBtnUi();
 }
 
 function updateToggleScrBtn(){
@@ -4486,7 +4694,56 @@ function renderSettingsGen(body){
   <div class="smodal-row" style="border-bottom:none;padding-top:0">
     <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">На полноэкранных графиках масштаб и отступ справа подстраиваются по ширине окна: показывается больше свечей, «пустые» бары справа слегка ужимаются — чтобы крупный график не казался чрезмерно «растянутым».</span>
   </div>
+  <div class="smodal-row">
+    <span class="smodal-lbl">Автосмена монет в графиках 3×3</span>
+    <div class="smodal-btns">
+      ${tbtnHtml('cSynOn','Вкл',"setChartAutoSyncOpt(true)",S.chartAutoSync)}
+      ${tbtnHtml('cSynOff','Стоп',"setChartAutoSyncOpt(false)",!S.chartAutoSync)}
+    </div>
+  </div>
+  <div class="smodal-row">
+    <span class="smodal-lbl">Подсветка сессий (UTC)</span>
+    <div class="smodal-btns">
+      ${tbtnHtml('sessOn','Вкл',"setSessionFxEnabled(true)",S.sessionFx.enabled)}
+      ${tbtnHtml('sessOff','Выкл',"setSessionFxEnabled(false)",!S.sessionFx.enabled)}
+    </div>
+  </div>
+  <div class="smodal-row">
+    <span class="smodal-lbl">Зоны сессий</span>
+    <div class="smodal-btns" style="flex-wrap:wrap;justify-content:flex-end;max-width:240px;gap:4px">
+      ${tbtnHtml('sessAsia','Азия 0–9',"toggleSessionBand('asia')",S.sessionFx.asia)}
+      ${tbtnHtml('sessLon','Лондон 8–17',"toggleSessionBand('london')",S.sessionFx.london)}
+      ${tbtnHtml('sessNy','NY 13–22',"toggleSessionBand('ny')",S.sessionFx.ny)}
+    </div>
+  </div>
+  <div class="smodal-row" style="border-bottom:none;padding-top:0">
+    <span class="smodal-lbl" style="flex:1;font-size:8px;color:var(--text3);line-height:1.45;font-weight:400">Границы в UTC (как у глобальных рынков). Пересечения: приоритет NY → Лондон → Азия; вне зон — приглушённая полоса «мёртвое время».</span>
+  </div>
   <div class="smodal-ver">CryptScreen v1.4 · Binance Futures</div>`;
+}
+
+function setChartAutoSyncOpt(on){
+  S.chartAutoSync=!!on;
+  saveChartAutoSyncPref();
+  syncChartSyncBtnUi();
+  const body=document.getElementById('smodal-body');
+  if(body&&S.settingsTab==='gen')renderSettingsGen(body);
+}
+function setSessionFxEnabled(on){
+  S.sessionFx.enabled=!!on;
+  saveSessionFxPref();
+  const body=document.getElementById('smodal-body');
+  if(body&&S.settingsTab==='gen')renderSettingsGen(body);
+  renderTable();
+}
+function toggleSessionBand(which){
+  if(which==='asia')S.sessionFx.asia=!S.sessionFx.asia;
+  else if(which==='london')S.sessionFx.london=!S.sessionFx.london;
+  else if(which==='ny')S.sessionFx.ny=!S.sessionFx.ny;
+  saveSessionFxPref();
+  const body=document.getElementById('smodal-body');
+  if(body&&S.settingsTab==='gen')renderSettingsGen(body);
+  renderTable();
 }
 
 function renderSettingsChartHead(body){
@@ -4892,6 +5149,7 @@ async function main(){
     loadChartViewPrefs();
     loadChartHeadPrefs();
     loadLineColorPrefs();
+    loadUiPrefs();
     ldSet('Загрузка библиотеки графиков…',5);
     for(const url of['https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js','https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js']){
       try{await loadScript(url);if(typeof LightweightCharts!=='undefined'){S.LC=LightweightCharts;break;}}catch(e){}
@@ -4921,9 +5179,11 @@ async function main(){
     setTimeout(ldHide,150);
     updateCharts();restartChartStreams(0);startScreenerWS();
     syncFastBtnUi();
+    syncChartSyncBtnUi();
     S.bgDone=true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
     loadKlinesBackground();
     startRealtimeWatchdog();
+    ensureFundOiLoop();
     setTimeout(autoResizeScreener,300);
   }catch(err){
     console.error('Init error:',err);ldSet('Ошибка загрузки',100);ldErr(err.message||String(err));
@@ -4936,6 +5196,7 @@ async function main(){
 const POT_FIELDS=[
   {id:'ch24',   label:'ИЗМ 24ч %',  unit:'%',  step:0.5},
   {id:'cday',   label:'ИЗМ день %', unit:'%',  step:0.5},
+  {id:'sqzPop', label:'Сж+ОБ+проб',unit:'',   step:1},
   {id:'vr5',    label:'ОБ* 5м',     unit:'×',  step:0.1},
   {id:'vr1h',   label:'ОБ* 1ч',     unit:'×',  step:0.1},
   {id:'tr5',    label:'СД* 5м',     unit:'×',  step:0.1},
@@ -4973,6 +5234,12 @@ function renderPotentialPanel(){
     tabBar.appendChild(tab);
   });
   // Add button
+  const tplBtn=document.createElement('button');
+  tplBtn.className='pot-tab';
+  tplBtn.title='Готовый пресет: сужение полос Боллинджера (5м) + ОБ* 5м + выход за полосу';
+  tplBtn.textContent='＋Squeeze';
+  tplBtn.onclick=()=>{addBuiltinSqueezePreset();renderPotentialPanel();};
+  tabBar.appendChild(tplBtn);
   const addBtn=document.createElement('button');
   addBtn.className='pot-tab pot-tab-add';addBtn.title='Добавить пресет';addBtn.textContent='＋';
   addBtn.onclick=()=>openPotPresetEditor(null);
@@ -5002,6 +5269,9 @@ function renderPotentialPanel(){
   if(pr.conditions.length){
     const cond=document.createElement('div');cond.className='pot-cond-summary';
     cond.innerHTML=pr.conditions.map(c=>{
+      if(c.field==='sqzPop'){
+        return'<span class="pot-cond-tag">Сж+ОБ+проб</span>';
+      }
       const f=POT_FIELDS.find(x=>x.id===c.field);
       const parts=[];
       if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
@@ -5028,9 +5298,12 @@ function renderPotentialPanel(){
       const tags=pr.conditions.map(c=>{
         const f=POT_FIELDS.find(x=>x.id===c.field);
         const val=m[c.field];
-        const fmt=(c.field==='vol24'||c.field==='trd24')?fk(val):(val!=null?fn(val,2):'—');
+        let fmt;
+        if(c.field==='vol24'||c.field==='trd24')fmt=fk(val);
+        else if(c.field==='sqzPop')fmt=(val!=null&&+val>=1)?'✓':'·';
+        else fmt=val!=null?fn(val,2):'—';
         const absTxt=c.abs&&['ch24','cday'].includes(c.field)?'|.| ':'';
-        return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit||''}</span>`;
+        return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit&&c.field!=='sqzPop'?f.unit:''}</span>`;
       }).join('');
       item.innerHTML=`
         ${grpCol?`<span style="width:3px;align-self:stretch;background:${grpCol};border-radius:2px;flex-shrink:0"></span>`:''}
@@ -5174,6 +5447,23 @@ function deletePotPreset(id){
   if(_potActiveTab===id)_potActiveTab=S.potentialPresets[0]?.id||null;
   renderPotentialPanel();
   buildGroupFilterBar();
+}
+
+function addBuiltinSqueezePreset(){
+  const id='pot_sqz_'+Date.now();
+  S.potentialPresets.push({
+    id,
+    name:'BB squeeze + ОБ* + пробой',
+    conditions:[
+      {field:'sqzPop',min:0.99,max:null,abs:false},
+      {field:'vr5',min:1.25,max:null,abs:false},
+    ],
+    matches:{},
+    alerted:{},
+    enabled:false,
+    cooldown:120,
+  });
+  _potActiveTab=id;
 }
 
 function runPotentialCheck(){
@@ -5323,3 +5613,8 @@ window.setLineColor         = setLineColor;
 window.toggleEMA            = toggleEMA;
 window.openEMAEditor        = openEMAEditor;
 window.toggleFastMode       = toggleFastMode;
+window.toggleChartAutoSync  = toggleChartAutoSync;
+window.setChartAutoSyncOpt  = setChartAutoSyncOpt;
+window.setSessionFxEnabled  = setSessionFxEnabled;
+window.toggleSessionBand    = toggleSessionBand;
+window.addBuiltinSqueezePreset = addBuiltinSqueezePreset;
