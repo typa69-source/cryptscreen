@@ -527,7 +527,18 @@ function fj(url,timeout=15000,retries=2){
     attempt(retries);
   });
 }
-function parseKlines(raw){return raw.map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5],tr:+k[8],qv:+k[7]}));}
+function parseKlines(raw){
+  // Sanitize to avoid broken candles that cause chart "spikes".
+  const out=[];
+  for(const k of(raw||[])){
+    const t=+k[0],o=+k[1],h=+k[2],l=+k[3],c=+k[4],v=+k[5],qv=+k[7],tr=+k[8];
+    if(!isFinite(t)||!isFinite(o)||!isFinite(h)||!isFinite(l)||!isFinite(c))continue;
+    const hh=Math.max(h,o,c);
+    const ll=Math.min(l,o,c);
+    out.push({t,o,h:hh,l:ll,c,v:isFinite(v)?v:0,tr:isFinite(tr)?tr:0,qv:isFinite(qv)?qv:0});
+  }
+  return out;
+}
 async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
   const out={};
   for(let i=0;i<syms.length;i+=bs){
@@ -1330,6 +1341,16 @@ function updateChartHeader(slot,sym){
   if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
   const dot=document.getElementById(`cgd${slot}`);
   if(dot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';dot.style.background=col||'var(--bg4)';dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';dot.style.display=sym?'':'none';}
+  // If stats wrap into two lines, tighten spacing to avoid clipping.
+  const head=document.getElementById(`cc${slot}`)?.querySelector('.chead');
+  const stats=document.getElementById(`chs${slot}`);
+  if(head&&stats){
+    requestAnimationFrame(()=>{
+      // wrap if stats don't fit into the header height
+      const wrap=stats.scrollHeight>head.clientHeight;
+      head.classList.toggle('wrap',wrap);
+    });
+  }
 }
 
 async function loadMoreHistory(slot){
@@ -3483,8 +3504,9 @@ function sortedRows(){
     }
   }
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
-  if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||getSymGroup(r.sym)>0);
-  if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||getSymGroup(r.sym)>0);
+  const bypassGroup=(sym)=>S.activeGroupFilter>0&&getSymGroup(sym)===S.activeGroupFilter;
+  if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||bypassGroup(r.sym));
+  if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||bypassGroup(r.sym));
   // Filters are exclusive: preset OR color group OR all
   if(S._potFilterPreset){
     const pr=S.potentialPresets.find(p=>p.id===S._potFilterPreset);
@@ -3630,6 +3652,7 @@ document.addEventListener('DOMContentLoaded',()=>{
 
 function renderTable(){
   const rows=sortedRows();
+  S._lastVisibleCount=rows.length;
   const countTxt=rows.length+' монет';
   setText('hcount',countTxt);
   renderScreenerInto(document.getElementById('sbody'),rows);
@@ -4085,7 +4108,7 @@ function showQuickGroupChanger(sym,anchorEl){
   const r=anchorEl.getBoundingClientRect();
   const pick=document.createElement('div');
   pick.id='cgroupPicker';
-  pick.style.cssText=`position:fixed;z-index:600;left:${r.left}px;top:${r.bottom+4}px;
+  pick.style.cssText=`position:fixed;z-index:600;left:${r.left}px;top:${Math.max(4,r.top-10)}px;
     background:var(--bg3);border:1px solid var(--border2);border-radius:6px;
     padding:6px 8px;display:flex;flex-direction:column;gap:5px;
     box-shadow:0 4px 16px rgba(0,0,0,.6)`;
@@ -4111,6 +4134,15 @@ function showQuickGroupChanger(sym,anchorEl){
   }
   pick.appendChild(row);
   document.body.appendChild(pick);
+  // Position picker above the anchor when possible (so it doesn't block items below).
+  const vw=window.innerWidth||0,vh=window.innerHeight||0;
+  const pr=pick.getBoundingClientRect();
+  let left=Math.max(4,Math.min(r.left,Math.max(4,vw-pr.width-4)));
+  let top=r.top-pr.height-6;
+  if(top<4)top=r.bottom+6;
+  if(top+pr.height>vh-4)top=Math.max(4,vh-pr.height-4);
+  pick.style.left=left+'px';
+  pick.style.top=top+'px';
   setTimeout(()=>document.addEventListener('mousedown',function h(e){if(!pick.contains(e.target)){pick.remove();document.removeEventListener('mousedown',h);}},true),50);
 }
 
@@ -4764,6 +4796,7 @@ const POT_FIELDS=[
   {id:'tr1h',   label:'СД* 1ч',     unit:'×',  step:0.1},
   {id:'na14',   label:'NATR 5м',    unit:'%',  step:0.01},
   {id:'na30',   label:'NATR 1м',    unit:'%',  step:0.01},
+  {id:'trd24',  label:'Сделки 24ч', unit:'',   step:50},
   {id:'vol24',  label:'Объём 24ч',  unit:'M$', step:10},
 ];
 
@@ -4849,7 +4882,7 @@ function renderPotentialPanel(){
       const tags=pr.conditions.map(c=>{
         const f=POT_FIELDS.find(x=>x.id===c.field);
         const val=m[c.field];
-        const fmt=c.field==='vol24'?fk(val):(val!=null?fn(val,2):'—');
+        const fmt=(c.field==='vol24'||c.field==='trd24')?fk(val):(val!=null?fn(val,2):'—');
         const absTxt=c.abs&&['ch24','cday'].includes(c.field)?'|.| ':'';
         return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit||''}</span>`;
       }).join('');
