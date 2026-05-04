@@ -3157,6 +3157,8 @@ const METRICS_RECALC_DEBOUNCE_MS=1000;
 let _metricsSyncBusy=false;
 let _metricsSyncCursor=0;
 let _metricsSyncInterval=null;
+let _tickerRestFallbackInterval=null;
+let _lastTickerRestAt=0;
 
 function priorityMetricSyms(limit=90){
   const pinned=[...S.charts.map(c=>c.sym).filter(Boolean),...(S.fsOpen&&S.fsSym?[S.fsSym]:[])];
@@ -3207,6 +3209,58 @@ function ensureMetricsSyncLoop(){
     if(document.hidden)return;
     refreshMetricKlinesSlice();
   },22000);
+}
+
+async function refreshTicker24hrFallback(){
+  if(document.hidden)return;
+  // Avoid hammering REST endpoint (and avoid fighting a healthy WS stream).
+  const now=Date.now();
+  if(now-_lastTickerRestAt<25000)return;
+  _lastTickerRestAt=now;
+  try{
+    const rawTk=await fj(`${API}/ticker/24hr`,9000,1);
+    for(const t of rawTk){
+      const sym=t.symbol;
+      if(!sym||!sym.endsWith('USDT'))continue;
+      const tk=S.tk[sym];
+      if(!tk)continue;
+      tk.p=+t.lastPrice;
+      tk.c24=+t.priceChangePercent;
+      tk.h24=+t.highPrice;
+      tk.l24=+t.lowPrice;
+      tk.qv=+t.quoteVolume;
+      tk.tr=+t.count;
+      const mx=S.mx[sym];
+      if(mx){mx.price=tk.p;mx.ch24=tk.c24;mx.vol24=tk.qv;mx.trd24=tk.tr;}
+    }
+    // Patch live series & recompute derived metrics for the "priority" universe.
+    const nowMs=Date.now();
+    const universe=priorityMetricSyms(Math.min(180,S.syms.length));
+    for(const sym of universe){
+      const tk=S.tk[sym];
+      if(!tk||tk.p==null||isNaN(tk.p))continue;
+      applyLiveKlineUpdate(sym,tk.p,nowMs);
+    }
+    calcAll();
+    if(!document.hidden){
+      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
+      else scheduleRender();
+    }
+    if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
+  }catch(e){
+    // Silent fallback — WS is still the primary source.
+  }
+}
+
+function ensureTickerRestFallbackLoop(){
+  if(_tickerRestFallbackInterval)return;
+  _tickerRestFallbackInterval=setInterval(()=>{
+    if(document.hidden)return;
+    const now=Date.now();
+    // If WS is healthy (fresh messages), skip REST.
+    if(_lastScreenerWsMsgAt&&now-_lastScreenerWsMsgAt<6000)return;
+    refreshTicker24hrFallback();
+  },30000);
 }
 
 function scheduleRealtimeMetricRecalc(gen){
@@ -3290,6 +3344,7 @@ function startScreenerWS(){
   ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
   S.wsScreener=ws;
   ensureMetricsSyncLoop();
+  ensureTickerRestFallbackLoop();
 }
 
 function _applyTickerUpdate(arr,gen){
