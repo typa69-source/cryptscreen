@@ -163,6 +163,8 @@ html,body{
   border:1px solid var(--border);
   border-radius:var(--radius-sm);
   background:rgba(255,255,255,.02);
+  width:132px;
+  justify-content:space-between;
 }
 .pg-btn{width:22px;height:20px;border-radius:var(--radius-sm);border:1px solid var(--border2);background:transparent;
   color:var(--text2);cursor:pointer;font:inherit;font-size:12px;display:flex;align-items:center;
@@ -238,9 +240,9 @@ html,body{
 .chart-interact{position:absolute;inset:0;z-index:11;pointer-events:none}
 .chart-interact.draw{pointer-events:auto;cursor:crosshair}
 .chart-canvas{position:absolute;inset:0;pointer-events:none;z-index:10}
-.chart-wm{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+.chart-wm{position:absolute;inset:0 65px 22px 0;display:flex;align-items:center;justify-content:center;
   font-size:46px;font-weight:700;color:rgba(255,255,255,0.038);pointer-events:none;
-  z-index:5;letter-spacing:4px;user-select:none;white-space:nowrap;}
+  z-index:5;letter-spacing:4px;user-select:none;white-space:nowrap;overflow:hidden;}
 
 /* COLOR GROUPS */
 .cg-dot{width:7px;height:7px;border-radius:50%;display:inline-block;cursor:pointer;flex-shrink:0;border:1px solid rgba(255,255,255,0.15);transition:transform .1s}
@@ -335,6 +337,7 @@ html,body{
 .smodal-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 18px;margin-top:10px;flex-shrink:0}
 .smodal-tab{padding:6px 12px;font:inherit;font-size:10px;color:var(--text2);cursor:pointer;
   border:none;background:none;border-bottom:2px solid transparent;transition:all .1s;margin-bottom:-1px}
+.smodal-tab{white-space:nowrap}
 .smodal-tab:hover{color:var(--text)}
 .smodal-tab.on{color:#c4b5fd;border-bottom-color:rgba(124,58,237,.9)}
 .smodal-body{flex:1;overflow-y:auto;padding:10px 18px 18px}

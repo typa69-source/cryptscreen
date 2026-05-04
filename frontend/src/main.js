@@ -249,6 +249,7 @@ const S = {
   wsScreener:null, wsCharts:null, wsChartTrades:null,
   sortId:'vol24', sortDir:'desc', sortAlpha:false,
   tf:'5m', q:'', page:0, LC:null, bgDone:false,
+  fastMode:false,
   drawMode:null, drawIdCounter:0,
   symDrawings:{},      // drawings per symbol, shared between grid & FS
   drawUndo:{},         // sym -> [drawings snapshot...]
@@ -3152,7 +3153,9 @@ function getTickerWorker(){
 // Throttle screener WS updates
 let _wsBatchTimer=null;
 let _metricsRecalcTimer=null;
-const SCREENER_BATCH_MS=250;
+const SCREENER_BATCH_MS_NORMAL=250;
+const SCREENER_BATCH_MS_FAST=100;
+let SCREENER_BATCH_MS=SCREENER_BATCH_MS_NORMAL;
 const METRICS_RECALC_DEBOUNCE_MS=250;
 let _metricsSyncBusy=false;
 let _metricsSyncCursor=0;
@@ -3372,12 +3375,10 @@ function _applyTickerUpdate(arr,gen){
           // User is dragging — defer heavy DOM work until after pan ends
           _deferredRenderNeeded=true;
         } else {
-          // Use requestIdleCallback so table render never blocks click events
-          if(typeof requestIdleCallback!=='undefined'){
-            requestIdleCallback(()=>renderTable(),{timeout:400});
-          } else {
-            setTimeout(renderTable,0); // yield to event loop first
-          }
+          // In fast mode: render on next frame; otherwise use idle callback.
+          if(S.fastMode){requestAnimationFrame(()=>renderTable());}
+          else if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(()=>renderTable(),{timeout:400});}
+          else{setTimeout(renderTable,0);} // yield to event loop first
         }
       }
       if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
@@ -3604,15 +3605,17 @@ function updateScreenerRow(row,m,cols,inChart){
 }
 
 let _rt=null;
-// Throttle renders: use rAF-based idle scheduling instead of fixed timeout
-const _schedFn = typeof requestIdleCallback !== 'undefined'
-  ? (cb) => requestIdleCallback(cb, {timeout:400})
-  : (cb) => requestAnimationFrame(cb);
+function _scheduleUi(cb){
+  // In fast mode we prefer immediate frames over idle scheduling.
+  if(S.fastMode){requestAnimationFrame(cb);return;}
+  if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(cb,{timeout:400});return;}
+  requestAnimationFrame(cb);
+}
 let _renderScheduled=false;
 function scheduleRender(){
   if(_renderScheduled)return;
   _renderScheduled=true;
-  _schedFn(()=>{
+  _scheduleUi(()=>{
     _renderScheduled=false;
     if(_anyChartPanning){_deferredRenderNeeded=true;return;} // defer until pan ends
     if(!_scrolling&&!document.hidden)renderTable();
@@ -3634,6 +3637,30 @@ function renderTable(){
     renderScreenerInto(document.getElementById('fsSbody'),rows);
   }
   updatePagination(rows.length);
+  // Keep mini-charts in sync with live-sorted rows.
+  // Without this, when sorting by a live-updating metric (e.g. ИЗМ24ч),
+  // the table changes but the 3×3 grid can stay on stale symbols.
+  maybeSyncChartsToTopRows(rows);
+}
+
+let _lastChartSyncAt=0;
+function maybeSyncChartsToTopRows(rows){
+  if(document.hidden||_anyChartPanning)return;
+  // Only meaningful when we're showing the screener and not sorting alphabetically.
+  if(!S.screenerVisible||S.sortAlpha)return;
+  const now=Date.now();
+  const minEvery=S.fastMode?600:1500;
+  if(now-_lastChartSyncAt<minEvery)return;
+  _lastChartSyncAt=now;
+
+  const start=S.page*S.charts.length;
+  const pageSyms=rows.slice(start,start+S.charts.length).map(r=>r.sym);
+  let changed=false;
+  for(let i=0;i<S.charts.length;i++){
+    const ns=pageSyms[i]||null;
+    if(S.charts[i].sym!==ns){changed=true;loadChart(i,ns);}
+  }
+  if(changed)restartChartStreams(300);
 }
 
 function updatePagination(total){
@@ -3717,6 +3744,15 @@ function updTime(){
   const timeStr=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   const ht=document.getElementById('htime');if(ht)ht.textContent=timeStr;
   const hs=document.getElementById('hstatus');if(hs)hs.textContent='Онлайн';
+}
+
+function toggleFastMode(){
+  S.fastMode=!S.fastMode;
+  SCREENER_BATCH_MS=S.fastMode?SCREENER_BATCH_MS_FAST:SCREENER_BATCH_MS_NORMAL;
+  const btn=document.getElementById('fastBtn');
+  if(btn)btn.classList.toggle('on',S.fastMode);
+  // Force a quick refresh.
+  if(!document.hidden)renderTable();
 }
 
 function updateToggleScrBtn(){
