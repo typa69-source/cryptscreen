@@ -1256,7 +1256,12 @@ async function loadChart(slot,sym){
   const wm=document.getElementById(`wm${slot}`);if(wm)wm.textContent=sym.replace(/USDT$/,'');
   const cacheKey=`${S.tf}:${sym}`;
   const cached=S.histCache[cacheKey];
-  if(Array.isArray(cached)&&cached.length>=MIN_CHART_CANDLES){
+  // Avoid reusing too-short caches: it causes inconsistent "bars shown" on first load (e.g. 50 vs 90).
+  const wantMinCache=Math.max(
+    MIN_CHART_CANDLES,
+    (S.chartVisibleBars|0)+(S.chartRightOffset|0)+8
+  );
+  if(Array.isArray(cached)&&cached.length>=wantMinCache){
     ch.candles=cached.slice(-HIST_CACHE_MAX);
     paintSlotData(slot);
     if(S.showDensity)fetchOrderBook(sym);
@@ -1277,6 +1282,8 @@ async function loadChart(slot,sym){
     if(S.showDensity)fetchOrderBook(sym); // #1: pre-fetch OB for density
   }catch(e){
     if(cb&&ch.sym===sym)cb.innerHTML=`<div class="cph"><span style="color:var(--red);font-size:10px">Ошибка загрузки</span></div>`;
+    // If network briefly drops, retry once after a short delay (prevents "dead" chart tiles).
+    setTimeout(()=>{ if(ch.sym===sym) loadChart(slot,sym); }, 3500);
   }
 }
 
@@ -1363,7 +1370,9 @@ async function loadMoreHistory(slot){
     const nc=parseKlines(raw);if(!ch.cs||!ch.lc)return;
     const vr=ch.lc.timeScale().getVisibleRange();
     ch.candles=[...nc,...ch.candles].slice(-HIST_CACHE_MAX);
-    S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice();
+    // Keep cache bounded and avoid persisting too-short histories (causes inconsistent visible bars on next load).
+    const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
+    if(ch.candles.length>=wantMinCache)S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice(-HIST_CACHE_MAX);
     // Schedule heavy setData on idle to avoid blocking pan interaction
     const merged=ch.candles;
     const doSet=()=>{
@@ -2858,7 +2867,7 @@ function repaintChartSeries(ch,cacheKey=''){
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){_lastHiddenAt=Date.now();return;}
   const hiddenMs=Date.now()-_lastHiddenAt;
-  if(hiddenMs<10000)return; // ignore short switches
+  if(hiddenMs<2000)return; // ignore ultra-short switches
   console.log(`Tab back, was hidden ${Math.round(hiddenMs/1000)}s — reconnecting WS & refreshing candles`);
   // Reconnect all WS
   if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
@@ -2882,6 +2891,16 @@ document.addEventListener('visibilitychange',()=>{
     }catch(e){}
   });
   setTimeout(()=>{restartChartStreams(0);startScreenerWS();},500);
+});
+
+// When connectivity returns, restart streams & patch candle gaps.
+window.addEventListener('online',()=>{
+  try{
+    console.log('Network online — restarting WS & refreshing candles');
+    if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
+    if(S.wsScreener){try{S.wsScreener.close();}catch(e){}}
+  }catch(e){}
+  setTimeout(()=>{restartChartStreams(0);startScreenerWS();},600);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -3117,7 +3136,8 @@ function startRealtimeWatchdog(){
         ch.vs.update({time:toChartTime(lc.t),value:lc.qv,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
         syncLivePriceLabel(ch,lc.c,lc.o);
         ch._lastRtUpdateTs=Date.now();
-        S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice();
+        const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
+        if(ch.candles.length>=wantMinCache)S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice(-HIST_CACHE_MAX);
       }).catch(()=>{});
     });
     if(S.fsOpen&&S.fsSym){
@@ -3138,7 +3158,8 @@ function startRealtimeWatchdog(){
           fch.vs.update({time:toChartTime(lc.t),value:lc.qv,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
           syncLivePriceLabel(fch,lc.c,lc.o);
           fch._lastRtUpdateTs=Date.now();
-          S.histCache[`${fch.tf}:${S.fsSym}`]=fch.candles.slice();
+          const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
+          if(fch.candles.length>=wantMinCache)S.histCache[`${fch.tf}:${S.fsSym}`]=fch.candles.slice(-HIST_CACHE_MAX);
         }).catch(()=>{});
       });
     }
@@ -3621,6 +3642,15 @@ function updateScreenerRow(row,m,cols,inChart){
     const v=m[c.id];
     const newTxt=fv(v,c.id);
     const newCls='mc '+fc(v,c.id)+' '+fh(v,c.id);
+    // While some derived metrics are being (re)computed, keep the previous value instead of flashing zeros/dashes.
+    // This is especially noticeable for СД*/ОБ* ratios.
+    const holdDuringRecalc = (c.id==='tr5'||c.id==='tr1h'||c.id==='vr5'||c.id==='vr1h');
+    if(holdDuringRecalc){
+      const vBad = (v==null||!isFinite(v)) || (_metricsSyncBusy && v===0);
+      if(vBad && cell.textContent && cell.textContent!=='—'){
+        return;
+      }
+    }
     if(cell.textContent!==newTxt)cell.textContent=newTxt;
     if(cell.className!==newCls)cell.className=newCls;
   });
