@@ -3153,7 +3153,7 @@ function getTickerWorker(){
 let _wsBatchTimer=null;
 let _metricsRecalcTimer=null;
 const SCREENER_BATCH_MS=250;
-const METRICS_RECALC_DEBOUNCE_MS=1000;
+const METRICS_RECALC_DEBOUNCE_MS=250;
 let _metricsSyncBusy=false;
 let _metricsSyncCursor=0;
 let _metricsSyncInterval=null;
@@ -3208,7 +3208,7 @@ function ensureMetricsSyncLoop(){
   _metricsSyncInterval=setInterval(()=>{
     if(document.hidden)return;
     refreshMetricKlinesSlice();
-  },22000);
+  },12000);
 }
 
 async function refreshTicker24hrFallback(){
@@ -3271,7 +3271,10 @@ function scheduleRealtimeMetricRecalc(gen){
     const run=()=>{
       try{
         const nowMs=Date.now();
-        for(const sym of S.syms){
+        // Recalc only for the most relevant symbols to keep UI snappy:
+        // pinned charts/FS + top-by-volume universe.
+        const universe=priorityMetricSyms(Math.min(240,S.syms.length));
+        for(const sym of universe){
           const tk=S.tk[sym];
           if(!tk||tk.p==null||isNaN(tk.p))continue;
           applyLiveKlineUpdate(sym,tk.p,nowMs);
