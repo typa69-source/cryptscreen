@@ -74,9 +74,12 @@ html,body{
   display:flex;align-items:center;justify-content:center;font-size:8px;font-weight:700}
 .hsep{width:1px;height:18px;background:var(--border2);flex-shrink:0}
 .hright{margin-left:auto;display:flex;align-items:center;gap:8px}
-.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 2s infinite}
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 2s infinite;flex-shrink:0}
+.live-dot.live-dot-warn{background:var(--yellow);animation:blink 1.2s infinite}
+.live-dot.live-dot-err{background:var(--red);animation:none;opacity:1}
+.live-dot.live-dot-pause{background:var(--text3);animation:none;opacity:.75}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
-#hstatus{font-size:10px;color:var(--text2)}
+#hstatus{font-size:10px;color:var(--text2);max-width:min(200px,28vw);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #htime{font-size:10px;color:var(--text3);min-width:70px;text-align:right}
 #hcount{font-size:10px;color:var(--text3)}
 .hbtn{
@@ -95,6 +98,15 @@ html,body{
 .hbtn:active{transform:translateY(1px);}
 .hbtn:focus-visible{outline:2px solid rgba(124,58,237,.45);outline-offset:2px;}
 .hbtn.on{border-color:rgba(124,58,237,.65);color:#f3e8ff;background:rgba(124,58,237,.16);}
+/* Fast — заметнее, чем обычный .hbtn.on (рядом с «Список» тоже с классом on) */
+.hbtn-fast{font-weight:600;letter-spacing:.02em}
+.hbtn-fast.on{
+  border-color:rgba(250,204,21,.75);
+  color:#fef9c3;
+  background:linear-gradient(180deg,rgba(250,204,21,.22),rgba(250,204,21,.08));
+  box-shadow:0 0 0 1px rgba(250,204,21,.25),0 0 12px rgba(250,204,21,.12);
+}
+.hbtn-fast.on:hover{border-color:rgba(253,224,71,.9);color:#fffbeb}
 
 /* TOOLBAR */
 .tbtn{
@@ -297,6 +309,40 @@ html,body{
 .mc{display:flex;align-items:center;justify-content:flex-end;padding:0 3px;
   font-size:10px;font-variant-numeric:tabular-nums;border-right:1px solid rgba(37,37,48,.3);
   white-space:nowrap;overflow:hidden;flex:1;min-width:32px}
+.mc.spark-col{
+  padding:1px 3px;
+  justify-content:center;
+  align-items:stretch;
+  min-width:72px;
+}
+.spark-inner{
+  position:relative;
+  width:100%;
+  height:24px;
+  border-radius:3px;
+  overflow:hidden;
+  border:1px solid rgba(44,53,80,.5);
+}
+.spark-inner svg{
+  display:block;
+  width:100%;
+  height:100%;
+  color:rgba(154,163,189,.9);
+}
+.spark-inner.up svg{color:rgba(34,197,94,.95)}
+.spark-inner.down svg{color:rgba(239,68,68,.92)}
+.spark-pct{
+  position:absolute;
+  right:3px;
+  bottom:2px;
+  font-size:6.5px;
+  font-weight:600;
+  line-height:1;
+  font-variant-numeric:tabular-nums;
+  color:rgba(255,255,255,.93);
+  text-shadow:0 0 4px rgba(0,0,0,.9),0 1px 2px rgba(0,0,0,.75);
+  letter-spacing:-0.02em;
+}
 .mc.p{color:var(--green)}.mc.n{color:var(--red)}.mc.y{color:var(--yellow);font-weight:600}
 .mc.d{color:var(--text3)}.mc.w{color:var(--text)}
 .hv1{background:rgba(31,168,145,.05)}.hv2{background:rgba(31,168,145,.12)}.hv3{background:rgba(31,168,145,.2)}
@@ -328,10 +374,13 @@ html,body{
 
 /* SETTINGS MODAL */
 #settingsModal{position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.7);
-  display:none;align-items:center;justify-content:center;}
+  display:none;align-items:flex-start;justify-content:center;padding:56px 12px 28px;overflow-y:auto;}
 #settingsModal.open{display:flex;}
 .smodal{background:var(--bg2);border:1px solid rgba(44,53,80,.95);border-radius:var(--radius-md);
-  width:380px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;}
+  width:min(400px,94vw);
+  height:min(640px,calc(100vh - 72px));
+  max-height:calc(100vh - 72px);
+  display:flex;flex-direction:column;overflow:hidden;margin-top:0;}
 .smodal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 0;flex-shrink:0}
 .smodal-title{font-size:12px;font-weight:600;color:#fff;}
 .smodal-x{background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;
@@ -343,7 +392,7 @@ html,body{
 .smodal-tab{white-space:nowrap}
 .smodal-tab:hover{color:var(--text)}
 .smodal-tab.on{color:#c4b5fd;border-bottom-color:rgba(124,58,237,.9)}
-.smodal-body{flex:1;overflow-y:auto;padding:10px 18px 18px}
+.smodal-body{flex:1;min-height:0;overflow-y:auto;padding:10px 18px 18px}
 .smodal-row{display:flex;align-items:center;justify-content:space-between;
   padding:8px 0;border-bottom:1px solid var(--border);}
 .smodal-row:last-of-type{border-bottom:none;}

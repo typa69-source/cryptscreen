@@ -210,6 +210,7 @@ function hexToRgbA(hex,a){
 
 const ALL_COLS = [
   {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены относительно цены 24 часа назад по данным Binance Futures (rolling 24h), в процентах. Положительное — рост, отрицательное — падение.'},
+  {id:'sp5',    l:'ТРНД', s:'5м·30', tip:'Мини‑график последних 30 пятиминутных закрытий + тепловая подложка по изменению за этот отрезок. Если 5м ещё не догружены — показываем ИЗМ 24ч и ровную линию. Сортировка — по % за отрезок (как у ИЗМ).'},
   {id:'cday',   l:'ИЗМ',  s:'день%',  tip:'Изменение цены от первой 5-минутной свечи текущего календарного дня по локальному времени устройства до последней цены, в процентах.'},
   {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Диапазон (макс−мин)/цена в процентах с начала локального календарного дня: 5-минутные свечи с полуночи по времени устройства.'},
   {id:'r24',    l:'РЕНЖ', s:'24ч',    tip:'Диапазон за последние 24 часа по 5-минутным свечам: насколько широко ходила цена относительно текущей, в процентах.'},
@@ -558,6 +559,37 @@ function calcATR(kl,n){if(!kl||kl.length<n+1)return null;let s=0;const f=kl.leng
 function calcNATR(kl,n){const a=calcATR(kl,n);return a&&kl?a/kl[kl.length-1].c*100:null;}
 function calcRange(kl,n){if(!kl||kl.length<n)return null;const sl=kl.slice(-n);const H=sl.reduce((m,k)=>Math.max(m,k.h),-Infinity);const L=sl.reduce((m,k)=>Math.min(m,k.l),Infinity);return L>0?(H-L)/L*100:null;}
 function calcRel(kl,n,f){if(!kl||kl.length<n+1)return null;const sl=kl.slice(-n-1);const cur=sl[sl.length-1][f];let s=0;for(let i=0;i<n;i++)s+=sl[i][f];const avg=s/n;return avg>0?cur/avg:null;}
+/** Последние N закрытий 5м → % изменения за окно + path для SVG (viewBox 0 0 100 40). */
+function spark5mSnapshot(k5,n=30){
+  if(!k5||k5.length<6)return{sp5:null,sp5d:''};
+  const sl=k5.slice(-Math.min(n,k5.length));
+  if(sl.length<6)return{sp5:null,sp5d:''};
+  const closes=[];
+  for(const k of sl){
+    const c=+k.c;
+    if(isFinite(c)&&c>0)closes.push(c);
+  }
+  if(closes.length<6)return{sp5:null,sp5d:''};
+  const first=closes[0],last=closes[closes.length-1];
+  const chg=first>0?(last/first-1)*100:null;
+  let lo=Math.min(...closes),hi=Math.max(...closes);
+  if(hi<=lo)hi=lo+1e-9*Math.abs(lo||1);
+  const padY=5,padX=1;
+  const W=100,H=40;
+  const n1=closes.length-1||1;
+  const pts=closes.map((c,i)=>{
+    const x=padX+(i/n1)*(W-2*padX);
+    const y=padY+(1-(c-lo)/(hi-lo))*(H-2*padY);
+    return x.toFixed(2)+','+y.toFixed(2);
+  });
+  return{sp5:chg,sp5d:'M'+pts.join(' L')};
+}
+function sparkHeatBackground(pct){
+  if(pct==null||isNaN(pct))return'transparent';
+  const t=Math.max(-6,Math.min(6,pct))/6;
+  if(t>=0)return`rgba(34,197,94,${0.06+t*0.26})`;
+  return`rgba(239,68,68,${0.06+(-t)*0.26})`;
+}
 function calcNATRFlexible(kl,n){
   if(!kl||kl.length<3)return null;
   const p=Math.min(n,Math.max(2,kl.length-1));
@@ -641,8 +673,10 @@ function calcAll(){
     const corr14=k5&&k5.length>=15&&btcR14.length?calcCorr(calcRets(k5.slice(-15)),btcR14):null;
     const k5today=k5&&k5.length?k5.filter(c=>c.t>=dayStartMs):[];
     const rtd=calcRangeFromCandles(k5today);
+    const sp=spark5mSnapshot(k5,30);
     const m={
       sym,price:t.p,ch24:t.c24,cday,
+      sp5:sp.sp5,sp5d:sp.sp5d,
       rtd,
       r24:calcRange(k5,288),r7d:calcRange(k1h,168),
       na30:calcNATRFlexible(k1m,30),na14:calcNATRFlexible(k5,14),r1m5:calcRangeFlexible(k1m,5),
@@ -666,7 +700,7 @@ function fn(v,d=1){return(v==null||isNaN(v))?'—':v.toFixed(d);}
 function fk(v){if(v==null||isNaN(v))return'—';const a=Math.abs(v);if(a>=1e9)return(v/1e9).toFixed(1)+'B';if(a>=1e6)return(v/1e6).toFixed(1)+'M';if(a>=1e3)return(v/1e3).toFixed(0)+'K';return v.toFixed(0);}
 function fv(v,id){
   if(v==null||isNaN(v))return'—';
-  if(id==='ch24'||id==='ch7d'||id==='cday')return(v>0?'+':'')+fn(v,2)+'%';
+  if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5')return(v>0?'+':'')+fn(v,2)+'%';
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return fn(v,1);
   if(id==='na30'||id==='na14')return fn(v,2);
   if(id==='tr5'||id==='tr1h'||id==='vr5'||id==='vr1h')return fn(v,1)+'×';
@@ -677,7 +711,7 @@ function fv(v,id){
 }
 function fc(v,id){
   if(v==null||isNaN(v))return'd';
-  if(id==='ch24'||id==='ch7d'||id==='cday')return v>0?'p':v<0?'n':'w';
+  if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5')return v>0?'p':v<0?'n':'w';
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return v>15?'y':'w';
   if(id==='na30'||id==='na14')return v>0.5?'y':'w';
   if(id==='corr'||id==='corr14')return v>0.75?'d':v<-0.2?'n':'w';
@@ -2865,7 +2899,7 @@ function repaintChartSeries(ch,cacheKey=''){
 }
 
 document.addEventListener('visibilitychange',()=>{
-  if(document.hidden){_lastHiddenAt=Date.now();return;}
+  if(document.hidden){_lastHiddenAt=Date.now();updateHeaderStreamStatus();return;}
   const hiddenMs=Date.now()-_lastHiddenAt;
   if(hiddenMs<2000)return; // ignore ultra-short switches
   console.log(`Tab back, was hidden ${Math.round(hiddenMs/1000)}s — reconnecting WS & refreshing candles`);
@@ -2891,6 +2925,7 @@ document.addEventListener('visibilitychange',()=>{
     }catch(e){}
   });
   setTimeout(()=>{restartChartStreams(0);startScreenerWS();},500);
+  updateHeaderStreamStatus();
 });
 
 // When connectivity returns, restart streams & patch candle gaps.
@@ -2900,7 +2935,8 @@ window.addEventListener('online',()=>{
     if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
     if(S.wsScreener){try{S.wsScreener.close();}catch(e){}}
   }catch(e){}
-  setTimeout(()=>{restartChartStreams(0);startScreenerWS();},600);
+  updateHeaderStreamStatus();
+  setTimeout(()=>{restartChartStreams(0);startScreenerWS();updateHeaderStreamStatus();},600);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -3501,6 +3537,7 @@ function buildScreenerHeader(hdrEl){
   cols.forEach(c=>{
     const d=document.createElement('div');
     d.className='mhcol';d.id=`hc-${c.id}`;d.title=c.tip;d.style.flex='1';d.style.minWidth='32px';
+    if(c.id==='sp5'){d.style.minWidth='86px';d.style.flex='1.2';}
     d.innerHTML=`<div class="ht">${c.l}</div><div class="hb">${c.s}</div>`;
     d.onclick=()=>doSort(c.id);mg.appendChild(d);
   });
@@ -3520,7 +3557,8 @@ function sortedRows(){
       rows.push({
         sym,price:t.p??null,ch24:t.c24??null,cday:null,rtd:null,r24:null,r7d:null,
         na30:null,na14:null,r1m5:null,tr5:null,tr1h:null,vr5:null,vr1h:null,
-        ch7d:null,trd24:t.tr??null,vol24:t.qv??null,corr:null,corr14:null,v15m:null,v60m:null
+        ch7d:null,trd24:t.tr??null,vol24:t.qv??null,corr:null,corr14:null,v15m:null,v60m:null,
+        sp5:null,sp5d:''
       });
     }
   }
@@ -3541,7 +3579,7 @@ function sortedRows(){
       const r=a.sym.localeCompare(b.sym);return S.sortDir==='asc'?r:-r;
     }
     let va=a[S.sortId],vb=b[S.sortId];
-    if(S.sortAbs&&(S.sortId==='ch24'||S.sortId==='ch7d'||S.sortId==='cday')){
+    if(S.sortAbs&&(S.sortId==='ch24'||S.sortId==='ch7d'||S.sortId==='cday'||S.sortId==='sp5')){
       va=va!=null&&!isNaN(va)?Math.abs(va):va;vb=vb!=null&&!isNaN(vb)?Math.abs(vb):vb;
     }
     if(va==null||isNaN(va))return 1;if(vb==null||isNaN(vb))return-1;
@@ -3639,6 +3677,22 @@ function updateScreenerRow(row,m,cols,inChart){
   }
   cols.forEach((c,ci)=>{
     const cell=row._cells[ci];if(!cell)return;
+    if(c.id==='sp5'){
+      const hasPath=m.sp5d&&String(m.sp5d).length>8;
+      const chgDisp=(m.sp5!=null&&!isNaN(m.sp5))?m.sp5:(m.ch24!=null&&!isNaN(m.ch24)?m.ch24:null);
+      const dLine=hasPath?m.sp5d:'M1,20 L99,20';
+      const sig=`${chgDisp}|${hasPath?m.sp5d:'flat'}`;
+      if(cell._sparkSig!==sig){
+        cell._sparkSig=sig;
+        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'—';
+        const ud=(chgDisp!=null&&chgDisp<0)?'down':'up';
+        const bg=sparkHeatBackground(chgDisp);
+        cell.innerHTML=`<div class="spark-inner ${ud}" style="background:${bg}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${dLine}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${pct}</span></div>`;
+      }
+      const clsBase='mc spark-col '+(chgDisp==null||isNaN(chgDisp)?'d':fc(chgDisp,'ch24'));
+      if(cell.className!==clsBase)cell.className=clsBase;
+      return;
+    }
     const v=m[c.id];
     const newTxt=fv(v,c.id);
     const newCls='mc '+fc(v,c.id)+' '+fh(v,c.id);
@@ -3792,18 +3846,79 @@ function onTrdFilter(val){
   S.page=0;updateCharts();renderTable();
 }
 
+const STREAM_STALE_MS=20000;
+
 function updTime(){
   const d=new Date();const pad=n=>n.toString().padStart(2,'0');
   const timeStr=`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   const ht=document.getElementById('htime');if(ht)ht.textContent=timeStr;
-  const hs=document.getElementById('hstatus');if(hs)hs.textContent='Онлайн';
+  updateHeaderStreamStatus();
+}
+
+function _setHeaderLiveDot(mode){
+  const dot=document.getElementById('ldot');
+  if(!dot)return;
+  dot.className='live-dot'+(mode==='warn'?' live-dot-warn':mode==='err'?' live-dot-err':mode==='pause'?' live-dot-pause':'');
+}
+
+/** Статус Binance WS (тикер + мини‑графики): свежий / подключение / нет данных >20с */
+function updateHeaderStreamStatus(){
+  const hs=document.getElementById('hstatus');
+  if(!hs)return;
+  const now=Date.now();
+  if(document.hidden){
+    hs.textContent='Вкладка на паузе';
+    _setHeaderLiveDot('pause');
+    return;
+  }
+  if(typeof navigator!=='undefined'&&!navigator.onLine){
+    hs.textContent='Нет сети';
+    _setHeaderLiveDot('err');
+    return;
+  }
+  const wantChart=S.charts.some(c=>c.sym);
+  const scrConn=!!S.wsScreener;
+  const chartConn=wantChart&&!!S.wsCharts;
+  const scrPending=scrConn&&!_lastScreenerWsMsgAt;
+  const chartPending=wantChart&&(!S.wsCharts||!_lastChartWsMsgAt);
+  if(scrPending||chartPending){
+    hs.textContent='Подключение потока…';
+    _setHeaderLiveDot('warn');
+    return;
+  }
+  let worst=0;
+  let any=false;
+  if(scrConn&&_lastScreenerWsMsgAt){any=true;worst=Math.max(worst,now-_lastScreenerWsMsgAt);}
+  if(chartConn&&_lastChartWsMsgAt){any=true;worst=Math.max(worst,now-_lastChartWsMsgAt);}
+  if(!any){
+    hs.textContent='Онлайн';
+    _setHeaderLiveDot('');
+    return;
+  }
+  if(worst>=STREAM_STALE_MS){
+    hs.textContent=`Нет потока ${Math.round(worst/1000)}с`;
+    _setHeaderLiveDot('warn');
+    return;
+  }
+  const s=Math.round(worst/1000);
+  hs.textContent=s<=1?'Поток ок':'Поток ок · '+s+'с';
+  _setHeaderLiveDot('');
+}
+
+function syncFastBtnUi(){
+  const btn=document.getElementById('fastBtn');
+  if(!btn)return;
+  btn.classList.toggle('on',S.fastMode);
+  btn.textContent=S.fastMode?('⚡ Fast · ВКЛ'):'⚡ Fast';
+  btn.title=S.fastMode
+    ?(`Fast включён: обновление списка ~${SCREENER_BATCH_MS_FAST}мс, синхрон мини‑графиков чаще. Нажмите снова — выключить.`)
+    :(`Fast выключен (~${SCREENER_BATCH_MS_NORMAL}мс). Включить — отзывчивее UI, выше нагрузка на CPU.`);
 }
 
 function toggleFastMode(){
   S.fastMode=!S.fastMode;
   SCREENER_BATCH_MS=S.fastMode?SCREENER_BATCH_MS_FAST:SCREENER_BATCH_MS_NORMAL;
-  const btn=document.getElementById('fastBtn');
-  if(btn)btn.classList.toggle('on',S.fastMode);
+  syncFastBtnUi();
   // Force a quick refresh.
   if(!document.hidden)renderTable();
 }
@@ -4805,6 +4920,7 @@ async function main(){
     renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
     updateCharts();restartChartStreams(0);startScreenerWS();
+    syncFastBtnUi();
     S.bgDone=true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
     loadKlinesBackground();
     startRealtimeWatchdog();
@@ -5206,3 +5322,4 @@ window.setBrushWidth        = setBrushWidth;
 window.setLineColor         = setLineColor;
 window.toggleEMA            = toggleEMA;
 window.openEMAEditor        = openEMAEditor;
+window.toggleFastMode       = toggleFastMode;
