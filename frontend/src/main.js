@@ -1122,8 +1122,8 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     visible:false,
   });
   lc.priceScale('oi').applyOptions({
-    // Keep OI in a compact lower panel (above volume).
-    scaleMargins:{top:.72,bottom:.16},
+    // Keep OI in a very compact lower panel (above volume).
+    scaleMargins:{top:.86,bottom:.08},
     drawTicks:false,
     borderVisible:false,
     visible:false,
@@ -1136,6 +1136,16 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     priceLineVisible:false,
     visible:S.showOiOnChart,
   });
+  // In some LightweightCharts builds custom scale options are applied
+  // reliably only through the series scale handle.
+  try{
+    oiLine.priceScale().applyOptions({
+      scaleMargins:{top:.86,bottom:.08},
+      drawTicks:false,
+      borderVisible:false,
+      visible:false,
+    });
+  }catch(e){}
   const bbUpperLine=lc.addLineSeries({
     color:'#f59e0b',
     lineWidth:1,
@@ -5704,9 +5714,9 @@ function openPotPresetEditor(presetId){
         <span style="font-size:9px;color:var(--text3)">до</span>
         <input type="number" value="${c.max??''}" placeholder="—" step="${f.step}" class="pot-max"
           style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <span style="font-size:9px;color:var(--text3);${c.field==='emaTouch'?'':'display:none'}" class="pot-ema-lbl" title="Период EMA, по умолчанию 20">EMA period</span>
+        <span style="font-size:9px;color:var(--text3);${c.field==='emaTouch'?'':'display:none;'}" class="pot-ema-lbl" title="Период EMA, по умолчанию 20">EMA period</span>
         <input type="number" value="${Math.max(2,Math.min(400,c.period||20))}" min="2" max="400" step="1"
-          class="pot-ema-period" title="Период EMA для условия EMA touch" style="width:68px;${c.field==='emaTouch'?'':'display:none'}background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
+          class="pot-ema-period" title="Период EMA для условия EMA touch" style="width:68px;${c.field==='emaTouch'?'':'display:none;'}background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
         <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">✕</button>
         <span style="display:none" class="pot-desc">${POT_FIELD_DESC[c.field]||''}</span>`;
       const sel=row.querySelector('select');
@@ -5914,10 +5924,23 @@ function getGridSelectorRows(limit=20){
   return rows.slice(0,Math.max(3,Math.min(60,limit|0)));
 }
 
+async function ensureBacktestCandles(sym,tf,bars){
+  const key=tf==='1m'?'k1m':tf==='1h'?'k1h':'k5m';
+  const store=S[key];
+  const want=Math.max(120,Math.min(1500,bars|0));
+  const have=(store[sym]||[]).length;
+  if(have>=want)return(store[sym]||[]).slice(-want);
+  try{
+    const raw=await fj(`${API}/klines?symbol=${encodeURIComponent(sym)}&interval=${tf}&limit=${want}`,10000,1);
+    const parsed=parseKlines(raw);
+    if(parsed.length)store[sym]=parsed;
+  }catch(e){}
+  return(store[sym]||[]).slice(-want);
+}
+
 function runManualGridBacktest(cfg){
   const tf=String(cfg.tf||'5m');
-  const src=tf==='1m'?S.k1m:tf==='1h'?S.k1h:S.k5m;
-  const candles=(src[cfg.sym]||[]).slice(-Math.max(80,Math.min(1200,cfg.bars||360)));
+  const candles=(cfg.candles||[]).slice(-Math.max(80,Math.min(1200,cfg.bars||360)));
   if(candles.length<30)return{ok:false,msg:`Недостаточно ${tf} истории для теста`};
   const closes=candles.map(c=>c.c);
   const lowSeries=candles.map(c=>c.l);
@@ -5937,6 +5960,7 @@ function runManualGridBacktest(cfg){
   let fees=0;
   let fills=0;
   const trades=[];
+  let buyRun=0,sellRun=0,maxOneSideRun=0;
   const eq=[];
   for(let i=1;i<candles.length;i++){
     const c=candles[i];
@@ -5947,10 +5971,12 @@ function runManualGridBacktest(cfg){
         if(c.o>=px&&cash>=buyCost){
           cash-=buyCost;asset+=qty;fees+=qty*px*fee;fills++;
           trades.push({time:toChartTime(c.t),price:px,side:'buy'});
+          buyRun++;sellRun=0;maxOneSideRun=Math.max(maxOneSideRun,buyRun);
         }else if(asset>=qty){
           const gain=qty*px*(1-fee);
           asset-=qty;cash+=gain;fees+=qty*px*fee;fills++;
           trades.push({time:toChartTime(c.t),price:px,side:'sell'});
+          sellRun++;buyRun=0;maxOneSideRun=Math.max(maxOneSideRun,sellRun);
         }
       }
     }
@@ -5972,6 +5998,8 @@ function runManualGridBacktest(cfg){
     gridLevels:grid,
     trades,
     levels,
+    step,
+    maxOneSideRun,
     lower:lo,
     upper:hi,
     fills,
@@ -6062,7 +6090,10 @@ function renderGridLabModal(){
     if(tab==='selector'){
       const rows=getGridSelectorRows(24);
       body.innerHTML=`
-        <div style="font-size:10px;color:var(--text3);margin-bottom:8px">Топ монет по пригодности к grid (ликвидность, ренж, mean-reversion, активность).</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:8px">Топ монет по пригодности к grid (ликвидность, ренж, mean-reversion, активность).</div>
+      <div style="font-size:9px;color:var(--text3);line-height:1.4;margin:0 0 9px 0">
+        GridScore = 24% ренж за 24ч + 20% NATR (5m) + 22% mean-reversion (меньше направленного тренда за 24ч) + 22% ликвидность (объём) + 12% активность (сделки). Чем выше score, тем обычно стабильнее и "рабочее" поведение для сетки.
+      </div>
         <div style="display:grid;grid-template-columns:110px repeat(6,1fr);gap:6px;font-size:9px">
           <div style="color:var(--text3)">Символ</div><div style="color:var(--text3)">GridScore</div><div style="color:var(--text3)">Ренж24</div><div style="color:var(--text3)">NATR5m</div><div style="color:var(--text3)">ИЗМ24</div><div style="color:var(--text3)">Объём24</div><div style="color:var(--text3)">Сделки24</div>
           ${rows.map(r=>`<div style="font-weight:600;color:#fff;cursor:pointer" onclick="openFullscreenBySym('${r.sym}')">${r.sym.replace(/USDT$/,'')}</div><div>${fn(r.score,1)}</div><div>${fn(r.range24,2)}%</div><div>${fn(r.natr,2)}%</div><div class="${r.ch24>=0?'p':'n'}">${r.ch24>=0?'+':''}${fn(r.ch24,2)}%</div><div>${fk(r.vol24)}</div><div>${fk(r.trd24)}</div>`).join('')}
@@ -6097,7 +6128,7 @@ function renderGridLabModal(){
       <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
       <div id="gbChart" style="height:280px;border:1px solid var(--border2);border-radius:6px;overflow:hidden"></div>`;
     const run=body.querySelector('#gbRunBtn');
-    run.onclick=()=>{
+    run.onclick=async()=>{
       const cfg={
         sym:String(body.querySelector('#gbSym').value||'').toUpperCase().trim(),
         tf:String(body.querySelector('#gbTf').value||'5m'),
@@ -6109,9 +6140,11 @@ function renderGridLabModal(){
         deposit:+body.querySelector('#gbDep').value||500,
         fee:0.0004,
       };
+      cfg.candles=await ensureBacktestCandles(cfg.sym,cfg.tf,Math.max(cfg.bars,120));
       const out=runManualGridBacktest(cfg);
       const el=body.querySelector('#gbOut');
       if(!out.ok){el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;renderManualBacktestPreview(body,null);return;}
+      const maxSteps=Math.floor((out.upper-out.lower)/Math.max(out.step,1e-12));
       el.innerHTML=`
         <div style="display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:8px">
           <div>Символ: <b style="color:#fff">${out.symbol.replace(/USDT$/,'')}</b></div>
@@ -6121,6 +6154,9 @@ function renderGridLabModal(){
           <div>MaxDD: <b style="color:#f59e0b">${fn(out.maxDd,2)}%</b></div>
           <div>Сделок(fill): <b style="color:#fff">${out.fills}</b></div>
           <div>Комиссии: <b style="color:#fff">${fn(out.fees,2)} USDT</b></div>
+          <div>Шаг сетки: <b style="color:#fff">${fmtPrice(out.step)}</b></div>
+          <div>Уровней в диапазоне: <b style="color:#fff">${maxSteps+1}</b></div>
+          <div title="Максимальная серия подряд в одну сторону (buy или sell) в этом тесте">Макс серия 1-сторонних fill: <b style="color:#fff">${out.maxOneSideRun}</b></div>
         </div>`;
       renderManualBacktestPreview(body,out);
     };
