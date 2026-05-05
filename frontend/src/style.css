@@ -548,3 +548,8 @@ html,body{
 /* Long/Short draw buttons */
 #draw-long.on,#fs-draw-long.on{background:rgba(31,168,145,.15);border-color:#1fa891;color:#1fa891}
 #draw-short.on,#fs-draw-short.on{background:rgba(224,64,64,.15);border-color:#e04040;color:#e04040}
+
+/* Grid bot screeners modals */
+.gbs-table th{text-align:left;padding:6px 8px;background:var(--bg3);color:var(--text3);position:sticky;top:0;z-index:1;cursor:pointer;user-select:none}
+.gbs-table td{padding:5px 8px;border-bottom:1px solid rgba(37,37,48,.6);vertical-align:top}
+.gbs-tag{display:inline-block;margin:1px 4px 1px 0;padding:1px 5px;border-radius:3px;background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.35);font-size:8px;color:var(--text2)}

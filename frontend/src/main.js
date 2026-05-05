@@ -1,4 +1,5 @@
 import './style.css'
+import { registerGridBotScreeners } from './gridBotScreeners.js'
 
 // API base - in dev points to local backend, in prod to your Railway URL
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
@@ -6206,6 +6207,19 @@ function setLineColor(col,el){
   [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
 }
 function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
+
+registerGridBotScreeners({
+  S,
+  API,
+  fj,
+  parseKlines,
+  batchKlines,
+  fn,
+  fmtPrice,
+  openFullscreenBySym,
+  bollingerOnTail,
+  calcATR,
+});
 
 // ═══════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════
