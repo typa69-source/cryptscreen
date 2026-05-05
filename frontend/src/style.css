@@ -361,10 +361,6 @@ html,body{
 .srow.infullscreen{background:rgba(224,48,48,.1)!important;outline:1px solid rgba(224,48,48,.35);outline-offset:-1px}
 .srow.infullscreen .rtick{background:rgba(224,48,48,.15)!important}
 /* Торговые сессии (UTC) — лёгкая полоса слева через градиент */
-.srow.sess-ny{background:linear-gradient(90deg,rgba(59,130,246,.11),transparent 58%)}
-.srow.sess-ld{background:linear-gradient(90deg,rgba(234,179,8,.09),transparent 58%)}
-.srow.sess-as{background:linear-gradient(90deg,rgba(139,92,246,.11),transparent 58%)}
-.srow.sess-dead{background:linear-gradient(90deg,rgba(100,116,139,.07),transparent 52%)}
 .fs-stat{font-size:10px;color:var(--text2);font-variant-numeric:tabular-nums;white-space:nowrap}
 #fsExtras{display:none;align-items:center;gap:6px;flex-shrink:0}
 

@@ -135,10 +135,12 @@
     <button class="tbtn" id="draw-short" onclick="setDrawMode('short')" title="Шорт: вход → СЛ → ТП 2:1">▼Ш</button>
     <div class="tsep"></div>
     <button class="tbtn" id="emaBtn" onclick="openEMAEditor('auto')" title="Настройки EMA">EMA</button>
+    <button class="tbtn" id="bbBtn" onclick="toggleBbOverlay()" title="Показать/скрыть полосы Боллинджера">BB</button>
     <div class="tsep"></div>
     <span id="sinfo" style="font-size:9px;color:var(--text3);flex-shrink:0"></span>
     <div class="tsep"></div>
     <button class="tbtn" id="densityBtn" onclick="toggleDensity()" title="Плотности объёма на графике">◈ Плотность</button>
+    <button class="tbtn" id="oiChartBtn" onclick="toggleOiChart()" title="Показать/скрыть OI линию на графиках">OI: ВЫКЛ</button>
 
     <div class="tright">
       <div class="vol-slider-wrap filter-slider-wrap">

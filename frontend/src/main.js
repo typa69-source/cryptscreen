@@ -268,8 +268,10 @@ const S = {
   colOrder: ALL_COLS.map(c=>c.id),
   colVisible: new Set(ALL_COLS.map(c=>c.id).filter(id=>!COLS_HIDDEN_BY_DEFAULT.has(id))),
   chartAutoSync:true,
-  /** Подсветка строк по торговым сессиям (границы в UTC, как у бирж). */
+  /** Подсветка торговых сессий на графиках (UTC). */
   sessionFx:{enabled:false,asia:true,london:true,ny:true},
+  showOiOnChart:false,
+  showBbOverlay:false,
   chartHeadOrder:['chg','vol','trd','natr','corr'],
   chartHeadVisible:new Set(['chg','vol','trd','natr']),
   /** Цвет линий рисования по типу (не лонг/шорт) */
@@ -383,10 +385,16 @@ function loadUiPrefs(){
       if(typeof j.london==='boolean')S.sessionFx.london=j.london;
       if(typeof j.ny==='boolean')S.sessionFx.ny=j.ny;
     }
+    const oiOn=localStorage.getItem('cs_oi_chart');
+    if(oiOn!=null)S.showOiOnChart=oiOn==='1';
+    const bbOn=localStorage.getItem('cs_bb_overlay');
+    if(bbOn!=null)S.showBbOverlay=bbOn==='1';
   }catch(e){}
 }
 function saveChartAutoSyncPref(){try{localStorage.setItem('cs_chart_autosync',S.chartAutoSync?'1':'0');}catch(e){}}
 function saveSessionFxPref(){try{localStorage.setItem('cs_sess_fx',JSON.stringify(S.sessionFx));}catch(e){}}
+function saveOiChartPref(){try{localStorage.setItem('cs_oi_chart',S.showOiOnChart?'1':'0');}catch(e){}}
+function saveBbOverlayPref(){try{localStorage.setItem('cs_bb_overlay',S.showBbOverlay?'1':'0');}catch(e){}}
 
 function lineColorForType(type){
   const c=S.lineColors?.[type];
@@ -439,14 +447,16 @@ function mkChart(){
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
     _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
-    livePriceLine:null,_histBootstrapDone:false};
+    livePriceLine:null,oiLine:null,bbUpperLine:null,bbLowerLine:null,
+    _oiHist:[],_oiLastFetchTs:0,_histBootstrapDone:false};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
     _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
-    livePriceLine:null,_histBootstrapDone:false};
+    livePriceLine:null,oiLine:null,bbUpperLine:null,bbLowerLine:null,
+    _oiHist:[],_oiLastFetchTs:0,_histBootstrapDone:false};
 }
 function getChartSym(ch){
   if(ch?.sym)return ch.sym;
@@ -640,6 +650,92 @@ function calcSqueezePop(k5,vr5){
   const breakout=cur.lastC>cur.upper*1.00005||cur.lastC<cur.lower*0.99995;
   return(squeezed&&vr5>=1.25&&breakout)?1:0;
 }
+function calcBbSignals(k5,vr5){
+  const period=20,mult=2;
+  if(!k5||k5.length<period+4)return{bbSqz:0,bbBreak:0,bbWidth:null,bbUpper:null,bbLower:null};
+  const cur=bollingerOnTail(k5,period,mult);
+  const prev=bollingerOnTail(k5.slice(0,-1),period,mult);
+  if(!cur||!prev)return{bbSqz:0,bbBreak:0,bbWidth:null,bbUpper:null,bbLower:null};
+  const bbSqz=(cur.width<prev.width*0.88&&cur.width<0.045)?1:0;
+  const breakUp=cur.lastC>cur.upper*1.00005;
+  const breakDn=cur.lastC<cur.lower*0.99995;
+  const bbBreak=breakUp?1:breakDn?-1:0;
+  return{bbSqz,bbBreak,bbWidth:cur.width,bbUpper:cur.upper,bbLower:cur.lower,volImpulse:(vr5!=null&&vr5>=1.25)?1:0};
+}
+function buildBbSeries(candles,period=20,mult=2){
+  if(!Array.isArray(candles)||candles.length<period)return{upper:[],lower:[]};
+  const upper=[],lower=[];
+  for(let i=period-1;i<candles.length;i++){
+    const slice=candles.slice(i-period+1,i+1);
+    const bb=bollingerOnTail(slice,period,mult);
+    if(!bb)continue;
+    upper.push({time:toChartTime(candles[i].t),value:bb.upper});
+    lower.push({time:toChartTime(candles[i].t),value:bb.lower});
+  }
+  return{upper,lower};
+}
+function oiPeriodForTf(tf){
+  if(tf==='1m'||tf==='3m')return'5m';
+  if(tf==='5m')return'5m';
+  if(tf==='15m')return'15m';
+  if(tf==='30m')return'30m';
+  if(tf==='1h')return'1h';
+  if(tf==='4h')return'4h';
+  return'1h';
+}
+async function fetchOiHistoryForChart(sym,tf){
+  const period=oiPeriodForTf(tf);
+  const limit=Math.max(60,Math.min(240,Math.round(HIST_INITIAL/3)));
+  const raw=await fj(`${API_FDATA}/openInterestHist?symbol=${encodeURIComponent(sym)}&period=${period}&limit=${limit}`,12000,0);
+  if(!Array.isArray(raw)||raw.length<2)return[];
+  const base=+raw[0]?.sumOpenInterest;
+  if(!isFinite(base)||base<=0)return[];
+  const out=[];
+  for(const row of raw){
+    const oi=+row.sumOpenInterest;
+    const ts=+row.timestamp;
+    if(!isFinite(oi)||!isFinite(ts)||ts<=0)continue;
+    out.push({time:toChartTime(ts),value:(oi/base-1)*100});
+  }
+  return out;
+}
+function repaintOiSeries(ch){
+  if(!ch?.oiLine)return;
+  ch.oiLine.applyOptions({visible:!!S.showOiOnChart});
+  if(!S.showOiOnChart){ch.oiLine.setData([]);return;}
+  ch.oiLine.setData(Array.isArray(ch._oiHist)?ch._oiHist:[]);
+}
+function repaintBbSeries(ch){
+  if(!ch?.bbUpperLine||!ch?.bbLowerLine)return;
+  ch.bbUpperLine.applyOptions({visible:!!S.showBbOverlay});
+  ch.bbLowerLine.applyOptions({visible:!!S.showBbOverlay});
+  if(!S.showBbOverlay||!Array.isArray(ch.candles)||!ch.candles.length){
+    ch.bbUpperLine.setData([]);ch.bbLowerLine.setData([]);return;
+  }
+  const bb=buildBbSeries(ch.candles,20,2);
+  ch.bbUpperLine.setData(bb.upper);
+  ch.bbLowerLine.setData(bb.lower);
+}
+async function refreshChartOiSeries(ch,tf,sym){
+  if(!ch?.oiLine||!sym)return;
+  const now=Date.now();
+  if(ch._oiFetching&&now-(ch._oiFetchStartedAt||0)<12000)return;
+  ch._oiFetching=true;ch._oiFetchStartedAt=now;
+  try{
+    ch._oiHist=await fetchOiHistoryForChart(sym,tf);
+    ch._oiLastFetchTs=Date.now();
+    repaintOiSeries(ch);
+  }catch(e){
+  }finally{
+    ch._oiFetching=false;
+  }
+}
+function getSessionKindByUtcHour(h){
+  if(S.sessionFx.ny!==false&&h>=13&&h<22)return'ny';
+  if(S.sessionFx.london!==false&&h>=8&&h<17)return'ld';
+  if(S.sessionFx.asia!==false&&h>=0&&h<9)return'as';
+  return'dead';
+}
 function calcNATRFlexible(kl,n){
   if(!kl||kl.length<3)return null;
   const p=Math.min(n,Math.max(2,kl.length-1));
@@ -696,6 +792,11 @@ function appendCandleWithGaps(arr,candle,stepMs){
     return;
   }
   if(stepMs>0){
+    const gapBars=Math.max(0,Math.floor((candle.t-prev.t)/stepMs)-1);
+    if(gapBars>18){
+      arr.push(candle);
+      return;
+    }
     for(let ts=prev.t+stepMs;ts<candle.t;ts+=stepMs){
       const base=arr[arr.length-1]?.c??prev.c;
       arr.push({t:ts,o:base,h:base,l:base,c:base,v:0,tr:0,qv:0,_synthetic:true});
@@ -726,6 +827,7 @@ function calcAll(){
     const sp=spark5mSnapshot(k5,30);
     const vr5v=calcRel(k5,14,'qv');
     const oiE=_oiDelta[sym];
+    const bb=calcBbSignals(k5,vr5v);
     const m={
       sym,price:t.p,ch24:t.c24,cday,
       sp5:sp.sp5,sp5d:sp.sp5d,
@@ -735,6 +837,9 @@ function calcAll(){
       tr5:calcRel(k5,14,'tr'),tr1h:calcRel(k1h,24,'tr'),
       vr5:vr5v,vr1h:calcRel(k1h,24,'qv'),
       sqzPop:calcSqueezePop(k5,vr5v),
+      bbSqz:bb.bbSqz,
+      bbBreak:bb.bbBreak,
+      volImpulse:bb.volImpulse??0,
       fund:_fundRates[sym]??null,
       oi1h:oiE?.oi1h??null,
       oi4h:oiE?.oi4h??null,
@@ -959,7 +1064,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const container=document.getElementById(containerId);
   if(!container)return false;
   if(ch._ro){try{ch._ro.disconnect();}catch(e){}ch._ro=null;}
-  if(ch.lc){try{ch.lc.remove();}catch(e){}ch.lc=null;ch.cs=null;ch.vs=null;ch.livePriceLine=null;}
+  if(ch.lc){
+    try{ch.lc.remove();}catch(e){}
+    ch.lc=null;ch.cs=null;ch.vs=null;ch.livePriceLine=null;
+    ch.oiLine=null;ch.bbUpperLine=null;ch.bbLowerLine=null;
+  }
   if(ch._ab)ch._ab.abort();
   container.innerHTML='';
 
@@ -993,6 +1102,37 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     drawTicks:false,
     borderVisible:false,
     visible:false,
+  });
+  lc.priceScale('oi').applyOptions({
+    scaleMargins:{top:.66,bottom:.22},
+    drawTicks:false,
+    borderVisible:false,
+    visible:false,
+  });
+  const oiLine=lc.addLineSeries({
+    priceScaleId:'oi',
+    color:'#22d3ee',
+    lineWidth:1,
+    lastValueVisible:false,
+    priceLineVisible:false,
+    visible:S.showOiOnChart,
+  });
+  const bbUpperLine=lc.addLineSeries({
+    color:'#f59e0b',
+    lineWidth:1,
+    lastValueVisible:false,
+    priceLineVisible:false,
+    crosshairMarkerVisible:false,
+    visible:S.showBbOverlay,
+  });
+  const bbLowerLine=lc.addLineSeries({
+    color:'#f59e0b',
+    lineWidth:1,
+    lastValueVisible:false,
+    priceLineVisible:false,
+    crosshairMarkerVisible:false,
+    lineStyle:2,
+    visible:S.showBbOverlay,
   });
 
   // Watermark
@@ -1253,7 +1393,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     rCanvas(ch);
   });
 
-  ch.lc=lc;ch.cs=cs;ch.vs=vs;
+  ch.lc=lc;ch.cs=cs;ch.vs=vs;ch.oiLine=oiLine;ch.bbUpperLine=bbUpperLine;ch.bbLowerLine=bbLowerLine;
   return true;
 }
 
@@ -1351,6 +1491,7 @@ async function loadChart(slot,sym){
     return;
   }
   ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
+  ch._oiHist=[];ch._oiLastFetchTs=0;
   ch.drawings=getSymDrawings(sym); // shared reference
   setText(`cs${slot}`,sym.replace(/USDT$/,''));
   setCoinIcon(`ci${slot}`,sym);
@@ -1369,6 +1510,7 @@ async function loadChart(slot,sym){
   if(Array.isArray(cached)&&cached.length>=wantMinCache){
     ch.candles=cached.slice(-HIST_CACHE_MAX);
     paintSlotData(slot);
+    refreshChartOiSeries(ch,S.tf,sym);
     if(S.showDensity)fetchOrderBook(sym);
     return;
   }
@@ -1384,6 +1526,7 @@ async function loadChart(slot,sym){
     }
     if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[cacheKey]=ch.candles.slice();
     paintSlotData(slot);
+    refreshChartOiSeries(ch,S.tf,sym);
     if(S.showDensity)fetchOrderBook(sym); // #1: pre-fetch OB for density
   }catch(e){
     if(cb&&ch.sym===sym)cb.innerHTML=`<div class="cph"><span style="color:var(--red);font-size:10px">Ошибка загрузки</span></div>`;
@@ -1422,6 +1565,8 @@ function paintSlotData(slot){
     ch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
     ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+    repaintBbSeries(ch);
+    repaintOiSeries(ch);
     syncLivePriceLabel(ch,lp,ch.candles[ch.candles.length-1].o);
     applyDefaultChartView(ch);
     updateChartHeader(slot,ch.sym);
@@ -1725,6 +1870,51 @@ function computeDensities(ch){
 const _densityCache=new Map(); // sym → {ts, zones}
 const _DENSITY_CACHE_TTL=30000; // recompute every 30s max
 
+function drawSessionZones(ctx,ch,W,H){
+  if(!S.sessionFx?.enabled||!ch?.lc)return;
+  const ts=ch.lc.timeScale();
+  if(!ts)return;
+  const vr=ts.getVisibleRange?.();
+  if(!vr?.from||!vr?.to)return;
+  const from=Math.floor(vr.from),to=Math.ceil(vr.to);
+  if(!isFinite(from)||!isFinite(to)||to<=from)return;
+  const tf=S.fsCharts.includes(ch)?ch.tf:S.tf;
+  const step=Math.max(60000,tfMs(tf));
+  const sessionColors={
+    ny:'rgba(59,130,246,0.05)',
+    ld:'rgba(234,179,8,0.045)',
+    as:'rgba(139,92,246,0.05)',
+    dead:'rgba(100,116,139,0.022)',
+  };
+  const borderColors={
+    ny:'rgba(59,130,246,0.35)',
+    ld:'rgba(234,179,8,0.33)',
+    as:'rgba(139,92,246,0.35)',
+    dead:'rgba(100,116,139,0.16)',
+  };
+  let segStart=from;
+  let prevKey=null;
+  for(let t=from;t<=to+step;t+=step){
+    const utcMs=(t-TZ_OFFSET_S)*1000;
+    const d=new Date(utcMs);
+    const key=getSessionKindByUtcHour(d.getUTCHours()+d.getUTCMinutes()/60);
+    if(prevKey==null){prevKey=key;continue;}
+    if(key!==prevKey||t>=to){
+      const x0=ts.timeToCoordinate(segStart);
+      const x1=ts.timeToCoordinate(Math.min(t,to));
+      if(x0!=null&&x1!=null&&x1>x0){
+        ctx.fillStyle=sessionColors[prevKey]||sessionColors.dead;
+        ctx.fillRect(x0,0,x1-x0,H);
+        ctx.strokeStyle=borderColors[prevKey]||borderColors.dead;
+        ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(x0,0);ctx.lineTo(x0,H);ctx.stroke();
+      }
+      segStart=t;
+      prevKey=key;
+    }
+  }
+}
+
 function drawDensities(ctx,ch,W,H){
   if(!ch.cs||!ch.lc)return;
   const sym=ch.sym||S.fsSym;if(!sym)return;
@@ -1789,6 +1979,7 @@ function _rCanvasImmediate(ch){
   const drawW=Math.max(1,W-PRICE_AXIS_W);
   const drawH=Math.max(1,H-TIME_AXIS_H);
   ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
+  drawSessionZones(ctx,ch,drawW,drawH);
   // Densities (behind drawings)
   if(S.showDensity)drawDensities(ctx,ch,drawW,drawH);
   ch.drawings.forEach((d,i)=>{
@@ -2943,6 +3134,7 @@ document.addEventListener('keydown',e=>{
 });
 // FIX 7: Reconnect WebSocket and refresh candles after tab was hidden (sleep/background)
 let _lastHiddenAt=0;
+let _resumeRecoveryAt=0;
 async function backfillChartGap(ch,sym,tf,limit=500){
   if(!ch?.candles?.length||!sym)return;
   const tfM=tfMs(tf);
@@ -2958,11 +3150,58 @@ async function backfillChartGap(ch,sym,tf,limit=500){
   for(const c of nc)byT.set(c.t,c);
   ch.candles=[...byT.values()].sort((a,b)=>a.t-b.t).slice(-HIST_CACHE_MAX);
 }
+async function backfillVisibleCharts(limit=900){
+  const tasks=[];
+  for(const ch of S.charts){
+    if(!ch.sym||!ch.cs||!ch.candles.length)continue;
+    tasks.push((async()=>{
+      try{
+        await backfillChartGap(ch,ch.sym,S.tf,limit);
+        if(ch.cs&&ch.lc)repaintChartSeries(ch,`${S.tf}:${ch.sym}`);
+      }catch(e){}
+    })());
+  }
+  if(S.fsOpen&&S.fsSym){
+    for(const fch of S.fsCharts){
+      if(!fch.cs||!fch.candles.length)continue;
+      tasks.push((async()=>{
+        try{
+          await backfillChartGap(fch,S.fsSym,fch.tf,limit);
+          if(fch.cs&&fch.lc)repaintChartSeries(fch,`${fch.tf}:${S.fsSym}`);
+        }catch(e){}
+      })());
+    }
+  }
+  await Promise.all(tasks);
+}
+function closeAllRealtimeSockets(){
+  if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
+  if(S.wsScreener){try{S.wsScreener.close();}catch(e){}}
+  closeChartTradesSockets();
+  if(S.fsWs){try{S.fsWs.close();}catch(e){}S.fsWs=null;}
+}
+async function handleResumeRecovery(reason='resume'){
+  const now=Date.now();
+  if(now-_resumeRecoveryAt<3000)return;
+  _resumeRecoveryAt=now;
+  console.log(`Resume recovery: ${reason}`);
+  closeAllRealtimeSockets();
+  updateHeaderStreamStatus();
+  await backfillVisibleCharts(1000);
+  try{await refreshMetricKlinesSlice();}catch(e){}
+  setTimeout(()=>{
+    restartChartStreams(0);
+    startScreenerWS();
+    updateHeaderStreamStatus();
+  },450);
+}
 function repaintChartSeries(ch,cacheKey=''){
   if(!ch?.cs||!ch?.vs||!ch?.candles?.length)return;
   ch._histBootstrapDone=ch.candles.length>=MIN_CHART_CANDLES;
   ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+  repaintBbSeries(ch);
+  repaintOiSeries(ch);
   const lc=ch.candles[ch.candles.length-1];
   if(lc)syncLivePriceLabel(ch,lc.c,lc.o);
   if(cacheKey)S.histCache[cacheKey]=ch.candles.slice(-HIST_CACHE_MAX);
@@ -2973,41 +3212,12 @@ document.addEventListener('visibilitychange',()=>{
   if(document.hidden){_lastHiddenAt=Date.now();updateHeaderStreamStatus();return;}
   const hiddenMs=Date.now()-_lastHiddenAt;
   if(hiddenMs<2000)return; // ignore ultra-short switches
-  console.log(`Tab back, was hidden ${Math.round(hiddenMs/1000)}s — reconnecting WS & refreshing candles`);
-  // Reconnect all WS
-  if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
-  if(S.wsScreener){try{S.wsScreener.close();}catch(e){}}
-  // Reload last candle for each visible chart to patch gap
-  S.charts.forEach(async ch=>{
-    if(!ch.sym||!ch.cs||!ch.candles.length)return;
-    try{
-      await backfillChartGap(ch,ch.sym,S.tf,800);
-      if(!ch.cs||!ch.lc)return;
-      repaintChartSeries(ch,`${S.tf}:${ch.sym}`);
-    }catch(e){}
-  });
-  // Similarly for FS charts
-  if(S.fsOpen)S.fsCharts.forEach(async(fch,idx)=>{
-    if(!S.fsSym||!fch.cs||!fch.candles.length)return;
-    try{
-      await backfillChartGap(fch,S.fsSym,fch.tf,800);
-      if(!fch.cs)return;
-      repaintChartSeries(fch,`${fch.tf}:${S.fsSym}`);
-    }catch(e){}
-  });
-  setTimeout(()=>{restartChartStreams(0);startScreenerWS();},500);
-  updateHeaderStreamStatus();
+  handleResumeRecovery(`visibility ${Math.round(hiddenMs/1000)}s`);
 });
 
 // When connectivity returns, restart streams & patch candle gaps.
 window.addEventListener('online',()=>{
-  try{
-    console.log('Network online — restarting WS & refreshing candles');
-    if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
-    if(S.wsScreener){try{S.wsScreener.close();}catch(e){}}
-  }catch(e){}
-  updateHeaderStreamStatus();
-  setTimeout(()=>{restartChartStreams(0);startScreenerWS();updateHeaderStreamStatus();},600);
+  handleResumeRecovery('network-online');
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -3022,6 +3232,7 @@ let _lastChartWsMsgAt=0;
 let _wsChartTradesGen=0;
 let _wsChartTradesReconnectTimer=null;
 let _chartWsRestartTimer=null;
+let _watchdogPrevNow=Date.now();
 
 function restartChartStreams(delayMs=350){
   if(_chartWsRestartTimer){clearTimeout(_chartWsRestartTimer);_chartWsRestartTimer=null;}
@@ -3064,6 +3275,7 @@ function startChartWS(){
         try{
           ch.cs.update({time:toChartTime(c.t),open:c.o,high:c.h,low:c.l,close:c.c});
           ch.vs.update({time:toChartTime(c.t),value:c.qv,color:c.c>=c.o?'#1fa89122':'#e0404022'});
+          repaintBbSeries(ch);
           syncLivePriceLabel(ch,c.c,c.o);
         }catch(e){}
         ch.drawings.forEach(d=>{if(d.type==='aray'||d.type==='atline')checkAlerts(ch,d);});
@@ -3175,6 +3387,7 @@ function startChartTradesWS(){
         try{
           ch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
           ch.vs.update({time:toChartTime(lc.t),value:lc.qv||0,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
+          repaintBbSeries(ch);
           syncLivePriceLabel(ch,lc.c,lc.o);
           const cpEl=document.getElementById(`cp${slot}`);
           if(cpEl)cpEl.textContent=fmtPrice(lc.c);
@@ -3209,6 +3422,11 @@ function startRealtimeWatchdog(){
   if(S._rtWatchdog)return;
   S._rtWatchdog=setInterval(()=>{
     const now=Date.now();
+    const jump=now-_watchdogPrevNow;
+    _watchdogPrevNow=now;
+    if(jump>45000){
+      handleResumeRecovery(`clock-jump ${Math.round(jump/1000)}s`);
+    }
     if(!document.hidden){
       if(S.wsScreener&&_lastScreenerWsMsgAt&&now-_lastScreenerWsMsgAt>20000){
         console.warn('Screener WS stale, restarting');
@@ -3263,6 +3481,7 @@ function startRealtimeWatchdog(){
           if(!lc)return;
           fch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
           fch.vs.update({time:toChartTime(lc.t),value:lc.qv,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
+          repaintBbSeries(fch);
           syncLivePriceLabel(fch,lc.c,lc.o);
           fch._lastRtUpdateTs=Date.now();
           const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
@@ -3369,9 +3588,21 @@ function ensureFundOiLoop(){
   if(_fundOiInterval)return;
   refreshPremiumFundingAll();
   refreshOpenInterestHistSlice();
+  if(S.showOiOnChart){
+    S.charts.forEach(ch=>{if(ch.sym)refreshChartOiSeries(ch,S.tf,ch.sym);});
+    if(S.fsOpen&&S.fsSym)S.fsCharts.forEach(ch=>refreshChartOiSeries(ch,ch.tf,S.fsSym));
+  }
   _fundOiInterval=setInterval(()=>{
     refreshPremiumFundingAll();
     refreshOpenInterestHistSlice();
+    if(!S.showOiOnChart)return;
+    S.charts.forEach(ch=>{
+      if(!ch.sym)return;
+      if(Date.now()-(ch._oiLastFetchTs||0)>55000)refreshChartOiSeries(ch,S.tf,ch.sym);
+    });
+    if(S.fsOpen&&S.fsSym)S.fsCharts.forEach(ch=>{
+      if(Date.now()-(ch._oiLastFetchTs||0)>55000)refreshChartOiSeries(ch,ch.tf,S.fsSym);
+    });
   },32000);
 }
 
@@ -3703,7 +3934,7 @@ function sortedRows(){
         sym,price:t.p??null,ch24:t.c24??null,cday:null,rtd:null,r24:null,r7d:null,
         na30:null,na14:null,r1m5:null,tr5:null,tr1h:null,vr5:null,vr1h:null,
         ch7d:null,trd24:t.tr??null,vol24:t.qv??null,corr:null,corr14:null,v15m:null,v60m:null,
-        sp5:null,sp5d:'',fund:null,oi1h:null,oi4h:null,sqzPop:0
+        sp5:null,sp5d:'',fund:null,oi1h:null,oi4h:null,sqzPop:0,bbSqz:0,bbBreak:0,volImpulse:0
       });
     }
   }
@@ -3800,20 +4031,10 @@ function buildScreenerRow(m,cols){
   return row;
 }
 
-/** Полоска сессии по UTC (Asia / London / NY), приоритет NY > London > Asia; «мёртвая» зона — sess-dead. */
-function sessionRowStripClass(){
-  if(!S.sessionFx?.enabled)return'';
-  const h=new Date().getUTCHours()+new Date().getUTCMinutes()/60;
-  if(S.sessionFx.ny!==false&&h>=13&&h<22)return' sess-ny';
-  if(S.sessionFx.london!==false&&h>=8&&h<17)return' sess-ld';
-  if(S.sessionFx.asia!==false&&h>=0&&h<9)return' sess-as';
-  return' sess-dead';
-}
-
 function updateScreenerRow(row,m,cols,inChart){
   const grp=getSymGroup(m.sym);
   const grpCol=GROUP_COLORS[grp]||'';
-  const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'')+sessionRowStripClass();
+  const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
   if(row.className!==newCls)row.className=newCls;
   row._sym=m.sym;
   const gdot=row._gdot;
@@ -4044,6 +4265,7 @@ function updTime(){
     if(key!==_lastSessionUiKey){
       _lastSessionUiKey=key;
       if(!document.hidden&&!_scrolling)scheduleRender();
+      [...S.charts,...S.fsCharts].forEach(ch=>{if(ch?.canvas&&ch?.lc)rCanvas(ch);});
     }
   }
 }
@@ -4124,6 +4346,39 @@ function syncChartSyncBtnUi(){
   b.title=S.chartAutoSync
     ?'Вкл: мини-графики 3×3 подстраиваются под текущий топ страницы при живой сортировке. Список всегда обновляется.'
     :'Выкл: список обновляется, но символы в сетке графиков не меняются сами — пока не перелистнёте страницу или не смените сортировку вручную.';
+}
+function syncOiChartBtnUi(){
+  const btn=document.getElementById('oiChartBtn');
+  if(!btn)return;
+  btn.classList.toggle('on',S.showOiOnChart);
+  btn.textContent=S.showOiOnChart?'OI: ВКЛ':'OI: ВЫКЛ';
+}
+function toggleOiChart(){
+  S.showOiOnChart=!S.showOiOnChart;
+  saveOiChartPref();
+  syncOiChartBtnUi();
+  S.charts.forEach(ch=>{
+    repaintOiSeries(ch);
+    if(S.showOiOnChart&&ch.sym)refreshChartOiSeries(ch,S.tf,ch.sym);
+  });
+  S.fsCharts.forEach(ch=>{
+    repaintOiSeries(ch);
+    if(S.showOiOnChart&&S.fsSym)refreshChartOiSeries(ch,ch.tf,S.fsSym);
+  });
+}
+function syncBbBtnUi(){
+  const btn=document.getElementById('bbBtn');
+  if(!btn)return;
+  btn.classList.toggle('on',S.showBbOverlay);
+}
+function toggleBbOverlay(){
+  S.showBbOverlay=!S.showBbOverlay;
+  saveBbOverlayPref();
+  syncBbBtnUi();
+  [...S.charts,...S.fsCharts].forEach(ch=>{
+    repaintBbSeries(ch);
+    rCanvas(ch);
+  });
 }
 function toggleChartAutoSync(){
   S.chartAutoSync=!S.chartAutoSync;
@@ -4735,6 +4990,7 @@ function setSessionFxEnabled(on){
   const body=document.getElementById('smodal-body');
   if(body&&S.settingsTab==='gen')renderSettingsGen(body);
   renderTable();
+  [...S.charts,...S.fsCharts].forEach(ch=>{if(ch?.canvas&&ch?.lc)rCanvas(ch);});
 }
 function toggleSessionBand(which){
   if(which==='asia')S.sessionFx.asia=!S.sessionFx.asia;
@@ -4744,6 +5000,7 @@ function toggleSessionBand(which){
   const body=document.getElementById('smodal-body');
   if(body&&S.settingsTab==='gen')renderSettingsGen(body);
   renderTable();
+  [...S.charts,...S.fsCharts].forEach(ch=>{if(ch?.canvas&&ch?.lc)rCanvas(ch);});
 }
 
 function renderSettingsChartHead(body){
@@ -4925,6 +5182,7 @@ async function loadFsChart(idx){
   const fch=S.fsCharts[idx];const sym=S.fsSym;
   if(!sym||!fch.cs||!fch.lc)return;
   fch._histBootstrapDone=false;
+  fch._oiHist=[];fch._oiLastFetchTs=0;
   try{
     let raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
     if(S.fsSym!==sym)return;
@@ -4947,6 +5205,9 @@ async function loadFsChart(idx){
     }
     fch.cs.setData(fch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     fch.vs.setData(fch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+    repaintBbSeries(fch);
+    repaintOiSeries(fch);
+    refreshChartOiSeries(fch,fch.tf,sym);
     const lastFsCandle=fch.candles[fch.candles.length-1];
     if(lastFsCandle)syncLivePriceLabel(fch,lastFsCandle.c,lastFsCandle.o);
     applyDefaultChartView(fch);
@@ -4970,6 +5231,8 @@ async function loadMoreFsHistory(idx){
       try{
         fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+        repaintBbSeries(fch);
+        repaintOiSeries(fch);
         if(vr)try{fch.lc.timeScale().setVisibleRange(vr);}catch(e){}
       }catch(e){}
     };
@@ -5087,6 +5350,7 @@ function startFsWs(){
           const lc=fch.candles[fch.candles.length-1];
           fch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
           fch.vs.update({time:toChartTime(lc.t),value:lc.qv||0,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
+          repaintBbSeries(fch);
           syncLivePriceLabel(fch,lc.c,lc.o);
         }catch(e){}
         rCanvas(fch);
@@ -5102,6 +5366,7 @@ function startFsWs(){
       try{
         fch.cs.update({time:toChartTime(candle.t),open:candle.o,high:candle.h,low:candle.l,close:candle.c});
         fch.vs.update({time:toChartTime(candle.t),value:candle.qv,color:candle.c>=candle.o?'#1fa89122':'#e0404022'});
+        repaintBbSeries(fch);
         syncLivePriceLabel(fch,candle.c,candle.o);
       }catch(e){}
       if(fch.candles.length&&fch.candles[fch.candles.length-1].t===candle.t)fch.candles[fch.candles.length-1]=candle;
@@ -5180,6 +5445,8 @@ async function main(){
     updateCharts();restartChartStreams(0);startScreenerWS();
     syncFastBtnUi();
     syncChartSyncBtnUi();
+    syncOiChartBtnUi();
+    syncBbBtnUi();
     S.bgDone=true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
     loadKlinesBackground();
     startRealtimeWatchdog();
@@ -5196,7 +5463,9 @@ async function main(){
 const POT_FIELDS=[
   {id:'ch24',   label:'ИЗМ 24ч %',  unit:'%',  step:0.5},
   {id:'cday',   label:'ИЗМ день %', unit:'%',  step:0.5},
-  {id:'sqzPop', label:'Сж+ОБ+проб',unit:'',   step:1},
+  {id:'bbSqz',  label:'BB Squeeze', unit:'',   step:1},
+  {id:'bbBreak',label:'BB Breakout',unit:'',   step:1},
+  {id:'volImpulse',label:'Volume impulse',unit:'',step:1},
   {id:'vr5',    label:'ОБ* 5м',     unit:'×',  step:0.1},
   {id:'vr1h',   label:'ОБ* 1ч',     unit:'×',  step:0.1},
   {id:'tr5',    label:'СД* 5м',     unit:'×',  step:0.1},
@@ -5206,6 +5475,11 @@ const POT_FIELDS=[
   {id:'trd24',  label:'Сделки 24ч', unit:'',   step:50},
   {id:'vol24',  label:'Объём 24ч',  unit:'M$', step:10},
 ];
+const POT_FIELD_DESC={
+  bbSqz:'Полосы Боллинджера сжались относительно прошлого бара (узкий диапазон).',
+  bbBreak:'Цена вышла за верхнюю/нижнюю полосу Боллинджера на последней свече.',
+  volImpulse:'Есть всплеск объёма: ОБ* 5м >= 1.25 относительно последних 14 свечей.',
+};
 
 let _potActiveTab=null; // preset id
 
@@ -5236,7 +5510,7 @@ function renderPotentialPanel(){
   // Add button
   const tplBtn=document.createElement('button');
   tplBtn.className='pot-tab';
-  tplBtn.title='Готовый пресет: сужение полос Боллинджера (5м) + ОБ* 5м + выход за полосу';
+  tplBtn.title='Готовый пресет: BB squeeze + volume impulse + breakout';
   tplBtn.textContent='＋Squeeze';
   tplBtn.onclick=()=>{addBuiltinSqueezePreset();renderPotentialPanel();};
   tabBar.appendChild(tplBtn);
@@ -5269,17 +5543,21 @@ function renderPotentialPanel(){
   if(pr.conditions.length){
     const cond=document.createElement('div');cond.className='pot-cond-summary';
     cond.innerHTML=pr.conditions.map(c=>{
-      if(c.field==='sqzPop'){
-        return'<span class="pot-cond-tag">Сж+ОБ+проб</span>';
-      }
       const f=POT_FIELDS.find(x=>x.id===c.field);
       const parts=[];
       if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
       if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
-      const absTxt=c.abs&&['ch24','cday'].includes(c.field)?'|.| ':'';
+      const absTxt=c.abs&&['ch24','cday','bbBreak'].includes(c.field)?'|.| ':'';
       return`<span class="pot-cond-tag">${absTxt}${f?.label||c.field} ${parts.join(' ')}</span>`;
     }).join('');
     body.appendChild(cond);
+    const dsc=document.createElement('div');
+    dsc.style.cssText='display:flex;flex-direction:column;gap:3px;margin-top:6px';
+    dsc.innerHTML=pr.conditions.map(c=>{
+      const txt=POT_FIELD_DESC[c.field];
+      return txt?`<span style="font-size:9px;color:var(--text3)">• ${txt}</span>`:'';
+    }).join('');
+    if(dsc.innerHTML.trim())body.appendChild(dsc);
   }
 
   // Matches list
@@ -5300,10 +5578,11 @@ function renderPotentialPanel(){
         const val=m[c.field];
         let fmt;
         if(c.field==='vol24'||c.field==='trd24')fmt=fk(val);
-        else if(c.field==='sqzPop')fmt=(val!=null&&+val>=1)?'✓':'·';
+        else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'✓':'·';
+        else if(c.field==='bbBreak')fmt=val>0?'↑':val<0?'↓':'·';
         else fmt=val!=null?fn(val,2):'—';
-        const absTxt=c.abs&&['ch24','cday'].includes(c.field)?'|.| ':'';
-        return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit&&c.field!=='sqzPop'?f.unit:''}</span>`;
+        const absTxt=c.abs&&['ch24','cday','bbBreak'].includes(c.field)?'|.| ':'';
+        return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit?f.unit:''}</span>`;
       }).join('');
       item.innerHTML=`
         ${grpCol?`<span style="width:3px;align-self:stretch;background:${grpCol};border-radius:2px;flex-shrink:0"></span>`:''}
@@ -5364,7 +5643,7 @@ function openPotPresetEditor(presetId){
         <select style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:3px 4px">
           ${POT_FIELDS.map(x=>`<option value="${x.id}"${x.id===c.field?' selected':''}>${x.label}</option>`).join('')}
         </select>
-        <label title="Игнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','cday'].includes(c.field)?'':'visibility:hidden'}">
+        <label title="Игнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','cday','bbBreak'].includes(c.field)?'':'visibility:hidden'}">
           |x|
           <input type="checkbox" ${c.abs?'checked':''}>
         </label>
@@ -5374,7 +5653,8 @@ function openPotPresetEditor(presetId){
         <span style="font-size:9px;color:var(--text3)">до</span>
         <input type="number" value="${c.max??''}" placeholder="—" step="${f.step}"
           style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">✕</button>`;
+        <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">✕</button>
+        <span style="display:none" class="pot-desc">${POT_FIELD_DESC[c.field]||''}</span>`;
       const sel=row.querySelector('select');
       sel.onchange=()=>{wCond[idx].field=sel.value;render();};
       const absCb=row.querySelector('input[type=checkbox]');
@@ -5384,6 +5664,12 @@ function openPotPresetEditor(presetId){
       maxI.onchange=()=>{const v=parseFloat(maxI.value);wCond[idx].max=isNaN(v)?null:v;};
       row.querySelector('[data-del]').onclick=()=>{wCond.splice(idx,1);render();};
       cl.appendChild(row);
+      if(POT_FIELD_DESC[c.field]){
+        const hint=document.createElement('div');
+        hint.style.cssText='font-size:8px;color:var(--text3);margin:-1px 0 5px 2px;line-height:1.35';
+        hint.textContent=POT_FIELD_DESC[c.field];
+        cl.appendChild(hint);
+      }
     });
 
     box.querySelector('#potAddCond').onclick=()=>{wCond.push({field:'ch24',min:null,max:null,abs:false});render();};
@@ -5453,10 +5739,11 @@ function addBuiltinSqueezePreset(){
   const id='pot_sqz_'+Date.now();
   S.potentialPresets.push({
     id,
-    name:'BB squeeze + ОБ* + пробой',
+    name:'BB squeeze + Volume impulse + Breakout',
     conditions:[
-      {field:'sqzPop',min:0.99,max:null,abs:false},
-      {field:'vr5',min:1.25,max:null,abs:false},
+      {field:'bbSqz',min:0.99,max:null,abs:false},
+      {field:'volImpulse',min:0.99,max:null,abs:false},
+      {field:'bbBreak',min:0.99,max:null,abs:true},
     ],
     matches:{},
     alerted:{},
@@ -5474,10 +5761,12 @@ function runPotentialCheck(){
     for(const sym of S.syms){
       const m=S.mx[sym];if(!m)continue;
       const ok=pr.conditions.every(c=>{
-        let val=m[c.field];
+        let field=c.field;
+        if(field==='sqzPop')field='bbSqz';
+        let val=m[field];
         // vol24 is in USDT, convert condition to USDT (user enters in M$)
-        if(c.field==='vol24')val=val/1e6;
-        if(c.abs&&['ch24','cday'].includes(c.field))val=Math.abs(val);
+        if(field==='vol24')val=val/1e6;
+        if(c.abs&&['ch24','cday','bbBreak'].includes(field))val=Math.abs(val);
         if(val==null||isNaN(val))return false;
         if(c.min!=null&&val<c.min)return false;
         if(c.max!=null&&val>c.max)return false;
@@ -5581,6 +5870,8 @@ window.onSearch           = onSearch;
 window.onVolFilter        = onVolFilter;
 window.onTrdFilter        = onTrdFilter;
 window.toggleDensity      = toggleDensity;
+window.toggleOiChart      = toggleOiChart;
+window.toggleBbOverlay    = toggleBbOverlay;
 window.renderAlertLog     = renderAlertLog;
 window.dragSpl            = dragSpl;
 window.setGridSize        = setGridSize;
