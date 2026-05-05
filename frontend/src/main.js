@@ -448,7 +448,7 @@ function mkChart(){
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
     _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
     livePriceLine:null,oiLine:null,bbUpperLine:null,bbLowerLine:null,
-    _oiHist:[],_oiLastFetchTs:0,_histBootstrapDone:false};
+    _oiHist:[],_oiRaw:[],_oiLastFetchTs:0,_histBootstrapDone:false};
 }
 function mkFsChart(tf){
   return{lc:null,cs:null,vs:null,candles:[],tf,histLoading:false,
@@ -456,7 +456,7 @@ function mkFsChart(tf){
     hoveredIdx:-1, canvas:null, interact:null, _ab:null, draggingDraw:null,
     _brushStroke:null, _rCanvasRaf:false, _rafPending:false, _lastHoverCheckTs:0,
     livePriceLine:null,oiLine:null,bbUpperLine:null,bbLowerLine:null,
-    _oiHist:[],_oiLastFetchTs:0,_histBootstrapDone:false};
+    _oiHist:[],_oiRaw:[],_oiLastFetchTs:0,_histBootstrapDone:false};
 }
 function getChartSym(ch){
   if(ch?.sym)return ch.sym;
@@ -699,10 +699,26 @@ async function fetchOiHistoryForChart(sym,tf){
   }
   return out;
 }
+function alignOiToCandles(candles,oiRaw){
+  if(!Array.isArray(candles)||!candles.length||!Array.isArray(oiRaw)||!oiRaw.length)return[];
+  const src=oiRaw.slice().sort((a,b)=>a.time-b.time);
+  const out=[];
+  let j=0;
+  let cur=src[0].value;
+  for(const c of candles){
+    const t=toChartTime(c.t);
+    while(j<src.length&&src[j].time<=t){cur=src[j].value;j++;}
+    if(isFinite(cur))out.push({time:t,value:cur});
+  }
+  return out;
+}
 function repaintOiSeries(ch){
   if(!ch?.oiLine)return;
   ch.oiLine.applyOptions({visible:!!S.showOiOnChart});
   if(!S.showOiOnChart){ch.oiLine.setData([]);return;}
+  if(Array.isArray(ch._oiRaw)&&Array.isArray(ch.candles)&&ch.candles.length){
+    ch._oiHist=alignOiToCandles(ch.candles,ch._oiRaw);
+  }
   ch.oiLine.setData(Array.isArray(ch._oiHist)?ch._oiHist:[]);
 }
 function repaintBbSeries(ch){
@@ -722,7 +738,9 @@ async function refreshChartOiSeries(ch,tf,sym){
   if(ch._oiFetching&&now-(ch._oiFetchStartedAt||0)<12000)return;
   ch._oiFetching=true;ch._oiFetchStartedAt=now;
   try{
-    ch._oiHist=await fetchOiHistoryForChart(sym,tf);
+    const raw=await fetchOiHistoryForChart(sym,tf);
+    ch._oiRaw=raw;
+    ch._oiHist=alignOiToCandles(ch.candles,raw);
     ch._oiLastFetchTs=Date.now();
     repaintOiSeries(ch);
   }catch(e){
@@ -1104,7 +1122,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     visible:false,
   });
   lc.priceScale('oi').applyOptions({
-    scaleMargins:{top:.66,bottom:.22},
+    scaleMargins:{top:.64,bottom:.18},
     drawTicks:false,
     borderVisible:false,
     visible:false,
@@ -1491,7 +1509,7 @@ async function loadChart(slot,sym){
     return;
   }
   ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
-  ch._oiHist=[];ch._oiLastFetchTs=0;
+  ch._oiHist=[];ch._oiRaw=[];ch._oiLastFetchTs=0;
   ch.drawings=getSymDrawings(sym); // shared reference
   setText(`cs${slot}`,sym.replace(/USDT$/,''));
   setCoinIcon(`ci${slot}`,sym);
@@ -1878,39 +1896,42 @@ function drawSessionZones(ctx,ch,W,H){
   if(!vr?.from||!vr?.to)return;
   const from=Math.floor(vr.from),to=Math.ceil(vr.to);
   if(!isFinite(from)||!isFinite(to)||to<=from)return;
-  const tf=S.fsCharts.includes(ch)?ch.tf:S.tf;
-  const step=Math.max(60000,tfMs(tf));
   const sessionColors={
-    ny:'rgba(59,130,246,0.05)',
-    ld:'rgba(234,179,8,0.045)',
-    as:'rgba(139,92,246,0.05)',
-    dead:'rgba(100,116,139,0.022)',
+    ny:'rgba(59,130,246,0.04)',
+    ld:'rgba(234,179,8,0.038)',
+    as:'rgba(139,92,246,0.04)',
   };
   const borderColors={
-    ny:'rgba(59,130,246,0.35)',
-    ld:'rgba(234,179,8,0.33)',
-    as:'rgba(139,92,246,0.35)',
-    dead:'rgba(100,116,139,0.16)',
+    ny:'rgba(59,130,246,0.28)',
+    ld:'rgba(234,179,8,0.25)',
+    as:'rgba(139,92,246,0.28)',
   };
-  let segStart=from;
-  let prevKey=null;
-  for(let t=from;t<=to+step;t+=step){
-    const utcMs=(t-TZ_OFFSET_S)*1000;
-    const d=new Date(utcMs);
-    const key=getSessionKindByUtcHour(d.getUTCHours()+d.getUTCMinutes()/60);
-    if(prevKey==null){prevKey=key;continue;}
-    if(key!==prevKey||t>=to){
-      const x0=ts.timeToCoordinate(segStart);
-      const x1=ts.timeToCoordinate(Math.min(t,to));
-      if(x0!=null&&x1!=null&&x1>x0){
-        ctx.fillStyle=sessionColors[prevKey]||sessionColors.dead;
-        ctx.fillRect(x0,0,x1-x0,H);
-        ctx.strokeStyle=borderColors[prevKey]||borderColors.dead;
-        ctx.lineWidth=1;
-        ctx.beginPath();ctx.moveTo(x0,0);ctx.lineTo(x0,H);ctx.stroke();
-      }
-      segStart=t;
-      prevKey=key;
+  const fromUtcMs=(from-TZ_OFFSET_S)*1000;
+  const toUtcMs=(to-TZ_OFFSET_S)*1000;
+  const dayMs=86400000;
+  const dayStart=Math.floor(fromUtcMs/dayMs)*dayMs-dayMs;
+  const sessions=[
+    {id:'as',enabled:S.sessionFx.asia!==false,startH:0,endH:9},
+    {id:'ld',enabled:S.sessionFx.london!==false,startH:8,endH:17},
+    {id:'ny',enabled:S.sessionFx.ny!==false,startH:13,endH:22},
+  ];
+  for(let d=dayStart;d<=toUtcMs+dayMs;d+=dayMs){
+    for(const s of sessions){
+      if(!s.enabled)continue;
+      const sUtc=d+s.startH*3600000;
+      const eUtc=d+s.endH*3600000;
+      if(eUtc<fromUtcMs||sUtc>toUtcMs)continue;
+      const x0=ts.timeToCoordinate(Math.floor(sUtc/1000)+TZ_OFFSET_S);
+      const x1=ts.timeToCoordinate(Math.floor(eUtc/1000)+TZ_OFFSET_S);
+      if(x0==null||x1==null||x1<=x0)continue;
+      const xs=Math.max(0,x0),xe=Math.min(W,x1);
+      if(xe<=xs)continue;
+      ctx.fillStyle=sessionColors[s.id];
+      ctx.fillRect(xs,0,xe-xs,H);
+      ctx.strokeStyle=borderColors[s.id];
+      ctx.lineWidth=1.1;
+      ctx.beginPath();ctx.moveTo(xs,0);ctx.lineTo(xs,H);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(xe,0);ctx.lineTo(xe,H);ctx.stroke();
     }
   }
 }
@@ -5182,7 +5203,7 @@ async function loadFsChart(idx){
   const fch=S.fsCharts[idx];const sym=S.fsSym;
   if(!sym||!fch.cs||!fch.lc)return;
   fch._histBootstrapDone=false;
-  fch._oiHist=[];fch._oiLastFetchTs=0;
+  fch._oiHist=[];fch._oiRaw=[];fch._oiLastFetchTs=0;
   try{
     let raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
     if(S.fsSym!==sym)return;
@@ -5466,6 +5487,7 @@ const POT_FIELDS=[
   {id:'bbSqz',  label:'BB Squeeze', unit:'',   step:1},
   {id:'bbBreak',label:'BB Breakout',unit:'',   step:1},
   {id:'volImpulse',label:'Volume impulse',unit:'',step:1},
+  {id:'emaTouch',label:'EMA touch', unit:'',   step:1},
   {id:'vr5',    label:'ОБ* 5м',     unit:'×',  step:0.1},
   {id:'vr1h',   label:'ОБ* 1ч',     unit:'×',  step:0.1},
   {id:'tr5',    label:'СД* 5м',     unit:'×',  step:0.1},
@@ -5476,10 +5498,33 @@ const POT_FIELDS=[
   {id:'vol24',  label:'Объём 24ч',  unit:'M$', step:10},
 ];
 const POT_FIELD_DESC={
+  ch24:'Изменение цены за 24 часа в процентах.',
+  cday:'Изменение цены с начала текущего дня в процентах.',
   bbSqz:'Полосы Боллинджера сжались относительно прошлого бара (узкий диапазон).',
   bbBreak:'Цена вышла за верхнюю/нижнюю полосу Боллинджера на последней свече.',
   volImpulse:'Есть всплеск объёма: ОБ* 5м >= 1.25 относительно последних 14 свечей.',
+  emaTouch:'Касание EMA выбранного периода последней свечой (high/low пересекает EMA).',
+  vr5:'Объём последней 5м свечи к среднему объёму за 14 свечей.',
+  vr1h:'Объём последней 1ч свечи к среднему за 24 часа.',
+  tr5:'Сделки последней 5м свечи к среднему за 14 свечей.',
+  tr1h:'Сделки последней 1ч свечи к среднему за 24 часа.',
+  na14:'NATR на 5м (волатильность относительно цены).',
+  na30:'NATR на 1м (волатильность относительно цены).',
+  trd24:'Количество сделок за 24 часа.',
+  vol24:'Торговый объём за 24 часа в миллионах USDT.',
 };
+
+function calcEmaTouchSignal(sym,period){
+  const p=Math.max(2,Math.min(400,period|0));
+  const k5=S.k5m[sym];
+  if(!Array.isArray(k5)||k5.length<p+1)return 0;
+  const vals=calcEMA(k5,p);
+  if(!vals||!vals.length)return 0;
+  const last=k5[k5.length-1];
+  const ema=vals[vals.length-1];
+  if(!last||!isFinite(ema))return 0;
+  return(last.l<=ema&&last.h>=ema)?1:0;
+}
 
 let _potActiveTab=null; // preset id
 
@@ -5545,8 +5590,11 @@ function renderPotentialPanel(){
     cond.innerHTML=pr.conditions.map(c=>{
       const f=POT_FIELDS.find(x=>x.id===c.field);
       const parts=[];
-      if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
-      if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
+      if(c.field==='emaTouch')parts.push(`period=${Math.max(2,Math.min(400,c.period||20))}`);
+      else{
+        if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
+        if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
+      }
       const absTxt=c.abs&&['ch24','cday','bbBreak'].includes(c.field)?'|.| ':'';
       return`<span class="pot-cond-tag">${absTxt}${f?.label||c.field} ${parts.join(' ')}</span>`;
     }).join('');
@@ -5575,11 +5623,13 @@ function renderPotentialPanel(){
       item.onclick=()=>openFullscreenBySym(sym);
       const tags=pr.conditions.map(c=>{
         const f=POT_FIELDS.find(x=>x.id===c.field);
-        const val=m[c.field];
+        let val=m[c.field];
+        if(c.field==='emaTouch')val=calcEmaTouchSignal(sym,c.period||20);
         let fmt;
         if(c.field==='vol24'||c.field==='trd24')fmt=fk(val);
         else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'✓':'·';
         else if(c.field==='bbBreak')fmt=val>0?'↑':val<0?'↓':'·';
+        else if(c.field==='emaTouch')fmt=val>=1?`✓(${Math.max(2,Math.min(400,c.period||20))})`:`·(${Math.max(2,Math.min(400,c.period||20))})`;
         else fmt=val!=null?fn(val,2):'—';
         const absTxt=c.abs&&['ch24','cday','bbBreak'].includes(c.field)?'|.| ':'';
         return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit?f.unit:''}</span>`;
@@ -5648,20 +5698,30 @@ function openPotPresetEditor(presetId){
           <input type="checkbox" ${c.abs?'checked':''}>
         </label>
         <span style="font-size:9px;color:var(--text3)">от</span>
-        <input type="number" value="${c.min??''}" placeholder="—" step="${f.step}"
+        <input type="number" value="${c.min??''}" placeholder="—" step="${f.step}" class="pot-min"
           style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
         <span style="font-size:9px;color:var(--text3)">до</span>
-        <input type="number" value="${c.max??''}" placeholder="—" step="${f.step}"
+        <input type="number" value="${c.max??''}" placeholder="—" step="${f.step}" class="pot-max"
           style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
+        <span style="font-size:9px;color:var(--text3);${c.field==='emaTouch'?'':'display:none'}" class="pot-ema-lbl">EMA</span>
+        <input type="number" value="${Math.max(2,Math.min(400,c.period||20))}" min="2" max="400" step="1"
+          class="pot-ema-period" style="width:48px;${c.field==='emaTouch'?'':'display:none'}background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
         <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">✕</button>
         <span style="display:none" class="pot-desc">${POT_FIELD_DESC[c.field]||''}</span>`;
       const sel=row.querySelector('select');
-      sel.onchange=()=>{wCond[idx].field=sel.value;render();};
+      sel.onchange=()=>{
+        wCond[idx].field=sel.value;
+        if(sel.value==='emaTouch'&&(wCond[idx].period==null||!isFinite(wCond[idx].period)))wCond[idx].period=20;
+        render();
+      };
       const absCb=row.querySelector('input[type=checkbox]');
       if(absCb)absCb.onchange=()=>{wCond[idx].abs=absCb.checked;};
-      const[minI,maxI]=Array.from(row.querySelectorAll('input[type=number]'));
+      const minI=row.querySelector('.pot-min');
+      const maxI=row.querySelector('.pot-max');
       minI.onchange=()=>{const v=parseFloat(minI.value);wCond[idx].min=isNaN(v)?null:v;};
       maxI.onchange=()=>{const v=parseFloat(maxI.value);wCond[idx].max=isNaN(v)?null:v;};
+      const pI=row.querySelector('.pot-ema-period');
+      if(pI)pI.onchange=()=>{const v=Math.max(2,Math.min(400,parseInt(pI.value||'20',10)||20));wCond[idx].period=v;pI.value=String(v);};
       row.querySelector('[data-del]').onclick=()=>{wCond.splice(idx,1);render();};
       cl.appendChild(row);
       if(POT_FIELD_DESC[c.field]){
@@ -5672,7 +5732,7 @@ function openPotPresetEditor(presetId){
       }
     });
 
-    box.querySelector('#potAddCond').onclick=()=>{wCond.push({field:'ch24',min:null,max:null,abs:false});render();};
+    box.querySelector('#potAddCond').onclick=()=>{wCond.push({field:'ch24',min:null,max:null,abs:false,period:20});render();};
     box.querySelector('#potSaveBtn').onclick=()=>{
       const name=box.querySelector('#potPresetName').value.trim()||'Пресет';
       // read current input values
@@ -5763,7 +5823,7 @@ function runPotentialCheck(){
       const ok=pr.conditions.every(c=>{
         let field=c.field;
         if(field==='sqzPop')field='bbSqz';
-        let val=m[field];
+        let val=field==='emaTouch'?calcEmaTouchSignal(sym,c.period||20):m[field];
         // vol24 is in USDT, convert condition to USDT (user enters in M$)
         if(field==='vol24')val=val/1e6;
         if(c.abs&&['ch24','cday','bbBreak'].includes(field))val=Math.abs(val);
@@ -5819,6 +5879,192 @@ function startPotentialMonitor(){
 }
 function stopPotentialMonitor(){
   if(S._potInterval){clearInterval(S._potInterval);S._potInterval=null;}
+}
+
+function calcGridCoinScore(m){
+  if(!m)return null;
+  const range=Math.max(0,Math.min(1,(m.r24||0)/18));
+  const natr=Math.max(0,Math.min(1,(m.na14||0)/1.4));
+  const meanRev=Math.max(0,Math.min(1,1-Math.min(1,Math.abs(m.ch24||0)/12)));
+  const liq=Math.max(0,Math.min(1,((m.vol24||0)/3e8)));
+  const tradeAct=Math.max(0,Math.min(1,(m.trd24||0)/9e5));
+  const score=range*0.24+natr*0.2+meanRev*0.22+liq*0.22+tradeAct*0.12;
+  return score*100;
+}
+
+function getGridSelectorRows(limit=20){
+  const rows=[];
+  for(const sym of S.syms){
+    const m=S.mx[sym];
+    if(!m)continue;
+    const score=calcGridCoinScore(m);
+    if(score==null||!isFinite(score))continue;
+    rows.push({
+      sym,
+      score,
+      range24:m.r24||0,
+      natr:m.na14||0,
+      ch24:m.ch24||0,
+      vol24:m.vol24||0,
+      trd24:m.trd24||0,
+    });
+  }
+  rows.sort((a,b)=>b.score-a.score);
+  return rows.slice(0,Math.max(3,Math.min(60,limit|0)));
+}
+
+function runManualGridBacktest(cfg){
+  const candles=(S.k5m[cfg.sym]||[]).slice(-Math.max(80,Math.min(1200,cfg.bars||360)));
+  if(candles.length<30)return{ok:false,msg:'Недостаточно 5м истории для теста'};
+  const closes=candles.map(c=>c.c);
+  const lowSeries=candles.map(c=>c.l);
+  const highSeries=candles.map(c=>c.h);
+  const lo=cfg.lower>0?cfg.lower:Math.min(...lowSeries);
+  const hi=cfg.upper>0?cfg.upper:Math.max(...highSeries);
+  if(!(hi>lo))return{ok:false,msg:'Неверный диапазон сетки'};
+  const levels=Math.max(3,Math.min(60,cfg.levels|0));
+  const lev=Math.max(1,Math.min(25,cfg.leverage||1));
+  const fee=Math.max(0,Math.min(0.01,cfg.fee||0.0004));
+  const dep=Math.max(20,cfg.deposit||500);
+  const step=(hi-lo)/(levels-1);
+  const grid=Array.from({length:levels},(_,i)=>lo+step*i);
+  let cash=dep*0.5;
+  let asset=(dep*0.5)/closes[0];
+  const orderNotional=(dep*lev)/Math.max(8,levels);
+  let fees=0;
+  let fills=0;
+  const eq=[];
+  for(let i=1;i<candles.length;i++){
+    const c=candles[i];
+    for(const px of grid){
+      if(c.l<=px&&c.h>=px){
+        const qty=orderNotional/Math.max(px,1e-8);
+        const buyCost=qty*px*(1+fee);
+        if(c.o>=px&&cash>=buyCost){
+          cash-=buyCost;asset+=qty;fees+=qty*px*fee;fills++;
+        }else if(asset>=qty){
+          const gain=qty*px*(1-fee);
+          asset-=qty;cash+=gain;fees+=qty*px*fee;fills++;
+        }
+      }
+    }
+    eq.push(cash+asset*c.c);
+  }
+  const last=closes[closes.length-1];
+  const finalEq=cash+asset*last;
+  let peak=-Infinity,maxDd=0;
+  for(const v of eq){
+    if(v>peak)peak=v;
+    if(peak>0)maxDd=Math.max(maxDd,(peak-v)/peak*100);
+  }
+  return{
+    ok:true,
+    symbol:cfg.sym,
+    bars:candles.length,
+    levels,
+    lower:lo,
+    upper:hi,
+    fills,
+    fees,
+    startEq:dep,
+    finalEq,
+    pnl:finalEq-dep,
+    roi:(finalEq/dep-1)*100,
+    maxDd,
+  };
+}
+
+function renderGridLabModal(){
+  const old=document.getElementById('gridLabModal');if(old)old.remove();
+  const modal=document.createElement('div');
+  modal.id='gridLabModal';
+  modal.style.cssText='position:fixed;inset:0;z-index:820;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;';
+  const box=document.createElement('div');
+  box.style.cssText='width:min(980px,95vw);height:min(760px,92vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
+  box.innerHTML=`
+    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)">
+      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Coin Selector + Manual Backtest</span>
+      <button class="tbtn" id="gridTabSelector">Coin Selector</button>
+      <button class="tbtn" id="gridTabBacktest">Manual Backtest</button>
+      <button class="tbtn" id="gridCloseBtn">Закрыть</button>
+    </div>
+    <div id="gridLabBody" style="flex:1;min-height:0;overflow:auto;padding:12px"></div>
+  `;
+  modal.appendChild(box);
+  document.body.appendChild(modal);
+  const body=box.querySelector('#gridLabBody');
+  const btnSel=box.querySelector('#gridTabSelector');
+  const btnBt=box.querySelector('#gridTabBacktest');
+  const setTab=(tab)=>{
+    btnSel.classList.toggle('on',tab==='selector');
+    btnBt.classList.toggle('on',tab==='backtest');
+    if(tab==='selector'){
+      const rows=getGridSelectorRows(24);
+      body.innerHTML=`
+        <div style="font-size:10px;color:var(--text3);margin-bottom:8px">Топ монет по пригодности к grid (ликвидность, ренж, mean-reversion, активность).</div>
+        <div style="display:grid;grid-template-columns:110px repeat(6,1fr);gap:6px;font-size:9px">
+          <div style="color:var(--text3)">Символ</div><div style="color:var(--text3)">GridScore</div><div style="color:var(--text3)">Ренж24</div><div style="color:var(--text3)">NATR5m</div><div style="color:var(--text3)">ИЗМ24</div><div style="color:var(--text3)">Объём24</div><div style="color:var(--text3)">Сделки24</div>
+          ${rows.map(r=>`<div style="font-weight:600;color:#fff;cursor:pointer" onclick="openFullscreenBySym('${r.sym}')">${r.sym.replace(/USDT$/,'')}</div><div>${fn(r.score,1)}</div><div>${fn(r.range24,2)}%</div><div>${fn(r.natr,2)}%</div><div class="${r.ch24>=0?'p':'n'}">${r.ch24>=0?'+':''}${fn(r.ch24,2)}%</div><div>${fk(r.vol24)}</div><div>${fk(r.trd24)}</div>`).join('')}
+        </div>`;
+      return;
+    }
+    const defSym=(S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
+    body.innerHTML=`
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <label style="font-size:9px;color:var(--text3)">Символ</label>
+        <input id="gbSym" value="${defSym}" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <label style="font-size:9px;color:var(--text3)">Bars(5m)</label>
+        <input id="gbBars" type="number" value="360" min="80" max="1200" style="width:70px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <label style="font-size:9px;color:var(--text3)">Уровни</label>
+        <input id="gbLevels" type="number" value="12" min="3" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <label style="font-size:9px;color:var(--text3)">Низ</label>
+        <input id="gbLow" type="number" step="any" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <label style="font-size:9px;color:var(--text3)">Верх</label>
+        <input id="gbHigh" type="number" step="any" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <label style="font-size:9px;color:var(--text3)">Плечо</label>
+        <input id="gbLev" type="number" value="3" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <label style="font-size:9px;color:var(--text3)">Депо</label>
+        <input id="gbDep" type="number" value="500" min="20" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <button class="tbtn on" id="gbRunBtn">Запустить</button>
+      </div>
+      <div id="gbOut" style="font-size:10px;color:var(--text3)">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>`;
+    const run=body.querySelector('#gbRunBtn');
+    run.onclick=()=>{
+      const cfg={
+        sym:String(body.querySelector('#gbSym').value||'').toUpperCase().trim(),
+        bars:+body.querySelector('#gbBars').value||360,
+        levels:+body.querySelector('#gbLevels').value||12,
+        lower:+body.querySelector('#gbLow').value||0,
+        upper:+body.querySelector('#gbHigh').value||0,
+        leverage:+body.querySelector('#gbLev').value||1,
+        deposit:+body.querySelector('#gbDep').value||500,
+        fee:0.0004,
+      };
+      const out=runManualGridBacktest(cfg);
+      const el=body.querySelector('#gbOut');
+      if(!out.ok){el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;return;}
+      el.innerHTML=`
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:8px">
+          <div>Символ: <b style="color:#fff">${out.symbol.replace(/USDT$/,'')}</b></div>
+          <div>PnL: <b class="${out.pnl>=0?'p':'n'}">${out.pnl>=0?'+':''}${fn(out.pnl,2)} USDT</b></div>
+          <div>ROI: <b class="${out.roi>=0?'p':'n'}">${out.roi>=0?'+':''}${fn(out.roi,2)}%</b></div>
+          <div>MaxDD: <b style="color:#f59e0b">${fn(out.maxDd,2)}%</b></div>
+          <div>Сделок(fill): <b style="color:#fff">${out.fills}</b></div>
+          <div>Комиссии: <b style="color:#fff">${fn(out.fees,2)} USDT</b></div>
+        </div>`;
+    };
+  };
+  btnSel.onclick=()=>setTab('selector');
+  btnBt.onclick=()=>setTab('backtest');
+  box.querySelector('#gridCloseBtn').onclick=()=>modal.remove();
+  modal.addEventListener('mousedown',e=>{if(e.target===modal)modal.remove();});
+  setTab('selector');
+}
+
+function toggleGridLab(){
+  const old=document.getElementById('gridLabModal');
+  if(old){old.remove();return;}
+  renderGridLabModal();
 }
 
 function setBrushColor(col,el){
@@ -5894,6 +6140,7 @@ window.copyTicker         = copyTicker;
 window.clearDrawingsSlot  = clearDrawingsSlot;
 window.doSort             = doSort;
 window.togglePotentialPanel = togglePotentialPanel;
+window.toggleGridLab       = toggleGridLab;
 window.openPotPresetEditor  = openPotPresetEditor;
 window.togglePotPreset      = togglePotPreset;
 window.deletePotPreset      = deletePotPreset;
