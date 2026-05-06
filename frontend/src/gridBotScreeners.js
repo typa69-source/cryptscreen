@@ -373,10 +373,12 @@ export function registerGridBotScreeners(deps) {
   async function runSwingScan(ui) {
     ui.loading = true;
     ui.error = '';
+    ui.diag = '';
     if (ui.renderMeta) ui.renderMeta();
     const base = S.syms.filter(passesVol);
     // Important: without a volume filter S.syms is huge → Binance rate limits → empty results.
     const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 140);
+    ui.diag = `universe ${syms.length}/${base.length || 0}`;
     if (!syms.length) {
       ui.lastRows = [];
       ui.loading = false;
@@ -389,6 +391,7 @@ export function registerGridBotScreeners(deps) {
       const mcapMap = await ensureCgMcapMap(fj);
       const d1 = await batchKlines(syms, '1d', 100, null, null, 8);
       const j4h = await batchKlines(syms, '4h', 14, null, null, 8);
+      ui.diag = `universe ${syms.length}/${base.length || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
       const rows = [];
       for (const sym of syms) {
         const r = computeSwingRow(sym, d1, j4h, mcapMap);
@@ -404,6 +407,7 @@ export function registerGridBotScreeners(deps) {
       ui.lastRows = [];
       ui.lastRun = Date.now();
       ui.error = `Ошибка скана: ${e?.message || String(e)}`;
+      ui.diag = (ui.diag ? ui.diag + ' · ' : '') + 'error';
     } finally {
       ui.loading = false;
       if (ui.applyFiltersAndRender) ui.applyFiltersAndRender();
@@ -450,6 +454,7 @@ export function registerGridBotScreeners(deps) {
       sortDir: 'desc',
       lastRows: [],
       error: '',
+      diag: '',
       loading: false,
       lastRun: 0,
       timer: null,
@@ -460,6 +465,8 @@ export function registerGridBotScreeners(deps) {
       if (lu) lu.textContent = ui.lastRun ? new Date(ui.lastRun).toLocaleTimeString() : '—';
       const sk = box.querySelector('#gbsSwingSk');
       if (sk) sk.style.display = ui.loading ? '' : 'none';
+      const dg = box.querySelector('#gbsSwingDiag');
+      if (dg) dg.textContent = ui.diag || '';
     }
 
     function applyFiltersAndRender() {
@@ -540,6 +547,7 @@ export function registerGridBotScreeners(deps) {
       <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
         <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Bot Screener — Swing</span>
         <span id="gbsSwingSk" style="font-size:10px;color:var(--text3);display:none">Обновление…</span>
+        <span id="gbsSwingDiag" style="font-size:9px;color:var(--text3)"></span>
         <button class="tbtn" id="gbsSwingRf">Обновить</button>
         <button class="tbtn" id="gbsSwingHi">История</button>
         <button class="tbtn" id="gbsSwingX">Закрыть</button>
@@ -864,10 +872,12 @@ export function registerGridBotScreeners(deps) {
     if (!root) return;
     ui.busy = true;
     ui.error = '';
+    ui.diag = '';
     const sk = root.querySelector('#gbsIntBusy');
     if (sk) sk.style.display = '';
     const base = S.syms.filter(passesVol);
     const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 160);
+    ui.diag = `universe ${syms.length}/${base.length || 0}`;
     if (!syms.length) {
       ui.ready = [];
       ui.watch = [];
@@ -876,11 +886,13 @@ export function registerGridBotScreeners(deps) {
       try {
         const d1 = await batchKlines(syms, '1d', 16, null, null, 8);
         const h1 = await batchKlines(syms, '1h', 48, null, null, 8);
+        ui.diag = `universe ${syms.length}/${base.length || 0} · d1 ${Object.keys(d1 || {}).length} · 1h ${Object.keys(h1 || {}).length}`;
         const st1Map = {};
         for (const sym of syms) st1Map[sym] = computeStage1(sym, null, h1, d1);
         const passSyms = syms.filter((s) => st1Map[s].pass);
         let m15 = {};
         if (passSyms.length) m15 = await batchKlines(passSyms, '15m', 200, null, null, 8);
+        ui.diag += ` · s1 ${passSyms.length} · 15m ${Object.keys(m15 || {}).length}`;
         if (!passSyms.length) {
           ui.ready = [];
           ui.watch = syms
@@ -915,6 +927,7 @@ export function registerGridBotScreeners(deps) {
         ui.ready = [];
         ui.watch = [];
         ui.error = `Ошибка скана: ${e?.message || String(e)}`;
+        ui.diag = (ui.diag ? ui.diag + ' · ' : '') + 'error';
       }
     }
     const now = Date.now();
@@ -984,6 +997,7 @@ export function registerGridBotScreeners(deps) {
       goneSyms: [],
       root: box,
       error: '',
+      diag: '',
     };
 
     function applyFiltersAndRender() {
@@ -1085,12 +1099,15 @@ export function registerGridBotScreeners(deps) {
       }
       const lu = root.querySelector('#gbsIntLu');
       if (lu && ui.lastRun) lu.textContent = new Date(ui.lastRun).toLocaleTimeString();
+      const dg = root.querySelector('#gbsIntDiag');
+      if (dg) dg.textContent = ui.diag || '';
     }
 
     box.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
         <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Bot Screener — Intraday</span>
         <span id="gbsIntBusy" style="font-size:10px;color:var(--text3);display:none">Обновление…</span>
+        <span id="gbsIntDiag" style="font-size:9px;color:var(--text3)"></span>
         <span id="gbsIntCd" style="font-size:10px;color:var(--text3)">30</span>
         <button class="tbtn" id="gbsIntRf">Сейчас</button>
         <button class="tbtn" id="gbsIntHi">История</button>
