@@ -6210,6 +6210,7 @@ function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 
 registerGridBotScreeners({
   S,
+  BACKEND,
   API,
   fj,
   parseKlines,

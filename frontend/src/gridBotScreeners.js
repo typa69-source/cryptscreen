@@ -227,16 +227,15 @@ function scoreSwingRcov(rc) {
 let _cgMcapMap = null;
 let _cgMcapAt = 0;
 
-async function ensureCgMcapMap(fj) {
+async function ensureCgMcapMap(fj, backendBase) {
   if (_cgMcapMap && Date.now() - _cgMcapAt < 3600000) return _cgMcapMap;
   const map = new Map();
   for (let page = 1; page <= 5; page++) {
     try {
-      const rows = await fj(
-        `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}`,
-        20000,
-        1
-      );
+      const url = backendBase
+        ? `${backendBase.replace(/\/$/, '')}/api/proxy/coingecko/markets?page=${page}`
+        : `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}`;
+      const rows = await fj(url, 20000, 1);
       if (!Array.isArray(rows)) break;
       for (const row of rows) {
         const sym = String(row.symbol || '').toUpperCase();
@@ -257,7 +256,7 @@ function baseSymbol(sym) {
 }
 
 export function registerGridBotScreeners(deps) {
-  const { S, fj, batchKlines, fn, fmtPrice, openFullscreenBySym, bollingerOnTail, calcATR } = deps;
+  const { S, fj, batchKlines, fn, fmtPrice, openFullscreenBySym, bollingerOnTail, calcATR, BACKEND } = deps;
 
   function vol24For(sym) {
     return S.mx[sym]?.vol24 ?? S.tk[sym]?.qv ?? null;
@@ -388,7 +387,9 @@ export function registerGridBotScreeners(deps) {
       return;
     }
     try {
-      const mcapMap = await ensureCgMcapMap(fj);
+      ui.diag = ui.diag ? ui.diag + ' · mcap…' : 'mcap…';
+      if (ui.renderMeta) ui.renderMeta();
+      const mcapMap = await ensureCgMcapMap(fj, BACKEND);
       const d1 = await batchKlines(syms, '1d', 100, null, null, 8);
       const j4h = await batchKlines(syms, '4h', 14, null, null, 8);
       ui.diag = `universe ${syms.length}/${base.length || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
