@@ -18,6 +18,7 @@ app.use(express.json({ limit: '2mb' }))
 // ─── ROUTES ─────────────────────────────────────────────────────
 app.use('/api/auth', require('./routes/auth'))
 app.use('/api/user', require('./routes/user'))
+app.use('/api/proxy', require('./routes/proxy'))
 
 // Health check
 app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }))
