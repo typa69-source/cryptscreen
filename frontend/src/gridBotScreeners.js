@@ -263,6 +263,19 @@ export function registerGridBotScreeners(deps) {
     return S.mx[sym]?.vol24 ?? S.tk[sym]?.qv ?? null;
   }
 
+  function selectUniverse(allSyms, maxN) {
+    const max = Math.max(20, Math.min(400, maxN | 0));
+    const withVol = allSyms
+      .map((sym) => ({ sym, v: vol24For(sym) }))
+      .filter((x) => x.v != null && isFinite(x.v) && x.v > 0)
+      .sort((a, b) => b.v - a.v)
+      .slice(0, max)
+      .map((x) => x.sym);
+    if (withVol.length >= 20) return withVol;
+    // Fallback: if volumes not ready yet, just cap raw list.
+    return allSyms.slice(0, max);
+  }
+
   function passesVol(sym) {
     const v = vol24For(sym);
     if ((S.minVol | 0) <= 0) return true;
@@ -359,20 +372,42 @@ export function registerGridBotScreeners(deps) {
 
   async function runSwingScan(ui) {
     ui.loading = true;
+    ui.error = '';
     if (ui.renderMeta) ui.renderMeta();
-    const syms = S.syms.filter(passesVol);
-    const mcapMap = await ensureCgMcapMap(fj);
-    const d1 = await batchKlines(syms, '1d', 100, null, null, 8);
-    const j4h = await batchKlines(syms, '4h', 14, null, null, 8);
-    const rows = [];
-    for (const sym of syms) {
-      const r = computeSwingRow(sym, d1, j4h, mcapMap);
-      if (r) rows.push(r);
+    const base = S.syms.filter(passesVol);
+    // Important: without a volume filter S.syms is huge → Binance rate limits → empty results.
+    const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 140);
+    if (!syms.length) {
+      ui.lastRows = [];
+      ui.loading = false;
+      ui.lastRun = Date.now();
+      ui.error = 'Нет символов для скана (проверь фильтр объёма / загрузку списка).';
+      if (ui.applyFiltersAndRender) ui.applyFiltersAndRender();
+      return;
     }
-    ui.lastRows = rows;
-    ui.loading = false;
-    ui.lastRun = Date.now();
-    if (ui.applyFiltersAndRender) ui.applyFiltersAndRender();
+    try {
+      const mcapMap = await ensureCgMcapMap(fj);
+      const d1 = await batchKlines(syms, '1d', 100, null, null, 8);
+      const j4h = await batchKlines(syms, '4h', 14, null, null, 8);
+      const rows = [];
+      for (const sym of syms) {
+        const r = computeSwingRow(sym, d1, j4h, mcapMap);
+        if (r) rows.push(r);
+      }
+      ui.lastRows = rows;
+      ui.lastRun = Date.now();
+      if (!rows.length) {
+        ui.error =
+          'Список пуст: не удалось получить klines или все монеты отфильтровались. Частая причина — rate limit Binance. Попробуй поднять фильтр объёма (M$) или подождать 30–60с.';
+      }
+    } catch (e) {
+      ui.lastRows = [];
+      ui.lastRun = Date.now();
+      ui.error = `Ошибка скана: ${e?.message || String(e)}`;
+    } finally {
+      ui.loading = false;
+      if (ui.applyFiltersAndRender) ui.applyFiltersAndRender();
+    }
     try {
       const key = `gridswing_history_${Date.now()}`;
       localStorage.setItem(
@@ -414,6 +449,7 @@ export function registerGridBotScreeners(deps) {
       sortKey: 'score',
       sortDir: 'desc',
       lastRows: [],
+      error: '',
       loading: false,
       lastRun: 0,
       timer: null,
@@ -457,8 +493,13 @@ export function registerGridBotScreeners(deps) {
 
       const tb = box.querySelector('#gbsSwingBody');
       if (!tb) return;
-      tb.innerHTML = rows
-        .map((r) => {
+      if (!rows.length) {
+        const msg = ui.error || (ui.loading ? 'Загрузка…' : 'Нет результатов (проверь фильтры).');
+        tb.innerHTML = `<tr><td colspan="8" style="padding:10px 8px;color:var(--text3);font-size:10px">${msg}</td></tr>`;
+        renderMeta();
+        return;
+      }
+      tb.innerHTML = rows.map((r) => {
           const badge =
             r.band === 'green'
               ? '#22c55e'
@@ -488,8 +529,7 @@ export function registerGridBotScreeners(deps) {
           <td>${st}</td>
           <td style="font-size:9px;color:var(--text3)">${det}</td>
         </tr>`;
-        })
-        .join('');
+        }).join('');
       tb.querySelectorAll('.gbs-open').forEach((el) => {
         el.onclick = () => openFullscreenBySym(el.closest('tr').dataset.sym);
       });
@@ -823,41 +863,59 @@ export function registerGridBotScreeners(deps) {
     const root = ui.root;
     if (!root) return;
     ui.busy = true;
+    ui.error = '';
     const sk = root.querySelector('#gbsIntBusy');
     if (sk) sk.style.display = '';
-    const syms = S.syms.filter(passesVol);
-    const d1 = await batchKlines(syms, '1d', 16, null, null, 8);
-    const h1 = await batchKlines(syms, '1h', 48, null, null, 8);
-    const st1Map = {};
-    for (const sym of syms) st1Map[sym] = computeStage1(sym, null, h1, d1);
-    const passSyms = syms.filter((s) => st1Map[s].pass);
-    let m15 = {};
-    if (passSyms.length) m15 = await batchKlines(passSyms, '15m', 200, null, null, 8);
-    if (!passSyms.length) {
+    const base = S.syms.filter(passesVol);
+    const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 160);
+    if (!syms.length) {
       ui.ready = [];
-      ui.watch = syms
-        .filter((s) => vol24For(s) != null)
-        .sort((a, b) => (vol24For(b) || 0) - (vol24For(a) || 0))
-        .slice(0, 40)
-        .map((sym) => ({ sym, st1: st1Map[sym] }));
+      ui.watch = [];
+      ui.error = 'Нет символов для скана (проверь фильтр объёма / загрузку списка).';
     } else {
-      const ready = [];
-      for (const sym of passSyms) {
-        const row = computeIntradayRow(sym, m15, h1, st1Map[sym]);
-        if (row) ready.push(row);
+      try {
+        const d1 = await batchKlines(syms, '1d', 16, null, null, 8);
+        const h1 = await batchKlines(syms, '1h', 48, null, null, 8);
+        const st1Map = {};
+        for (const sym of syms) st1Map[sym] = computeStage1(sym, null, h1, d1);
+        const passSyms = syms.filter((s) => st1Map[s].pass);
+        let m15 = {};
+        if (passSyms.length) m15 = await batchKlines(passSyms, '15m', 200, null, null, 8);
+        if (!passSyms.length) {
+          ui.ready = [];
+          ui.watch = syms
+            .filter((s) => vol24For(s) != null)
+            .sort((a, b) => (vol24For(b) || 0) - (vol24For(a) || 0))
+            .slice(0, 40)
+            .map((sym) => ({ sym, st1: st1Map[sym] }));
+        } else {
+          const ready = [];
+          for (const sym of passSyms) {
+            const row = computeIntradayRow(sym, m15, h1, st1Map[sym]);
+            if (row) ready.push(row);
+          }
+          ready.sort((a, b) => b.score - a.score || b.consN - a.consN);
+          ui.ready = ready;
+          const watch = [];
+          for (const sym of syms) {
+            if (st1Map[sym].pass) continue;
+            if (watch.length >= 40) break;
+            const v = vol24For(sym);
+            if (v == null) continue;
+            watch.push({ sym, st1: st1Map[sym] });
+          }
+          watch.sort((a, b) => (vol24For(b.sym) || 0) - (vol24For(a.sym) || 0));
+          ui.watch = watch;
+        }
+        if (!ui.ready.length && !ui.watch.length) {
+          ui.error =
+            'Список пуст: не удалось получить klines или всё отфильтровалось. Частая причина — rate limit Binance. Попробуй поднять фильтр объёма (M$) или подождать 30–60с.';
+        }
+      } catch (e) {
+        ui.ready = [];
+        ui.watch = [];
+        ui.error = `Ошибка скана: ${e?.message || String(e)}`;
       }
-      ready.sort((a, b) => b.score - a.score || b.consN - a.consN);
-      ui.ready = ready;
-      const watch = [];
-      for (const sym of syms) {
-        if (st1Map[sym].pass) continue;
-        if (watch.length >= 40) break;
-        const v = vol24For(sym);
-        if (v == null) continue;
-        watch.push({ sym, st1: st1Map[sym] });
-      }
-      watch.sort((a, b) => (vol24For(b.sym) || 0) - (vol24For(a.sym) || 0));
-      ui.watch = watch;
     }
     const now = Date.now();
     const setQ = new Set(ui.ready.map((r) => r.sym));
@@ -925,6 +983,7 @@ export function registerGridBotScreeners(deps) {
       newSyms: [],
       goneSyms: [],
       root: box,
+      error: '',
     };
 
     function applyFiltersAndRender() {
@@ -964,6 +1023,14 @@ export function registerGridBotScreeners(deps) {
         meta.innerHTML = `Новые в списке: <b style="color:#7dd3fc">${ui.newSyms.map((s) => s.replace(/USDT$/, '')).join(', ') || '—'}</b> · Выпали: <b style="color:#f97316">${ui.goneSyms.map((s) => s.replace(/USDT$/, '')).join(', ') || '—'}</b>`;
       }
       if (body) {
+        if (!rows.length) {
+          const msg =
+            ui.error ||
+            (ui.busy
+              ? 'Загрузка…'
+              : 'Нет результатов (возможно, Stage1 не пропускает монеты — см. Watching).');
+          body.innerHTML = `<tr><td colspan="10" style="padding:10px 8px;color:var(--text3);font-size:10px">${msg}</td></tr>`;
+        } else {
         body.innerHTML = rows
           .map((r) => {
             const badge = r.band === 'green' ? '#22c55e' : r.band === 'yellow' ? '#eab308' : '#ef4444';
@@ -994,6 +1061,7 @@ export function registerGridBotScreeners(deps) {
         body.querySelectorAll('.gbs-open').forEach((el) => {
           el.onclick = () => openFullscreenBySym(el.closest('tr').dataset.sym);
         });
+        }
       }
       if (wbody) {
         wbody.innerHTML = ui.watch
