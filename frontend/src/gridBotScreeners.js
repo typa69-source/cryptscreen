@@ -230,7 +230,7 @@ let _cgMcapAt = 0;
 async function ensureCgMcapMap(fj, backendBase) {
   if (_cgMcapMap && Date.now() - _cgMcapAt < 3600000) return _cgMcapMap;
   const map = new Map();
-  for (let page = 1; page <= 5; page++) {
+  for (let page = 1; page <= 3; page++) {
     try {
       const url = backendBase
         ? `${backendBase.replace(/\/$/, '')}/api/proxy/coingecko/markets?page=${page}`
@@ -243,6 +243,7 @@ async function ensureCgMcapMap(fj, backendBase) {
       }
       await new Promise((r) => setTimeout(r, 1100));
     } catch {
+      // Market cap is an optional enhancement. If it fails, continue with what we have.
       break;
     }
   }
@@ -390,9 +391,16 @@ export function registerGridBotScreeners(deps) {
       ui.diag = ui.diag ? ui.diag + ' · mcap…' : 'mcap…';
       if (ui.renderMeta) ui.renderMeta();
       const mcapMap = await ensureCgMcapMap(fj, BACKEND);
+
+      ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1…`;
+      if (ui.renderMeta) ui.renderMeta();
       const d1 = await batchKlines(syms, '1d', 100, null, null, 8);
+
+      ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h…`;
+      if (ui.renderMeta) ui.renderMeta();
       const j4h = await batchKlines(syms, '4h', 14, null, null, 8);
-      ui.diag = `universe ${syms.length}/${base.length || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
+
+      ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
       const rows = [];
       for (const sym of syms) {
         const r = computeSwingRow(sym, d1, j4h, mcapMap);
