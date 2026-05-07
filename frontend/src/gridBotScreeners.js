@@ -257,7 +257,19 @@ function baseSymbol(sym) {
 }
 
 export function registerGridBotScreeners(deps) {
-  const { S, fj, batchKlines, fn, fmtPrice, openFullscreenBySym, bollingerOnTail, calcATR, BACKEND } = deps;
+  const {
+    S,
+    fj,
+    batchKlines,
+    fn,
+    fmtPrice,
+    openFullscreenBySym,
+    bollingerOnTail,
+    calcATR,
+    BACKEND,
+    GROUP_COLORS = ['', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'],
+    tagScreenerGroup,
+  } = deps;
 
   // ─── Lightweight caches (avoid re-fetch on reopen) ─────────────
   const KLINE_CACHE_TTL_MS = 2 * 60 * 1000;
@@ -498,8 +510,34 @@ export function registerGridBotScreeners(deps) {
       loading: false,
       lastRun: 0,
       timer: null,
+      listGroup: 0,
     };
     if (typeof window !== 'undefined') window[cacheKey] = ui;
+    if (ui.listGroup == null) ui.listGroup = 0;
+
+    function renderSwingGroupPicker() {
+      const host = box.querySelector('#gbsSwingGrp');
+      if (!host) return;
+      host.innerHTML = '';
+      const mk = (g, txt, bg) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tbtn' + (ui.listGroup === g ? ' on' : '');
+        b.textContent = txt;
+        if (g > 0)
+          b.style.cssText = `background:${bg};color:#0c0c0e;border-color:transparent;min-width:22px;padding:2px 6px;font-size:10px`;
+        else b.style.cssText = 'min-width:22px;padding:2px 6px;font-size:10px';
+        b.title = g === 0 ? 'Не задавать цветовую группу в списке' : `Пометить отфильтрованные монеты группой ${g}`;
+        b.onclick = () => {
+          ui.listGroup = g;
+          renderSwingGroupPicker();
+          applyFiltersAndRender();
+        };
+        host.appendChild(b);
+      };
+      mk(0, '—', '');
+      for (let g = 1; g <= 7; g++) mk(g, String(g), GROUP_COLORS[g] || '#666');
+    }
 
     function renderMeta() {
       const lu = box.querySelector('#gbsSwingLu');
@@ -587,6 +625,9 @@ export function registerGridBotScreeners(deps) {
         };
       });
       renderMeta();
+      if (tagScreenerGroup && ui.listGroup > 0) {
+        for (const r of rows) tagScreenerGroup(r.sym, ui.listGroup);
+      }
     }
 
     box.innerHTML = `
@@ -605,6 +646,7 @@ export function registerGridBotScreeners(deps) {
         <span id="gbsSwingMaxAdxV">25</span>
         <label>ATR% от <input type="number" id="gbsSwingAtrLo" value="2" step="0.1" style="width:52px"></label>
         <label>до <input type="number" id="gbsSwingAtrHi" value="8" step="0.1" style="width:52px"></label>
+        <span style="display:flex;align-items:center;gap:5px;color:var(--text3)">Группа в списке <span id="gbsSwingGrp" style="display:flex;gap:3px;flex-wrap:wrap;align-items:center"></span></span>
         <span style="color:var(--text3)">Объём: слайдер в тулбаре (как в списке)</span>
         <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsSwingLu">—</span></span>
       </div>
@@ -628,6 +670,7 @@ export function registerGridBotScreeners(deps) {
 
     modal.appendChild(box);
     document.body.appendChild(modal);
+    renderSwingGroupPicker();
 
     const onHdr = (e) => {
       const th = e.target.closest('.gbs-th');
@@ -1049,9 +1092,35 @@ export function registerGridBotScreeners(deps) {
       root: box,
       error: '',
       diag: '',
+      listGroup: 0,
     };
     if (typeof window !== 'undefined') window[cacheKey] = ui;
     ui.root = box;
+    if (ui.listGroup == null) ui.listGroup = 0;
+
+    function renderIntraGroupPicker() {
+      const host = box.querySelector('#gbsIntGrp');
+      if (!host) return;
+      host.innerHTML = '';
+      const mk = (g, txt, bg) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tbtn' + (ui.listGroup === g ? ' on' : '');
+        b.textContent = txt;
+        if (g > 0)
+          b.style.cssText = `background:${bg};color:#0c0c0e;border-color:transparent;min-width:22px;padding:2px 6px;font-size:10px`;
+        else b.style.cssText = 'min-width:22px;padding:2px 6px;font-size:10px';
+        b.title = g === 0 ? 'Не задавать цветовую группу в списке' : `Пометить монеты из отфильтрованного списка группой ${g}`;
+        b.onclick = () => {
+          ui.listGroup = g;
+          renderIntraGroupPicker();
+          applyFiltersAndRender();
+        };
+        host.appendChild(b);
+      };
+      mk(0, '—', '');
+      for (let g = 1; g <= 7; g++) mk(g, String(g), GROUP_COLORS[g] || '#666');
+    }
 
     function applyFiltersAndRender() {
       let rows = ui.ready.filter((r) => r.score >= ui.minScore);
@@ -1159,6 +1228,9 @@ export function registerGridBotScreeners(deps) {
       if (lu && ui.lastRun) lu.textContent = new Date(ui.lastRun).toLocaleTimeString();
       const dg = root.querySelector('#gbsIntDiag');
       if (dg) dg.textContent = ui.diag || '';
+      if (tagScreenerGroup && ui.listGroup > 0 && rows.length) {
+        for (const r of rows) tagScreenerGroup(r.sym, ui.listGroup);
+      }
     }
 
     box.innerHTML = `
@@ -1182,6 +1254,7 @@ export function registerGridBotScreeners(deps) {
           </select>
         </label>
         <label><input type="checkbox" id="gbsIntHideFl"> Скрыть 🔴 флаги</label>
+        <span style="display:flex;align-items:center;gap:5px;color:var(--text3)">Группа <span id="gbsIntGrp" style="display:flex;gap:3px;flex-wrap:wrap;align-items:center"></span></span>
         <span style="color:var(--text3)">Объём — тулбар</span>
         <span style="margin-left:auto">Обновлено: <span id="gbsIntLu">—</span></span>
       </div>
@@ -1212,6 +1285,7 @@ export function registerGridBotScreeners(deps) {
 
     modal.appendChild(box);
     document.body.appendChild(modal);
+    renderIntraGroupPicker();
 
     ui.root.querySelector('thead').addEventListener('click', (e) => {
       const th = e.target.closest('.gbs-ith');

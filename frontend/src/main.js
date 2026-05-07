@@ -131,7 +131,25 @@ async function loadUserSettings() {
     })
     if (res.status === 401) { removeToken(); return null }
     const data = await res.json()
-    return data.settings || null
+    let s = data.settings
+    if (s != null && typeof s === 'string') {
+      try { s = JSON.parse(s) } catch { s = null }
+    }
+    return s && typeof s === 'object' ? s : null
+  } catch (e) { return null }
+}
+
+async function loadUserDrawingsMap() {
+  const token = getToken()
+  if (!token) return null
+  try {
+    const res = await fetch(`${BACKEND}/api/user/drawings`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (res.status === 401) { removeToken(); return null }
+    if (!res.ok) return null
+    const data = await res.json()
+    return data.drawings && typeof data.drawings === 'object' ? data.drawings : null
   } catch (e) { return null }
 }
 
@@ -161,18 +179,15 @@ function addLogoutBtn() {
 
 function startApp() {
   addLogoutBtn()
-  // Apply saved settings if any
-  loadUserSettings().then(settings => {
-    if (settings) applySettings(settings)
+  Promise.all([loadUserSettings(), loadUserDrawingsMap()]).then(([settings, drawings]) => {
+    applySettings(settings)
+    window.__pendingDrawings = drawings
     main()
   })
 }
 
 function applySettings(settings) {
-  // Apply saved user settings to S object before main() runs
-  if (settings.gridLayout) window._savedGridLayout = settings.gridLayout
-  if (settings.chartSymbols) window._savedChartSymbols = settings.chartSymbols
-  if (settings.volMin) window._savedVolMin = settings.volMin
+  window.__pendingUserSettings = settings && typeof settings === 'object' ? settings : null
 }
 
 // Entry point
@@ -212,7 +227,7 @@ function hexToRgbA(hex,a){
 
 const ALL_COLS = [
   {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены относительно цены 24 часа назад по данным Binance Futures (rolling 24h), в процентах. Положительное — рост, отрицательное — падение.'},
-  {id:'sp5',    l:'ТРНД', s:'5м·30', tip:'Мини‑график последних 30 пятиминутных закрытий + тепловая подложка по изменению за этот отрезок. Если 5м ещё не догружены — показываем ИЗМ 24ч и ровную линию. Сортировка — по % за отрезок (как у ИЗМ).'},
+  {id:'sp5',    l:'ТРНД', s:'…·30', tip:'Мини‑график последних 30 закрытий на том же таймфрейме, что и мини‑графики сетки (см. тулбар 1м/5м/15м/…). Пока нужный ТФ догружается в фоне, используется запасной ряд 5м. Сортировка — по % за отрезок (как у ИЗМ).'},
   {id:'cday',   l:'ИЗМ',  s:'день%',  tip:'Изменение цены от первой 5-минутной свечи текущего календарного дня по локальному времени устройства до последней цены, в процентах.'},
   {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Диапазон (макс−мин)/цена в процентах с начала локального календарного дня: 5-минутные свечи с полуночи по времени устройства.'},
   {id:'r24',    l:'РЕНЖ', s:'24ч',    tip:'Диапазон за последние 24 часа по 5-минутным свечам: насколько широко ходила цена относительно текущей, в процентах.'},
@@ -251,8 +266,28 @@ const CHART_HEAD_IDS=CHART_HEAD_DEFS.map(d=>d.id);
 const GROUP_COLORS=['','#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899'];
 // index 0=none, 1=red,2=orange,3=yellow,4=green,5=blue,6=violet,7=pink
 
+function trendColShortLabel(tf){
+  const m={ '1m':'1м', '3m':'3м', '5m':'5м', '15m':'15м', '30m':'30м', '1h':'1ч', '4h':'4ч', '1d':'Д' };
+  return`${m[tf]||'5м'}·30`;
+}
+function trendKlineFetchLimit(tf){
+  if(tf==='1m')return 80;
+  if(tf==='3m')return 100;
+  if(tf==='5m')return 300;
+  if(tf==='15m')return 120;
+  if(tf==='30m')return 100;
+  if(tf==='1h')return 170;
+  if(tf==='4h')return 120;
+  if(tf==='1d')return 90;
+  return 300;
+}
+function tfToolbarBtnId(tf){
+  const m={ '1m':'tf1m', '5m':'tf5m', '15m':'tf15m', '1h':'tf1h', '4h':'tf4h', '1d':'tf1d' };
+  return m[tf]||'tf5m';
+}
+
 const S = {
-  syms:[], tk:{}, k5m:{}, k1h:{}, k1m:{}, mx:{}, btcR:[],
+  syms:[], tk:{}, k5m:{}, k1h:{}, k1m:{}, kTrend:{}, mx:{}, btcR:[],
   charts: Array.from({length:9},()=>mkChart()),
   wsScreener:null, wsCharts:null, wsChartTrades:null,
   sortId:'vol24', sortDir:'desc', sortAlpha:false,
@@ -596,10 +631,10 @@ function calcATR(kl,n){if(!kl||kl.length<n+1)return null;let s=0;const f=kl.leng
 function calcNATR(kl,n){const a=calcATR(kl,n);return a&&kl?a/kl[kl.length-1].c*100:null;}
 function calcRange(kl,n){if(!kl||kl.length<n)return null;const sl=kl.slice(-n);const H=sl.reduce((m,k)=>Math.max(m,k.h),-Infinity);const L=sl.reduce((m,k)=>Math.min(m,k.l),Infinity);return L>0?(H-L)/L*100:null;}
 function calcRel(kl,n,f){if(!kl||kl.length<n+1)return null;const sl=kl.slice(-n-1);const cur=sl[sl.length-1][f];let s=0;for(let i=0;i<n;i++)s+=sl[i][f];const avg=s/n;return avg>0?cur/avg:null;}
-/** Последние N закрытий 5м → % изменения за окно + path для SVG (viewBox 0 0 100 40). */
-function spark5mSnapshot(k5,n=30){
-  if(!k5||k5.length<6)return{sp5:null,sp5d:''};
-  const sl=k5.slice(-Math.min(n,k5.length));
+/** Последние N закрытий свечей kl (любой ТФ) → % изменения за окно + path для SVG (viewBox 0 0 100 40). */
+function sparkTrendSnapshot(kl,n=30){
+  if(!kl||kl.length<6)return{sp5:null,sp5d:''};
+  const sl=kl.slice(-Math.min(n,kl.length));
   if(sl.length<6)return{sp5:null,sp5d:''};
   const closes=[];
   for(const k of sl){
@@ -843,7 +878,9 @@ function calcAll(){
     const corr14=k5&&k5.length>=15&&btcR14.length?calcCorr(calcRets(k5.slice(-15)),btcR14):null;
     const k5today=k5&&k5.length?k5.filter(c=>c.t>=dayStartMs):[];
     const rtd=calcRangeFromCandles(k5today);
-    const sp=spark5mSnapshot(k5,30);
+    const kt=S.kTrend[sym];
+    const sparkKl=(kt&&kt.length>=6)?kt:k5;
+    const sp=sparkTrendSnapshot(sparkKl,30);
     const vr5v=calcRel(k5,14,'qv');
     const oiE=_oiDelta[sym];
     const bb=calcBbSignals(k5,vr5v);
@@ -1438,6 +1475,86 @@ function cloneDrawings(drawings){
   if(typeof structuredClone==='function')return structuredClone(drawings||[]);
   return JSON.parse(JSON.stringify(drawings||[]));
 }
+
+let _persistSettingsTimer=null;
+let _drawPersistTimer=null;
+const _dirtyDrawSyms=new Set();
+
+function collectUserSettings(){
+  return {
+    chartSymbols:S.charts.map(c=>c.sym||null),
+    gridLayout:{gridSize:S.gridSize},
+    volMin:S.minVol,
+    minTrd:S.minTrd,
+    page:S.page,
+    sortId:S.sortId,
+    sortDir:S.sortDir,
+    sortAlpha:S.sortAlpha,
+    tf:S.tf,
+    symGroups:S.symGroups,
+    search:S.q,
+    chartAutoSync:S.chartAutoSync,
+  };
+}
+
+function schedulePersistUserSettings(){
+  if(!getToken())return;
+  clearTimeout(_persistSettingsTimer);
+  _persistSettingsTimer=setTimeout(()=>{
+    _persistSettingsTimer=null;
+    saveUserSettings(collectUserSettings());
+  },2000);
+}
+
+function syncVolTrdSlidersFromState(){
+  const vSl=Math.max(0,Math.min(25,Math.round(S.minVol/10)));
+  const dispV=S.minVol===0?'0':`${S.minVol}M`;
+  ['volVal','fsVolVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=dispV;});
+  ['volSlider','fsVolSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=String(vSl);});
+  const tSl=Math.max(0,Math.min(40,Math.round(S.minTrd/50000)));
+  const dispT=S.minTrd===0?'0':(S.minTrd>=1e6?`${(S.minTrd/1e6).toFixed(1)}M`:`${Math.round(S.minTrd/1000)}K`);
+  ['trdVal','fsTrdVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=dispT;});
+  ['trdSlider','fsTrdSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=String(tSl);});
+}
+
+function rebumpDrawIdAfterLoad(){
+  let m=S.drawIdCounter|0;
+  const walk=d=>{
+    if(!d||typeof d!=='object')return;
+    if(typeof d.id==='number'&&d.id>m)m=d.id;
+    if(Array.isArray(d.pts))for(const p of d.pts)walk(p);
+  };
+  for(const arr of Object.values(S.symDrawings)){
+    if(!Array.isArray(arr))continue;
+    for(const d of arr)walk(d);
+  }
+  S.drawIdCounter=m;
+}
+
+async function flushDrawingsToServer(){
+  _drawPersistTimer=null;
+  if(!getToken()||!_dirtyDrawSyms.size)return;
+  const syms=[..._dirtyDrawSyms];
+  _dirtyDrawSyms.clear();
+  const token=getToken();
+  if(!token)return;
+  for(const sym of syms){
+    try{
+      await fetch(`${BACKEND}/api/user/drawings/${encodeURIComponent(sym)}`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+        body:JSON.stringify({ drawings:cloneDrawings(getSymDrawings(sym)) }),
+      });
+    }catch(e){ console.warn('drawings persist',sym,e); }
+  }
+}
+
+function schedulePersistDrawings(sym){
+  if(!getToken()||!sym)return;
+  _dirtyDrawSyms.add(sym);
+  clearTimeout(_drawPersistTimer);
+  _drawPersistTimer=setTimeout(flushDrawingsToServer,1500);
+}
 function _getDrawStack(map,sym){
   if(!map[sym])map[sym]=[];
   return map[sym];
@@ -1491,6 +1608,7 @@ function applySymDrawings(sym,drawings){
       rCanvas(ch);
     }
   });
+  schedulePersistDrawings(sym);
 }
 function setSlotLoading(slot,on,text='Загрузка данных...'){
   const cb=document.getElementById(`cb${slot}`);
@@ -1813,6 +1931,7 @@ function removeDrawingAtCursor(ch){
     ch.drawings.splice(idx,1);ch.hoveredIdx=-1;
     _lastDrawSym=drawSym||_lastDrawSym;
     rCanvas(ch);
+    if(drawSym)schedulePersistDrawings(drawSym);
   }
 }
 
@@ -3663,12 +3782,16 @@ async function refreshMetricKlinesSlice(){
     const slice=universe.slice(_metricsSyncCursor,_metricsSyncCursor+sliceSize);
     _metricsSyncCursor+=slice.length;
     if(!slice.length)return;
-    const [k5,k1h,k1m]=await Promise.all([
+    const trendTf=S.tf;
+    const trendLim=trendKlineFetchLimit(trendTf);
+    const [k5,k1h,k1m,kTr]=await Promise.all([
       batchKlines(slice,'5m',300,null,null,10),
       batchKlines(slice,'1h',170,null,null,10),
       batchKlines(slice,'1m',70,null,null,10),
+      batchKlines(slice,trendTf,trendLim,null,null,10),
     ]);
     Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
+    if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
     calcAll();
     if(!document.hidden){
       if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
@@ -3947,7 +4070,8 @@ function buildScreenerHeader(hdrEl){
       d.style.maxWidth='64px';
       d.style.width='64px';
     }
-    d.innerHTML=`<div class="ht">${c.l}</div><div class="hb">${c.s}</div>`;
+    const sub=(c.id==='sp5')?trendColShortLabel(S.tf):c.s;
+    d.innerHTML=`<div class="ht">${c.l}</div><div class="hb">${sub}</div>`;
     d.onclick=()=>doSort(c.id);mg.appendChild(d);
   });
   ms.appendChild(mg);hdrEl.appendChild(ms);
@@ -4255,6 +4379,7 @@ function changePage(delta){
 
 function setTf(tf,btnId){
   S.tf=tf;
+  S.kTrend={};
   document.querySelectorAll('#toolbar .tbtn').forEach(b=>{
     if(['tf1m','tf5m','tf15m','tf1h','tf4h','tf1d'].includes(b.id)||b.dataset.tf)b.classList.remove('on');
   });
@@ -4265,6 +4390,11 @@ function setTf(tf,btnId){
   S.charts.forEach(c=>{c.sym=null;c.candles=[];});
   syms.forEach((sym,i)=>{if(sym)loadChart(i,sym);});
   restartChartStreams(700);
+  calcAll();
+  renderTable();
+  rebuildScreenerHeaders();
+  refreshMetricKlinesSlice();
+  schedulePersistUserSettings();
 }
 
 function onSearch(q){S.q=q;S.page=0;updateCharts();renderTable();}
@@ -4275,6 +4405,7 @@ function onVolFilter(val){
   ['volVal','fsVolVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=disp;});
   ['volSlider','fsVolSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=val;});
   S.page=0;updateCharts();renderTable();
+  schedulePersistUserSettings();
 }
 function onTrdFilter(val){
   // 1 step = 50k trades/day. Range 0..2M by default.
@@ -4283,6 +4414,7 @@ function onTrdFilter(val){
   ['trdVal','fsTrdVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=disp;});
   ['trdSlider','fsTrdSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=val;});
   S.page=0;updateCharts();renderTable();
+  schedulePersistUserSettings();
 }
 
 const STREAM_STALE_MS=20000;
@@ -4417,6 +4549,7 @@ function toggleChartAutoSync(){
   S.chartAutoSync=!S.chartAutoSync;
   saveChartAutoSyncPref();
   syncChartSyncBtnUi();
+  schedulePersistUserSettings();
 }
 
 function updateToggleScrBtn(){
@@ -4441,6 +4574,7 @@ function updateCharts(){
   }
   if(changed)restartChartStreams(600);
   updatePagination(rows.length);
+  schedulePersistUserSettings();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -4638,6 +4772,7 @@ function setSymGroup(sym,g){
   // update color stripe in chart headers immediately
   S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
   scheduleGroupUiRefresh();
+  schedulePersistUserSettings();
 }
 
 function buildGroupFilterBar(){
@@ -5016,6 +5151,7 @@ function setChartAutoSyncOpt(on){
   syncChartSyncBtnUi();
   const body=document.getElementById('smodal-body');
   if(body&&S.settingsTab==='gen')renderSettingsGen(body);
+  schedulePersistUserSettings();
 }
 function setSessionFxEnabled(on){
   S.sessionFx.enabled=!!on;
@@ -5149,12 +5285,16 @@ function rebuildScreenerHeaders(){
   autoResizeScreener();
 }
 
-function setGridSize(n){
-  if(S.gridSize===n)return;S.gridSize=n;
+function setGridSize(n, opts){
+  const skipAutoFill=opts&&opts.skipAutoFill;
+  if(S.gridSize===n)return;
+  S.gridSize=n;
   S.charts=Array.from({length:n},()=>mkChart());
   buildChartGrid();if(S.LC)for(let i=0;i<n;i++)initLCChart(i);
-  S.page=0;updateCharts();restartChartStreams(0);
+  S.page=0;
+  if(!skipAutoFill){updateCharts();restartChartStreams(0);}
   renderSettingsGen(document.getElementById('smodal-body'));
+  schedulePersistUserSettings();
 }
 
 function setUpColor(color){
@@ -5425,9 +5565,16 @@ async function loadKlinesBackground(){
   try{
     const top=Object.entries(S.tk).filter(([s])=>S.syms.includes(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
     const all=top.slice(0);
-    Object.assign(S.k5m,await batchKlines(all,'5m',300,null,null,8));
-    Object.assign(S.k1h,await batchKlines(all,'1h',170,null,null,8));
-    Object.assign(S.k1m,await batchKlines(all,'1m',70,null,null,6));
+    const trendTf=S.tf;
+    const trendLim=trendKlineFetchLimit(trendTf);
+    const [k5,k1h,k1m,kTr]=await Promise.all([
+      batchKlines(all,'5m',300,null,null,8),
+      batchKlines(all,'1h',170,null,null,8),
+      batchKlines(all,'1m',70,null,null,6),
+      batchKlines(all,trendTf,trendLim,null,null,8),
+    ]);
+    Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
+    if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
     calcAll();renderTable();
     refreshMetricKlinesSlice();
   }catch(e){
@@ -5442,6 +5589,61 @@ function loadScript(url){return new Promise((res,rej)=>{const s=document.createE
 // ═══════════════════════════════════════════════════════════════
 //  MAIN
 // ═══════════════════════════════════════════════════════════════
+function hydrateUserSession(){
+  const pd=window.__pendingDrawings;
+  if(pd&&typeof pd==='object'){
+    for(const [sym,dr] of Object.entries(pd)){
+      if(!Array.isArray(dr))continue;
+      S.symDrawings[sym]=cloneDrawings(dr);
+    }
+    rebumpDrawIdAfterLoad();
+    window.__pendingDrawings=null;
+  }
+  const ps=window.__pendingUserSettings;
+  window.__pendingUserSettings=null;
+  if(!ps||typeof ps!=='object')return false;
+
+  if(ps.symGroups&&typeof ps.symGroups==='object')
+    Object.assign(S.symGroups,ps.symGroups);
+  if(ps.search!=null)S.q=String(ps.search);
+  if(typeof ps.chartAutoSync==='boolean')S.chartAutoSync=ps.chartAutoSync;
+  if(ps.sortId&&typeof ps.sortId==='string'){
+    S.sortId=ps.sortId;
+    S.sortAlpha=!!ps.sortAlpha;
+  }
+  if(ps.sortDir==='asc'||ps.sortDir==='desc')S.sortDir=ps.sortDir;
+  if(ps.volMin!=null&&!isNaN(+ps.volMin))S.minVol=+ps.volMin;
+  if(ps.minTrd!=null&&!isNaN(+ps.minTrd))S.minTrd=+ps.minTrd;
+  syncVolTrdSlidersFromState();
+
+  const gs=ps.gridLayout?.gridSize;
+  if(gs!=null&&gs>=1&&gs<=9&&gs!==S.gridSize)
+    setGridSize(gs|0,{skipAutoFill:true});
+
+  const restoredTf=typeof ps.tf==='string'&&['1m','5m','15m','1h','4h','1d'].includes(ps.tf);
+  if(restoredTf&&ps.tf!==S.tf)
+    setTf(ps.tf,tfToolbarBtnId(ps.tf));
+
+  if(ps.page!=null&&!isNaN(+ps.page))S.page=Math.max(0,+ps.page|0);
+
+  const chartSyms=ps.chartSymbols;
+  const validArr=Array.isArray(chartSyms)&&chartSyms.some(s=>s&&String(s).length>0);
+  if(validArr){
+    for(let i=0;i<S.charts.length;i++){
+      const sym=chartSyms[i]||null;
+      if(sym&&typeof sym==='string'&&S.syms.includes(sym))loadChart(i,sym);
+      else loadChart(i,null);
+    }
+  }
+  const rowsPg=sortedRows();
+  const tp=Math.max(1,Math.ceil(rowsPg.length/Math.max(1,S.charts.length)));
+  if(S.page>=tp)S.page=Math.max(0,tp-1);
+  updatePagination(rowsPg.length);
+  rebuildScreenerHeaders();
+  schedulePersistUserSettings();
+  return validArr;
+}
+
 async function main(){
   try{
     loadChartViewPrefs();
@@ -5475,7 +5677,10 @@ async function main(){
     ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
-    updateCharts();restartChartStreams(0);startScreenerWS();
+    const restoredLayout=hydrateUserSession();
+    if(!restoredLayout)updateCharts();
+    renderTable();
+    restartChartStreams(0);startScreenerWS();
     syncFastBtnUi();
     syncChartSyncBtnUi();
     syncOiChartBtnUi();
@@ -6211,7 +6416,6 @@ function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 registerGridBotScreeners({
   S,
   BACKEND,
-  API,
   fj,
   parseKlines,
   batchKlines,
@@ -6220,6 +6424,10 @@ registerGridBotScreeners({
   openFullscreenBySym,
   bollingerOnTail,
   calcATR,
+  GROUP_COLORS,
+  tagScreenerGroup: (sym, g) => {
+    if (sym && g > 0) setSymGroup(sym, g);
+  },
 });
 
 // ═══════════════════════════════════════════════════════════════
