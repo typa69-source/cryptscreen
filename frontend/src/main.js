@@ -131,7 +131,25 @@ async function loadUserSettings() {
     })
     if (res.status === 401) { removeToken(); return null }
     const data = await res.json()
-    return data.settings || null
+    let s = data.settings
+    if (s != null && typeof s === 'string') {
+      try { s = JSON.parse(s) } catch { s = null }
+    }
+    return s && typeof s === 'object' ? s : null
+  } catch (e) { return null }
+}
+
+async function loadUserDrawingsMap() {
+  const token = getToken()
+  if (!token) return null
+  try {
+    const res = await fetch(`${BACKEND}/api/user/drawings`, {
+      headers: { 'Authorization': `Bearer ${token}` }
+    })
+    if (res.status === 401) { removeToken(); return null }
+    if (!res.ok) return null
+    const data = await res.json()
+    return data.drawings && typeof data.drawings === 'object' ? data.drawings : null
   } catch (e) { return null }
 }
 
@@ -161,18 +179,15 @@ function addLogoutBtn() {
 
 function startApp() {
   addLogoutBtn()
-  // Apply saved settings if any
-  loadUserSettings().then(settings => {
-    if (settings) applySettings(settings)
+  Promise.all([loadUserSettings(), loadUserDrawingsMap()]).then(([settings, drawings]) => {
+    applySettings(settings)
+    window.__pendingDrawings = drawings
     main()
   })
 }
 
 function applySettings(settings) {
-  // Apply saved user settings to S object before main() runs
-  if (settings.gridLayout) window._savedGridLayout = settings.gridLayout
-  if (settings.chartSymbols) window._savedChartSymbols = settings.chartSymbols
-  if (settings.volMin) window._savedVolMin = settings.volMin
+  window.__pendingUserSettings = settings && typeof settings === 'object' ? settings : null
 }
 
 // Entry point
@@ -212,7 +227,7 @@ function hexToRgbA(hex,a){
 
 const ALL_COLS = [
   {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены относительно цены 24 часа назад по данным Binance Futures (rolling 24h), в процентах. Положительное — рост, отрицательное — падение.'},
-  {id:'sp5',    l:'ТРНД', s:'5м·30', tip:'Мини‑график последних 30 пятиминутных закрытий + тепловая подложка по изменению за этот отрезок. Если 5м ещё не догружены — показываем ИЗМ 24ч и ровную линию. Сортировка — по % за отрезок (как у ИЗМ).'},
+  {id:'sp5',    l:'ТРНД', s:'…·30', tip:'Мини‑график последних 30 закрытий на том же таймфрейме, что и мини‑графики сетки (см. тулбар 1м/5м/15м/…). Пока нужный ТФ догружается в фоне, используется запасной ряд 5м. Сортировка — по % за отрезок (как у ИЗМ).'},
   {id:'cday',   l:'ИЗМ',  s:'день%',  tip:'Изменение цены от первой 5-минутной свечи текущего календарного дня по локальному времени устройства до последней цены, в процентах.'},
   {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Диапазон (макс−мин)/цена в процентах с начала локального календарного дня: 5-минутные свечи с полуночи по времени устройства.'},
   {id:'r24',    l:'РЕНЖ', s:'24ч',    tip:'Диапазон за последние 24 часа по 5-минутным свечам: насколько широко ходила цена относительно текущей, в процентах.'},
@@ -249,10 +264,32 @@ const CHART_HEAD_DEFS=[
 const CHART_HEAD_IDS=CHART_HEAD_DEFS.map(d=>d.id);
 
 const GROUP_COLORS=['','#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899'];
+const FAVORITE_GROUP_ID=8;
+const FAVORITE_GROUP_COLOR='#fbbf24';
 // index 0=none, 1=red,2=orange,3=yellow,4=green,5=blue,6=violet,7=pink
 
+function trendColShortLabel(tf){
+  const m={ '1m':'1м', '3m':'3м', '5m':'5м', '15m':'15м', '30m':'30м', '1h':'1ч', '4h':'4ч', '1d':'Д' };
+  return`${m[tf]||'5м'}·30`;
+}
+function trendKlineFetchLimit(tf){
+  if(tf==='1m')return 80;
+  if(tf==='3m')return 100;
+  if(tf==='5m')return 300;
+  if(tf==='15m')return 120;
+  if(tf==='30m')return 100;
+  if(tf==='1h')return 170;
+  if(tf==='4h')return 120;
+  if(tf==='1d')return 90;
+  return 300;
+}
+function tfToolbarBtnId(tf){
+  const m={ '1m':'tf1m', '5m':'tf5m', '15m':'tf15m', '1h':'tf1h', '4h':'tf4h', '1d':'tf1d' };
+  return m[tf]||'tf5m';
+}
+
 const S = {
-  syms:[], tk:{}, k5m:{}, k1h:{}, k1m:{}, mx:{}, btcR:[],
+  syms:[], tk:{}, k5m:{}, k1h:{}, k1m:{}, kTrend:{}, mx:{}, btcR:[],
   charts: Array.from({length:9},()=>mkChart()),
   wsScreener:null, wsCharts:null, wsChartTrades:null,
   sortId:'vol24', sortDir:'desc', sortAlpha:false,
@@ -264,7 +301,7 @@ const S = {
   drawRedo:{},         // sym -> [drawings snapshot...]
   chartRightOffset:10, // пустые бары справа (Binance timeScale rightOffset)
   chartVisibleBars:96, // сколько последних свечей показывать по умолчанию (масштаб)
-  minVol:0, minTrd:0, gridSize:9, upColor:'#1fa891', wmVisible:true, sortAbs:true,
+  minVol:0, minTrd:0, gridSize:9, gridRows:3, gridCols:3, upColor:'#1fa891', wmVisible:true, sortAbs:true,
   screenerVisible:true, fsScreenerVisible:true,
   colOrder: ALL_COLS.map(c=>c.id),
   colVisible: new Set(ALL_COLS.map(c=>c.id).filter(id=>!COLS_HIDDEN_BY_DEFAULT.has(id))),
@@ -278,17 +315,19 @@ const S = {
   /** Цвет линий рисования по типу (не лонг/шорт) */
   lineColors:{hray:'#e8a020',tline:'#3b82f6',aray:'#a855f7',atline:'#a855f7'},
   fsSym:null, fsOpen:false, fsWs:null,
-  fsCharts:[
-    mkFsChart('5m'), mkFsChart('1h'), mkFsChart('4h'),
-  ],
+  fsLayoutPreset:'three_top_wide',
+  fsChartCount:3,
+  fsChartTfs:['5m','1h','4h'],
+  fsCharts:[mkFsChart('5m'), mkFsChart('1h'), mkFsChart('4h')],
   settingsTab:'gen',
   showDensity:false,
   densitySettings:{}, // per symbol: {largeMult, medMult, smallMult}
   alertLog:[],
   alertSettings:{repeat:true, cooldown:5, sound:true},
-  // #9: Color groups
+  // #9: Color groups + favorites
   symGroups:{},       // sym → groupIdx (1-7), 0=none
-  activeGroupFilter:0,// 0=all, 1-7=show only that group
+  symFavorites:{},    // sym → true
+  activeGroupFilter:0,// 0=all, 1-7=color group, 8=favorites
   lastGroupUsed:1,    // last group assigned by user
   _savedCpW:'',_savedFsCaW:'',
   // Potential monitor — multi-preset system
@@ -596,10 +635,10 @@ function calcATR(kl,n){if(!kl||kl.length<n+1)return null;let s=0;const f=kl.leng
 function calcNATR(kl,n){const a=calcATR(kl,n);return a&&kl?a/kl[kl.length-1].c*100:null;}
 function calcRange(kl,n){if(!kl||kl.length<n)return null;const sl=kl.slice(-n);const H=sl.reduce((m,k)=>Math.max(m,k.h),-Infinity);const L=sl.reduce((m,k)=>Math.min(m,k.l),Infinity);return L>0?(H-L)/L*100:null;}
 function calcRel(kl,n,f){if(!kl||kl.length<n+1)return null;const sl=kl.slice(-n-1);const cur=sl[sl.length-1][f];let s=0;for(let i=0;i<n;i++)s+=sl[i][f];const avg=s/n;return avg>0?cur/avg:null;}
-/** Последние N закрытий 5м → % изменения за окно + path для SVG (viewBox 0 0 100 40). */
-function spark5mSnapshot(k5,n=30){
-  if(!k5||k5.length<6)return{sp5:null,sp5d:''};
-  const sl=k5.slice(-Math.min(n,k5.length));
+/** Последние N закрытий свечей kl (любой ТФ) → % изменения за окно + path для SVG (viewBox 0 0 100 40). */
+function sparkTrendSnapshot(kl,n=30){
+  if(!kl||kl.length<6)return{sp5:null,sp5d:''};
+  const sl=kl.slice(-Math.min(n,kl.length));
   if(sl.length<6)return{sp5:null,sp5d:''};
   const closes=[];
   for(const k of sl){
@@ -843,7 +882,9 @@ function calcAll(){
     const corr14=k5&&k5.length>=15&&btcR14.length?calcCorr(calcRets(k5.slice(-15)),btcR14):null;
     const k5today=k5&&k5.length?k5.filter(c=>c.t>=dayStartMs):[];
     const rtd=calcRangeFromCandles(k5today);
-    const sp=spark5mSnapshot(k5,30);
+    const kt=S.kTrend[sym];
+    const sparkKl=(kt&&kt.length>=6)?kt:k5;
+    const sp=sparkTrendSnapshot(sparkKl,30);
     const vr5v=calcRel(k5,14,'qv');
     const oiE=_oiDelta[sym];
     const bb=calcBbSignals(k5,vr5v);
@@ -979,9 +1020,11 @@ function showConfirmModal(text,{title='Подтверждение',okText='По�
 // ═══════════════════════════════════════════════════════════════
 function buildChartGrid(){
   const g=document.getElementById('cgrid');g.innerHTML='';
-  const n=S.gridSize,cols=n===4?2:3;
+  const n=S.gridSize;
+  const cols=Math.max(1,Math.min(7,S.gridCols||3));
+  const rows=Math.max(1,Math.min(7,S.gridRows||3));
   g.style.gridTemplateColumns=`repeat(${cols},1fr)`;
-  g.style.gridTemplateRows=`repeat(${cols},1fr)`;
+  g.style.gridTemplateRows=`repeat(${rows},1fr)`;
   for(let i=0;i<n;i++){
     g.insertAdjacentHTML('beforeend',`
       <div class="ccell" id="cc${i}">
@@ -1204,7 +1247,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   interact.addEventListener('mouseup',e=>{
     if(e.button!==0)return;
     const hadStroke=!!ch._brushStroke;
+    const drawSym=hadStroke?getChartSym(ch):null;
     ch._brushStroke=null;
+    if(drawSym)schedulePersistDrawings(drawSym);
     if(hadStroke&&S.drawMode==='brush')setDrawMode(null);
   });
   interact.addEventListener('contextmenu',e=>{
@@ -1401,7 +1446,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   },{capture:true,signal:sig});
   container.addEventListener('mouseup',e=>{
     if(e.button!==0||!ch.draggingDraw)return;
+    const drawSym=getChartSym(ch);
     ch.draggingDraw=null;
+    if(drawSym)schedulePersistDrawings(drawSym);
     if(ch.interact&&!S.drawMode)ch.interact.style.pointerEvents='';
   },{capture:true,signal:sig});
 
@@ -1437,6 +1484,112 @@ function getSymDrawings(sym){
 function cloneDrawings(drawings){
   if(typeof structuredClone==='function')return structuredClone(drawings||[]);
   return JSON.parse(JSON.stringify(drawings||[]));
+}
+
+let _persistSettingsTimer=null;
+let _drawPersistTimer=null;
+const _dirtyDrawSyms=new Set();
+
+function collectUserSettings(){
+  return {
+    chartSymbols:S.charts.map(c=>c.sym||null),
+    fsSym:S.fsSym||null,
+    gridLayout:{gridSize:S.gridSize,gridRows:S.gridRows,gridCols:S.gridCols},
+    fsLayout:{preset:S.fsLayoutPreset,count:S.fsChartCount,tfs:[...S.fsChartTfs]},
+    volMin:S.minVol,
+    minTrd:S.minTrd,
+    page:S.page,
+    sortId:S.sortId,
+    sortDir:S.sortDir,
+    sortAlpha:S.sortAlpha,
+    tf:S.tf,
+    symGroups:S.symGroups,
+    symFavorites:S.symFavorites,
+    lastGroupUsed:S.lastGroupUsed,
+    activeGroupFilter:S.activeGroupFilter,
+    search:S.q,
+    chartAutoSync:S.chartAutoSync,
+    chartHead:{order:[...S.chartHeadOrder],visible:[...S.chartHeadVisible]},
+    columns:{order:[...S.colOrder],visible:[...S.colVisible]},
+    lineColors:{...S.lineColors},
+    chartView:{chartRightOffset:S.chartRightOffset,chartVisibleBars:S.chartVisibleBars},
+    sessionFx:{...S.sessionFx},
+    showOiOnChart:!!S.showOiOnChart,
+    showBbOverlay:!!S.showBbOverlay,
+    alertSettings:{...S.alertSettings},
+    emaVisible:!!S.emaVisible,
+    emaCrossSound:!!S.emaCrossSound,
+    emaSettings:Array.isArray(S.emaSettings)?S.emaSettings.map(c=>({...c})):[],
+    emaSymOverrides:S.emaSymOverrides&&typeof S.emaSymOverrides==='object'?JSON.parse(JSON.stringify(S.emaSymOverrides)):{},
+    emaSymEnabled:S.emaSymEnabled&&typeof S.emaSymEnabled==='object'?{...S.emaSymEnabled}:{},
+    potentialPresets:Array.isArray(S.potentialPresets)?JSON.parse(JSON.stringify(S.potentialPresets)):[],
+    potFilterPreset:S._potFilterPreset||null,
+    draw:{brushColor:_brushColor,brushWidth:_brushWidth},
+  };
+}
+
+let _lastPersistedSettingsJson='';
+function schedulePersistUserSettings(){
+  if(!getToken())return;
+  clearTimeout(_persistSettingsTimer);
+  _persistSettingsTimer=setTimeout(()=>{
+    _persistSettingsTimer=null;
+    const payload=collectUserSettings();
+    const json=JSON.stringify(payload);
+    if(json===_lastPersistedSettingsJson)return;
+    _lastPersistedSettingsJson=json;
+    saveUserSettings(payload);
+  },2000);
+}
+
+function syncVolTrdSlidersFromState(){
+  const vSl=Math.max(0,Math.min(25,Math.round(S.minVol/10)));
+  const dispV=S.minVol===0?'0':`${S.minVol}M`;
+  ['volVal','fsVolVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=dispV;});
+  ['volSlider','fsVolSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=String(vSl);});
+  const tSl=Math.max(0,Math.min(40,Math.round(S.minTrd/50000)));
+  const dispT=S.minTrd===0?'0':(S.minTrd>=1e6?`${(S.minTrd/1e6).toFixed(1)}M`:`${Math.round(S.minTrd/1000)}K`);
+  ['trdVal','fsTrdVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=dispT;});
+  ['trdSlider','fsTrdSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=String(tSl);});
+}
+
+function rebumpDrawIdAfterLoad(){
+  let m=S.drawIdCounter|0;
+  const walk=d=>{
+    if(!d||typeof d!=='object')return;
+    if(typeof d.id==='number'&&d.id>m)m=d.id;
+    if(Array.isArray(d.pts))for(const p of d.pts)walk(p);
+  };
+  for(const arr of Object.values(S.symDrawings)){
+    if(!Array.isArray(arr))continue;
+    for(const d of arr)walk(d);
+  }
+  S.drawIdCounter=m;
+}
+
+async function flushDrawingsToServer(){
+  _drawPersistTimer=null;
+  if(!getToken()||!_dirtyDrawSyms.size)return;
+  const syms=[..._dirtyDrawSyms];
+  _dirtyDrawSyms.clear();
+  const token=getToken();
+  if(!token)return;
+  for(const sym of syms){
+    try{
+      await fetch(`${BACKEND}/api/user/drawings/${encodeURIComponent(sym)}`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+        body:JSON.stringify({ drawings:cloneDrawings(getSymDrawings(sym)) }),
+      });
+    }catch(e){ console.warn('drawings persist',sym,e); }
+  }
+}
+
+function schedulePersistDrawings(sym){
+  if(!getToken()||!sym)return;
+  _dirtyDrawSyms.add(sym);
+  clearTimeout(_drawPersistTimer);
+  _drawPersistTimer=setTimeout(flushDrawingsToServer,1500);
 }
 function _getDrawStack(map,sym){
   if(!map[sym])map[sym]=[];
@@ -1491,6 +1644,7 @@ function applySymDrawings(sym,drawings){
       rCanvas(ch);
     }
   });
+  schedulePersistDrawings(sym);
 }
 function setSlotLoading(slot,on,text='Загрузка данных...'){
   const cb=document.getElementById(`cb${slot}`);
@@ -1627,7 +1781,7 @@ function updateChartHeader(slot,sym){
   const elCorr=document.getElementById(`chs${slot}-corr`);
   if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
   const dot=document.getElementById(`cgd${slot}`);
-  if(dot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';dot.style.background=col||'var(--bg4)';dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';dot.style.display=sym?'':'none';}
+  if(dot)styleGroupDot(dot,sym);
   // If stats wrap into two lines, tighten spacing to avoid clipping.
   const head=document.getElementById(`cc${slot}`)?.querySelector('.chead');
   const stats=document.getElementById(`chs${slot}`);
@@ -1813,6 +1967,7 @@ function removeDrawingAtCursor(ch){
     ch.drawings.splice(idx,1);ch.hoveredIdx=-1;
     _lastDrawSym=drawSym||_lastDrawSym;
     rCanvas(ch);
+    if(drawSym)schedulePersistDrawings(drawSym);
   }
 }
 
@@ -2664,6 +2819,8 @@ function showAlertPctInput(ch,drawing,container){
   const confirm=()=>{
     const v=parseFloat(inp.value);
     drawing.alertPct=isNaN(v)||v<=0?null:v;
+    const drawSym=getChartSym(ch);
+    if(drawSym)schedulePersistDrawings(drawSym);
     wrap.remove();
     [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
   };
@@ -2697,6 +2854,7 @@ function onInteractClick(ch,e,container){
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:S.lineColors.hray});
     _lastDrawSym=drawSym||_lastDrawSym;
+    if(drawSym)schedulePersistDrawings(drawSym);
     rCanvas(ch);
     setDrawMode(null);
   }else if(S.drawMode==='tline'){
@@ -2705,6 +2863,7 @@ function onInteractClick(ch,e,container){
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:S.lineColors.tline});
       _lastDrawSym=drawSym||_lastDrawSym;
+      if(drawSym)schedulePersistDrawings(drawSym);
       ch.pendingP1=null;rCanvas(ch);
       setDrawMode(null);
     }
@@ -2713,6 +2872,7 @@ function onInteractClick(ch,e,container){
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push(d);rCanvas(ch);
     _lastDrawSym=drawSym||_lastDrawSym;
+    if(drawSym)schedulePersistDrawings(drawSym);
     showAlertPctInput(ch,d,container);
     setDrawMode(null);
   }else if(S.drawMode==='atline'){
@@ -2722,6 +2882,7 @@ function onInteractClick(ch,e,container){
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=drawSym||_lastDrawSym;
+      if(drawSym)schedulePersistDrawings(drawSym);
       showAlertPctInput(ch,d,container);
       setDrawMode(null);
     }
@@ -2738,6 +2899,7 @@ function onInteractClick(ch,e,container){
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=drawSym||_lastDrawSym;
+      if(drawSym)schedulePersistDrawings(drawSym);
       setDrawMode(null);
     }
   }
@@ -3345,6 +3507,13 @@ function tfMs(tf){
 function applyLivePriceToCandle(ch,tfStr,price,tsMs){
   if(!ch?.candles?.length)return false;
   if(price==null||!isFinite(price))return false;
+  const last=ch.candles[ch.candles.length-1];
+  const ref=last?.c||last?.o;
+  if(ref&&isFinite(ref)&&ref>0){
+    const rel=Math.abs(price-ref)/ref;
+    // Ignore websocket spikes / stale ticks that create giant phantom candles.
+    if(rel>0.25)return false;
+  }
   const ms=tfMs(tfStr);
   const ts=tsMs||Date.now();
   const bucketTs=Math.floor(ts/ms)*ms;
@@ -3663,12 +3832,16 @@ async function refreshMetricKlinesSlice(){
     const slice=universe.slice(_metricsSyncCursor,_metricsSyncCursor+sliceSize);
     _metricsSyncCursor+=slice.length;
     if(!slice.length)return;
-    const [k5,k1h,k1m]=await Promise.all([
+    const trendTf=S.tf;
+    const trendLim=trendKlineFetchLimit(trendTf);
+    const [k5,k1h,k1m,kTr]=await Promise.all([
       batchKlines(slice,'5m',300,null,null,10),
       batchKlines(slice,'1h',170,null,null,10),
       batchKlines(slice,'1m',70,null,null,10),
+      batchKlines(slice,trendTf,trendLim,null,null,10),
     ]);
     Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
+    if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
     calcAll();
     if(!document.hidden){
       if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
@@ -3947,7 +4120,8 @@ function buildScreenerHeader(hdrEl){
       d.style.maxWidth='64px';
       d.style.width='64px';
     }
-    d.innerHTML=`<div class="ht">${c.l}</div><div class="hb">${c.s}</div>`;
+    const sub=(c.id==='sp5')?trendColShortLabel(S.tf):c.s;
+    d.innerHTML=`<div class="ht">${c.l}</div><div class="hb">${sub}</div>`;
     d.onclick=()=>doSort(c.id);mg.appendChild(d);
   });
   ms.appendChild(mg);hdrEl.appendChild(ms);
@@ -3972,7 +4146,7 @@ function sortedRows(){
     }
   }
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
-  const bypassGroup=(sym)=>S.activeGroupFilter>0&&getSymGroup(sym)===S.activeGroupFilter;
+  const bypassGroup=(sym)=>S.activeGroupFilter>0&&symbolInGroup(sym,S.activeGroupFilter);
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||bypassGroup(r.sym));
   if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||bypassGroup(r.sym));
   // Filters are exclusive: preset OR color group OR all
@@ -3981,7 +4155,7 @@ function sortedRows(){
     if(pr&&Object.keys(pr.matches||{}).length>0)rows=rows.filter(r=>pr.matches[r.sym]);
     else S._potFilterPreset=null; // preset has no matches, clear filter
   }else if(S.activeGroupFilter>0){
-    rows=rows.filter(r=>getSymGroup(r.sym)===S.activeGroupFilter);
+    rows=rows.filter(r=>symbolInGroup(r.sym,S.activeGroupFilter));
   }
   rows.sort((a,b)=>{
     if(S.sortAlpha){
@@ -4033,14 +4207,19 @@ function buildScreenerRow(m,cols){
   row._sym=m.sym;
   const rt=document.createElement('div');rt.className='rtick';
   const gdot=document.createElement('span');gdot.className='cg-dot';
-  gdot.title='Цветовая группа';
+  gdot.title='Группа/избранное';
   gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
   rt.appendChild(gdot);
+  const fstar=document.createElement('span');
+  fstar.className='cg-fstar';
+  fstar.textContent='★';
+  fstar.title='Избранное';
+  rt.appendChild(fstar);
   const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=m.sym.replace(/USDT$/,'');
   nameSpan.title='Нажмите для копирования';nameSpan.style.cursor='pointer';
   nameSpan.onclick=ev=>{ev.stopPropagation();copyTicker(m.sym.replace(/USDT$/,''));openFullscreenBySym(m.sym);};
   rt.appendChild(nameSpan);
-  row._gdot=gdot;row._name=nameSpan;row.appendChild(rt);
+  row._gdot=gdot;row._fstar=fstar;row._name=nameSpan;row.appendChild(rt);
   const rg=document.createElement('div');rg.className='rmgrid';
   const cellArr=[];
   for(const c of cols){
@@ -4072,11 +4251,13 @@ function updateScreenerRow(row,m,cols,inChart){
   row._sym=m.sym;
   const gdot=row._gdot;
   if(gdot){
-    const nc=grpCol||'var(--bg4)';
-    const nb=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
-    if(gdot.style.background!==nc)gdot.style.background=nc;
-    if(gdot.style.borderColor!==nb)gdot.style.borderColor=nb;
+    styleGroupDot(gdot,m.sym);
     gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
+  }
+  const fstar=row._fstar;
+  if(fstar){
+    const on=isSymFavorite(m.sym);
+    fstar.style.display=on?'inline-block':'none';
   }
   const nameTxt=m.sym.replace(/USDT$/,'');
   if(row._name&&row._name.textContent!==nameTxt)row._name.textContent=nameTxt;
@@ -4255,6 +4436,7 @@ function changePage(delta){
 
 function setTf(tf,btnId){
   S.tf=tf;
+  S.kTrend={};
   document.querySelectorAll('#toolbar .tbtn').forEach(b=>{
     if(['tf1m','tf5m','tf15m','tf1h','tf4h','tf1d'].includes(b.id)||b.dataset.tf)b.classList.remove('on');
   });
@@ -4265,6 +4447,11 @@ function setTf(tf,btnId){
   S.charts.forEach(c=>{c.sym=null;c.candles=[];});
   syms.forEach((sym,i)=>{if(sym)loadChart(i,sym);});
   restartChartStreams(700);
+  calcAll();
+  renderTable();
+  rebuildScreenerHeaders();
+  refreshMetricKlinesSlice();
+  schedulePersistUserSettings();
 }
 
 function onSearch(q){S.q=q;S.page=0;updateCharts();renderTable();}
@@ -4275,6 +4462,7 @@ function onVolFilter(val){
   ['volVal','fsVolVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=disp;});
   ['volSlider','fsVolSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=val;});
   S.page=0;updateCharts();renderTable();
+  schedulePersistUserSettings();
 }
 function onTrdFilter(val){
   // 1 step = 50k trades/day. Range 0..2M by default.
@@ -4283,6 +4471,7 @@ function onTrdFilter(val){
   ['trdVal','fsTrdVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=disp;});
   ['trdSlider','fsTrdSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=val;});
   S.page=0;updateCharts();renderTable();
+  schedulePersistUserSettings();
 }
 
 const STREAM_STALE_MS=20000;
@@ -4417,6 +4606,7 @@ function toggleChartAutoSync(){
   S.chartAutoSync=!S.chartAutoSync;
   saveChartAutoSyncPref();
   syncChartSyncBtnUi();
+  schedulePersistUserSettings();
 }
 
 function updateToggleScrBtn(){
@@ -4441,6 +4631,7 @@ function updateCharts(){
   }
   if(changed)restartChartStreams(600);
   updatePagination(rows.length);
+  schedulePersistUserSettings();
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -4622,6 +4813,23 @@ function clearFsDrawings(){
 //  #9: COLOR GROUPS
 // ═══════════════════════════════════════════════════════════════
 function getSymGroup(sym){return S.symGroups[sym]||0;}
+function isSymFavorite(sym){return !!S.symFavorites?.[sym];}
+function symbolInGroup(sym,g){
+  if(!sym||!g)return false;
+  if(g===FAVORITE_GROUP_ID)return isSymFavorite(sym);
+  return getSymGroup(sym)===g;
+}
+function styleGroupDot(dot,sym){
+  if(!dot)return;
+  const grp=getSymGroup(sym);
+  const col=GROUP_COLORS[grp]||'';
+  dot.style.display=sym?'inline-block':'none';
+  dot.textContent='';
+  dot.style.color='';
+  dot.style.fontSize='';
+  dot.style.background=col||'var(--bg4)';
+  dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';
+}
 let _groupUiRaf=0;
 function scheduleGroupUiRefresh(){
   if(_groupUiRaf)return;
@@ -4633,11 +4841,25 @@ function scheduleGroupUiRefresh(){
   });
 }
 function setSymGroup(sym,g){
-  if(g===0)delete S.symGroups[sym];
-  else S.symGroups[sym]=g;
+  if(g===FAVORITE_GROUP_ID){
+    if(sym)S.symFavorites[sym]=true;
+  }else if(g===0){
+    delete S.symGroups[sym];
+  }else{
+    S.symGroups[sym]=g;
+  }
   // update color stripe in chart headers immediately
   S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
   scheduleGroupUiRefresh();
+  schedulePersistUserSettings();
+}
+function setSymFavorite(sym,on){
+  if(!sym)return;
+  if(on)S.symFavorites[sym]=true;
+  else delete S.symFavorites[sym];
+  S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
+  scheduleGroupUiRefresh();
+  schedulePersistUserSettings();
 }
 
 function buildGroupFilterBar(){
@@ -4656,15 +4878,32 @@ function buildGroupFilterBar(){
     allBtn.textContent='Все';
     allBtn.onclick=()=>{S.activeGroupFilter=0;S._potFilterPreset=null;scheduleGroupUiRefresh();};
     grpSec.appendChild(allBtn);
-    for(let g=1;g<=7;g++){
-      const cnt=Object.values(S.symGroups).filter(v=>v===g).length;
+    for(let g=1;g<=FAVORITE_GROUP_ID;g++){
+      const cnt=g===FAVORITE_GROUP_ID
+        ? Object.keys(S.symFavorites).length
+        : Object.values(S.symGroups).filter(v=>v===g).length;
       // Hide group button if no coins assigned AND it's not the active filter
       if(cnt===0&&S.activeGroupFilter!==g)continue;
       const wrap=document.createElement('div');wrap.style.cssText='position:relative;display:flex;align-items:center;';
       const btn=document.createElement('div');
       btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'');
-      btn.style.background=GROUP_COLORS[g];
-      btn.title=`Группа ${g} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
+      if(g===FAVORITE_GROUP_ID){
+        btn.style.background='transparent';
+        btn.style.border='none';
+        btn.style.borderRadius='0';
+        btn.style.width='auto';
+        btn.style.height='auto';
+        btn.style.padding='0 2px';
+        btn.style.color=FAVORITE_GROUP_COLOR;
+        btn.style.display='inline-flex';
+        btn.style.alignItems='center';
+        btn.style.justifyContent='center';
+        btn.textContent='★';
+      }else{
+        btn.style.background=GROUP_COLORS[g];
+        btn.textContent='';
+      }
+      btn.title=`${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
       btn.onclick=()=>{
         const next=S.activeGroupFilter===g?0:g;
         S.activeGroupFilter=next;
@@ -4673,14 +4912,16 @@ function buildGroupFilterBar(){
       };
       btn.oncontextmenu=ev=>{ev.preventDefault();ev.stopPropagation();
         if(!cnt)return;
-        showConfirmModal(`Очистить группу ${g} (${cnt} монет)?`,{
-          title:'Очистка группы',
+        showConfirmModal(`Очистить ${g===FAVORITE_GROUP_ID?'избранное':`группу ${g}`} (${cnt} монет)?`,{
+          title:g===FAVORITE_GROUP_ID?'Очистка избранного':'Очистка группы',
           okText:'Очистить',
           danger:true,
           onConfirm:()=>{
-            Object.keys(S.symGroups).forEach(s=>{if(S.symGroups[s]===g)delete S.symGroups[s];});
+            if(g===FAVORITE_GROUP_ID)S.symFavorites={};
+            else Object.keys(S.symGroups).forEach(s=>{if(S.symGroups[s]===g)delete S.symGroups[s];});
             if(S.activeGroupFilter===g)S.activeGroupFilter=0;
             scheduleGroupUiRefresh();
+            schedulePersistUserSettings();
           }
         });
       };
@@ -4688,7 +4929,7 @@ function buildGroupFilterBar(){
       // Small "+" button to manage this group
       const addBtn=document.createElement('button');
       addBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font:inherit;font-size:8px;padding:0 1px;line-height:1;margin-left:-1px;';
-      addBtn.title=`Управление группой ${g}`;addBtn.textContent='＋';
+      addBtn.title=g===FAVORITE_GROUP_ID?'Управление избранным':`Управление группой ${g}`;addBtn.textContent='＋';
       addBtn.onclick=ev=>{ev.stopPropagation();openGroupManager(g);};
       wrap.appendChild(addBtn);
       grpSec.appendChild(wrap);
@@ -4729,13 +4970,7 @@ function buildGroupFilterBar(){
 }
 
 function showGroupPicker(sym,anchorEl){
-  // Auto-assign to last used group (or remove if already in that group)
-  const cur=getSymGroup(sym);
-  const target=S.lastGroupUsed||1;
-  if(cur===target){setSymGroup(sym,0);}
-  else{setSymGroup(sym,target);S.lastGroupUsed=target;}
-  syncAllGroupDots(sym);
-  // Show quick-change picker so user can pick a different color
+  // Open picker with explicit color + favorite actions
   showQuickGroupChanger(sym,anchorEl);
 }
 
@@ -4755,7 +4990,7 @@ function showQuickGroupChanger(sym,anchorEl){
     box-shadow:0 4px 16px rgba(0,0,0,.6)`;
   // Label
   const lbl=document.createElement('div');lbl.style.cssText='font-size:9px;color:var(--text3);padding-bottom:2px;border-bottom:1px solid var(--border);';
-  lbl.textContent='Изменить группу:';pick.appendChild(lbl);
+  lbl.textContent='Цветовая группа + Избранное:';pick.appendChild(lbl);
   // Color row
   const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;';
   // "none" option
@@ -4773,6 +5008,14 @@ function showQuickGroupChanger(sym,anchorEl){
     dot.onclick=()=>{S.lastGroupUsed=g;setSymGroup(sym,g);pick.remove();syncAllGroupDots(sym);};
     row.appendChild(dot);
   }
+  const favOn=isSymFavorite(sym);
+  const fav=document.createElement('div');
+  fav.className='cg-dot cg-fav-dot';
+  fav.textContent='★';
+  fav.title='Избранное · нажмите чтобы добавить/убрать';
+  if(favOn)fav.style.outline='2px solid #fff';
+  fav.onclick=()=>{setSymFavorite(sym,!favOn);pick.remove();syncAllGroupDots(sym);};
+  row.appendChild(fav);
   pick.appendChild(row);
   document.body.appendChild(pick);
   // Position picker above the anchor when possible (so it doesn't block items below).
@@ -4791,12 +5034,12 @@ function showQuickGroupChanger(sym,anchorEl){
 function syncAllGroupDots(sym){
   S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
   const fsCgDot=document.getElementById('fsCgDot');
-  if(fsCgDot&&S.fsSym===sym){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
+  if(fsCgDot&&S.fsSym===sym)styleGroupDot(fsCgDot,sym);
 }
 
 function openGroupManager(g){
   const old=document.getElementById('groupMgrModal');if(old)old.remove();
-  const col=GROUP_COLORS[g];
+  const col=g===FAVORITE_GROUP_ID?FAVORITE_GROUP_COLOR:GROUP_COLORS[g];
   const modal=document.createElement('div');modal.id='groupMgrModal';
   modal.style.cssText='position:fixed;inset:0;z-index:700;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;';
   const box=document.createElement('div');
@@ -4804,8 +5047,8 @@ function openGroupManager(g){
   // Header
   const hdr=document.createElement('div');
   hdr.style.cssText='display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);gap:8px;flex-shrink:0';
-  hdr.innerHTML=`<span style="width:12px;height:12px;border-radius:50%;background:${col};display:inline-block;flex-shrink:0"></span>
-    <span style="font-size:11px;font-weight:600;color:#fff;flex:1">Группа ${g}</span>
+  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'★':''}</span>
+    <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`}</span>
     <span style="font-size:9px;color:var(--text3)">Нажмите монету чтобы добавить/убрать</span>
     <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">✕</button>`;
   box.appendChild(hdr);
@@ -4819,20 +5062,24 @@ function openGroupManager(g){
   const buildList=(q='')=>{
     list.innerHTML='';
     const rows=Object.values(S.mx).filter(m=>!q||m.sym.includes(q.toUpperCase())).sort((a,b)=>{
-      const ag=getSymGroup(a.sym)===g?0:1,bg=getSymGroup(b.sym)===g?0:1;
+      const ag=symbolInGroup(a.sym,g)?0:1,bg=symbolInGroup(b.sym,g)?0:1;
       if(ag!==bg)return ag-bg;return a.sym.localeCompare(b.sym);
     });
     const frag=document.createDocumentFragment();
     for(const m of rows){
-      const inGrp=getSymGroup(m.sym)===g;
+      const inGrp=symbolInGroup(m.sym,g);
       const row=document.createElement('div');
       row.style.cssText=`display:flex;align-items:center;padding:5px 12px;cursor:pointer;gap:8px;border-bottom:1px solid rgba(37,37,48,.4);transition:background .06s;${inGrp?'background:rgba(255,255,255,.04)':''}`;
-      row.innerHTML=`<span style="width:8px;height:8px;border-radius:50%;background:${inGrp?col:'var(--bg4)'};border:1px solid ${inGrp?col:'var(--border2)'};flex-shrink:0"></span>
+      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'★':'☆'):''}</span>
         <span style="font-size:10px;font-weight:500;color:${inGrp?'#fff':'var(--text2)'};flex:1">${m.sym.replace(/USDT$/,'')}</span>
         ${inGrp?`<span style="font-size:9px;color:${col}">✓ в группе</span>`:''}`;
       row.onmouseenter=()=>row.style.background=inGrp?'rgba(255,255,255,.07)':'rgba(255,255,255,.025)';
       row.onmouseleave=()=>row.style.background=inGrp?'rgba(255,255,255,.04)':'';
-      row.onclick=()=>{setSymGroup(m.sym,inGrp?0:g);buildList(srch.value);};
+      row.onclick=()=>{
+        if(g===FAVORITE_GROUP_ID)setSymFavorite(m.sym,!inGrp);
+        else setSymGroup(m.sym,inGrp?0:g);
+        buildList(srch.value);
+      };
       frag.appendChild(row);
     }
     list.appendChild(frag);
@@ -4934,12 +5181,39 @@ function switchSettingsTab(tab){
 function tbtnHtml(id,label,onclick,active){return`<button class="tbtn${active?' on':''}" id="${id}" onclick="${onclick}">${label}</button>`;}
 
 function renderSettingsGen(body){
+  const fsPresetLabel=(
+    S.fsLayoutPreset==='two_horizontal'?'2 графика (горизонтально)':
+    S.fsLayoutPreset==='two_vertical'?'2 графика (вертикально)':
+    S.fsLayoutPreset==='four_grid'?'4 графика (2×2)':
+    '3 графика (широкий сверху)'
+  );
   body.innerHTML=`
   <div class="smodal-row">
-    <span class="smodal-lbl">Графиков на странице</span>
-    <div class="smodal-btns">
-      ${tbtnHtml('sg4','2×2',"setGridSize(4)",S.gridSize===4)}
-      ${tbtnHtml('sg9','3×3',"setGridSize(9)",S.gridSize===9)}
+    <span class="smodal-lbl">Мини-графики: вертикаль × горизонталь</span>
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;max-width:290px;flex:1">
+      <div style="display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-end">
+        <span style="font-size:9px;color:var(--text3);min-width:54px">Вертикаль</span>
+        <input type="range" min="1" max="7" step="1" value="${S.gridRows}" oninput="setGridRows(this.value)" style="flex:1;max-width:170px">
+        <span style="font-size:10px;color:var(--text3);min-width:20px;text-align:right">${S.gridRows}</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-end">
+        <span style="font-size:9px;color:var(--text3);min-width:54px">Горизонталь</span>
+        <input type="range" min="1" max="7" step="1" value="${S.gridCols}" oninput="setGridCols(this.value)" style="flex:1;max-width:170px">
+        <span style="font-size:10px;color:var(--text3);min-width:20px;text-align:right">${S.gridCols}</span>
+      </div>
+      <div style="font-size:9px;color:var(--text3)">Итог: ${S.gridRows} × ${S.gridCols} = ${S.gridSize} графиков</div>
+    </div>
+  </div>
+  <div class="smodal-row">
+    <span class="smodal-lbl">Крупный режим: пресеты</span>
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;max-width:320px;flex:1">
+      <div class="smodal-btns" style="gap:4px;flex-wrap:wrap;justify-content:flex-end">
+        ${tbtnHtml('fspH2','2 гориз',"setFsLayoutPreset('two_horizontal')",S.fsLayoutPreset==='two_horizontal')}
+        ${tbtnHtml('fspV2','2 вертик',"setFsLayoutPreset('two_vertical')",S.fsLayoutPreset==='two_vertical')}
+        ${tbtnHtml('fsp3','3 (шир+2)',"setFsLayoutPreset('three_top_wide')",S.fsLayoutPreset==='three_top_wide')}
+        ${tbtnHtml('fsp4','2×2',"setFsLayoutPreset('four_grid')",S.fsLayoutPreset==='four_grid')}
+      </div>
+      <div style="font-size:9px;color:var(--text3)">Активный: ${fsPresetLabel}</div>
     </div>
   </div>
   <div class="smodal-row">
@@ -4983,7 +5257,7 @@ function renderSettingsGen(body){
     <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">На полноэкранных графиках масштаб и отступ справа подстраиваются по ширине окна: показывается больше свечей, «пустые» бары справа слегка ужимаются — чтобы крупный график не казался чрезмерно «растянутым».</span>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Автосмена монет в графиках 3×3</span>
+    <span class="smodal-lbl">Автосмена монет в сетке графиков</span>
     <div class="smodal-btns">
       ${tbtnHtml('cSynOn','Вкл',"setChartAutoSyncOpt(true)",S.chartAutoSync)}
       ${tbtnHtml('cSynOff','Стоп',"setChartAutoSyncOpt(false)",!S.chartAutoSync)}
@@ -5016,6 +5290,7 @@ function setChartAutoSyncOpt(on){
   syncChartSyncBtnUi();
   const body=document.getElementById('smodal-body');
   if(body&&S.settingsTab==='gen')renderSettingsGen(body);
+  schedulePersistUserSettings();
 }
 function setSessionFxEnabled(on){
   S.sessionFx.enabled=!!on;
@@ -5024,6 +5299,7 @@ function setSessionFxEnabled(on){
   if(body&&S.settingsTab==='gen')renderSettingsGen(body);
   renderTable();
   [...S.charts,...S.fsCharts].forEach(ch=>{if(ch?.canvas&&ch?.lc)rCanvas(ch);});
+  schedulePersistUserSettings();
 }
 function toggleSessionBand(which){
   if(which==='asia')S.sessionFx.asia=!S.sessionFx.asia;
@@ -5034,6 +5310,7 @@ function toggleSessionBand(which){
   if(body&&S.settingsTab==='gen')renderSettingsGen(body);
   renderTable();
   [...S.charts,...S.fsCharts].forEach(ch=>{if(ch?.canvas&&ch?.lc)rCanvas(ch);});
+  schedulePersistUserSettings();
 }
 
 function renderSettingsChartHead(body){
@@ -5060,6 +5337,7 @@ function renderSettingsChartHead(body){
       if(fi<0||ti<0)return;
       S.chartHeadOrder.splice(fi,1);S.chartHeadOrder.splice(ti,0,fromId);
       saveChartHeadPrefs();
+      schedulePersistUserSettings();
       renderSettingsChartHead(body);
       applyChartHeadLayoutAll();
       for(let s=0;s<S.gridSize;s++){
@@ -5077,6 +5355,7 @@ function toggleChartHeadCol(id,el){
   else S.chartHeadVisible.add(id);
   el.classList.toggle('checked',S.chartHeadVisible.has(id));
   saveChartHeadPrefs();
+  schedulePersistUserSettings();
   applyChartHeadLayoutAll();
   for(let s=0;s<S.gridSize;s++){
     const sym=S.charts[s]?.sym;if(sym)updateChartHeader(s,sym);
@@ -5110,6 +5389,7 @@ function renderSettingsInd(body){
       S.colOrder.splice(fi,1);S.colOrder.splice(ti,0,fromId);
       renderSettingsInd(body);
       rebuildScreenerHeaders();renderTable();
+      schedulePersistUserSettings();
     });
     list.appendChild(item);
   });
@@ -5121,6 +5401,7 @@ function toggleCol(id,el){
   else S.colVisible.add(id);
   el.classList.toggle('checked',S.colVisible.has(id));
   rebuildScreenerHeaders();renderTable();
+  schedulePersistUserSettings();
 }
 
 function autoResizeScreener(){
@@ -5149,28 +5430,72 @@ function rebuildScreenerHeaders(){
   autoResizeScreener();
 }
 
-function setGridSize(n){
-  if(S.gridSize===n)return;S.gridSize=n;
+function setGridSize(n, opts){
+  n=Math.max(1,Math.min(49,+n|0));
+  const skipAutoFill=opts&&opts.skipAutoFill;
+  if(S.gridSize===n)return;
+  S.gridSize=n;
   S.charts=Array.from({length:n},()=>mkChart());
   buildChartGrid();if(S.LC)for(let i=0;i<n;i++)initLCChart(i);
-  S.page=0;updateCharts();restartChartStreams(0);
+  S.page=0;
+  if(!skipAutoFill){updateCharts();restartChartStreams(0);}
   renderSettingsGen(document.getElementById('smodal-body'));
+  schedulePersistUserSettings();
+}
+function applyGridAxes(rows,cols,opts){
+  rows=Math.max(1,Math.min(7,+rows|0));
+  cols=Math.max(1,Math.min(7,+cols|0));
+  const skipAutoFill=opts&&opts.skipAutoFill;
+  if(S.gridRows===rows&&S.gridCols===cols)return;
+  S.gridRows=rows;S.gridCols=cols;
+  setGridSize(rows*cols,{skipAutoFill});
+}
+function setGridRows(rows){applyGridAxes(rows,S.gridCols);}
+function setGridCols(cols){applyGridAxes(S.gridRows,cols);}
+function getFsPresetCount(preset){
+  if(preset==='two_horizontal'||preset==='two_vertical')return 2;
+  if(preset==='four_grid')return 4;
+  return 3;
+}
+function buildFsChartsFromConfig(){
+  S.fsChartCount=getFsPresetCount(S.fsLayoutPreset);
+  const next=[];
+  for(let i=0;i<S.fsChartCount;i++){
+    let tf=S.fsChartTfs[i]||FS_TFS[Math.min(i,FS_TFS.length-1)]||'5m';
+    if(!FS_TFS.includes(tf))tf='5m';
+    next.push(tf);
+  }
+  S.fsChartTfs=next;
+  S.fsCharts=next.map(tf=>mkFsChart(tf));
+}
+function setFsLayoutPreset(preset){
+  if(!['two_horizontal','two_vertical','three_top_wide','four_grid'].includes(preset))return;
+  if(S.fsLayoutPreset===preset)return;
+  S.fsLayoutPreset=preset;
+  buildFsChartsFromConfig();
+  if(S.fsOpen)openFullscreenBySym(S.fsSym);
+  const body=document.getElementById('smodal-body');
+  if(body&&S.settingsTab==='gen')renderSettingsGen(body);
+  schedulePersistUserSettings();
 }
 
 function setUpColor(color){
   const upC=color==='white'?'#cccccc':'#1fa891';S.upColor=upC;
   [...S.charts,...S.fsCharts].forEach(ch=>{if(ch.cs)try{ch.cs.applyOptions({upColor:upC,borderUpColor:upC,wickUpColor:upC});}catch(e){}});
   renderSettingsGen(document.getElementById('smodal-body'));
+  schedulePersistUserSettings();
 }
 
 function setWatermark(on){
   S.wmVisible=on;document.querySelectorAll('.chart-wm').forEach(el=>el.style.display=on?'flex':'none');
   renderSettingsGen(document.getElementById('smodal-body'));
+  schedulePersistUserSettings();
 }
 
 function setSortAbs(on){
   S.sortAbs=on;updSortHdr();updateCharts();renderTable();
   renderSettingsGen(document.getElementById('smodal-body'));
+  schedulePersistUserSettings();
 }
 
 function setChartRightOffset(v){
@@ -5179,6 +5504,7 @@ function setChartRightOffset(v){
   applyDefaultChartViewAll();
   const el=document.getElementById('chartRoVal');if(el)el.textContent=String(S.chartRightOffset);
   const sl=document.getElementById('chartRoSlider');if(sl)sl.value=String(S.chartRightOffset);
+  schedulePersistUserSettings();
 }
 function setChartVisibleBars(v){
   S.chartVisibleBars=Math.max(40,Math.min(220,+v));
@@ -5186,13 +5512,52 @@ function setChartVisibleBars(v){
   applyDefaultChartViewAll();
   const el=document.getElementById('chartVisVal');if(el)el.textContent=String(S.chartVisibleBars);
   const sl=document.getElementById('chartVisSlider');if(sl)sl.value=String(S.chartVisibleBars);
+  schedulePersistUserSettings();
 }
 
 // ═══════════════════════════════════════════════════════════════
 //  FULLSCREEN ANALYSIS
 // ═══════════════════════════════════════════════════════════════
+function buildFsChartLayout(){
+  const area=document.getElementById('fsChartArea');
+  if(!area)return;
+  area.innerHTML='';
+  const makeCell=(idx,label)=>{
+    const cell=document.createElement('div');
+    cell.className='fs-dyn-cell';
+    const bar=document.createElement('div');
+    bar.className='fs-tf-bar';
+    bar.id=`fsTfBar${idx}`;
+    bar.innerHTML=`<span class="fs-label">${label}:</span>`;
+    const el=document.createElement('div');
+    el.className='fs-chart-el';
+    el.id=`fsChartEl${idx}`;
+    cell.append(bar,el);
+    return cell;
+  };
+  if(S.fsLayoutPreset==='two_horizontal'){
+    area.className='fs-layout-2h';
+    area.append(makeCell(0,'ВЕРХ'),makeCell(1,'НИЗ'));
+    return;
+  }
+  if(S.fsLayoutPreset==='two_vertical'){
+    area.className='fs-layout-2v';
+    area.append(makeCell(0,'ЛЕВЫЙ'),makeCell(1,'ПРАВЫЙ'));
+    return;
+  }
+  if(S.fsLayoutPreset==='four_grid'){
+    area.className='fs-layout-4';
+    area.append(makeCell(0,'ЛЕВЫЙ ВЕРХ'),makeCell(1,'ПРАВЫЙ ВЕРХ'),makeCell(2,'ЛЕВЫЙ НИЗ'),makeCell(3,'ПРАВЫЙ НИЗ'));
+    return;
+  }
+  area.className='fs-layout-3';
+  const top=makeCell(0,'ОСНОВНОЙ');
+  top.classList.add('fs-span-all');
+  area.append(top,makeCell(1,'ЛЕВЫЙ'),makeCell(2,'ПРАВЫЙ'));
+}
 function buildFsTfBar(barId,idx){
   const bar=document.getElementById(barId);
+  if(!bar)return;
   Array.from(bar.children).forEach(c=>{if(!c.classList.contains('fs-label'))c.remove();});
   const activeTf=S.fsCharts[idx].tf;
   FS_TFS.forEach(tf=>{
@@ -5216,26 +5581,15 @@ async function loadFsChart(idx){
   if(!sym||!fch.cs||!fch.lc)return;
   fch._histBootstrapDone=false;
   fch._oiHist=[];fch._oiRaw=[];fch._oiLastFetchTs=0;
-  try{
-    let raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
-    if(S.fsSym!==sym)return;
-    let candles=parseKlines(raw);
-    if(candles.length<MIN_CHART_CANDLES){
-      raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
-      if(S.fsSym!==sym)return;
-      candles=parseKlines(raw);
-    }
+  const applyCandles=(candles)=>{
     fch.candles=candles.slice(-HIST_CACHE_MAX);
     if(fch.candles.length<MIN_CHART_CANDLES){
       fch._histBootstrapDone=false;
-      console.warn('loadFsChart thin',sym,fch.tf,fch.candles.length);
-      return;
+      return false;
     }
     fch._histBootstrapDone=true;
-    if(fch.candles.length){
-      const lp=fch.candles[fch.candles.length-1].c;
-      fch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
-    }
+    const lp=fch.candles[fch.candles.length-1].c;
+    fch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
     fch.cs.setData(fch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     fch.vs.setData(fch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
     repaintBbSeries(fch);
@@ -5245,6 +5599,27 @@ async function loadFsChart(idx){
     if(lastFsCandle)syncLivePriceLabel(fch,lastFsCandle.c,lastFsCandle.o);
     applyDefaultChartView(fch);
     rCanvas(fch);
+    return true;
+  };
+  try{
+    const cacheKey=`${fch.tf}:${sym}`;
+    const cached=S.histCache[cacheKey];
+    if(Array.isArray(cached)&&cached.length>=MIN_CHART_CANDLES){
+      applyCandles(cached);
+    }
+    let raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
+    if(S.fsSym!==sym)return;
+    let candles=parseKlines(raw);
+    if(candles.length<MIN_CHART_CANDLES){
+      raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      if(S.fsSym!==sym)return;
+      candles=parseKlines(raw);
+    }
+    S.histCache[cacheKey]=candles.slice(-HIST_CACHE_MAX);
+    if(!applyCandles(candles)){
+      console.warn('loadFsChart thin',sym,fch.tf,candles.length);
+      return;
+    }
   }catch(e){console.warn('loadFsChart',e);}
 }
 
@@ -5295,13 +5670,16 @@ function openFullscreenBySym(sym){
   setCoinIcon('fsSymIcon',sym);
   // Update FS color dot
   const fsCgDot=document.getElementById('fsCgDot');
-  if(fsCgDot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
+  if(fsCgDot)styleGroupDot(fsCgDot,sym);
   updateFsHeaderValues();
   // Build FS screener
   buildScreenerHeader(document.getElementById('fsShdr'));
   renderTable();
-  // Build 3 FS charts
-  for(let i=0;i<3;i++){buildFsTfBar(`fsTfBar${i}`,i);initFsChart(i);loadFsChart(i);}
+  // Build configurable FS charts (load first chart with priority)
+  buildFsChartLayout();
+  for(let i=0;i<S.fsChartCount;i++){buildFsTfBar(`fsTfBar${i}`,i);initFsChart(i);}
+  if(S.fsChartCount>0)loadFsChart(0);
+  for(let i=1;i<S.fsChartCount;i++)setTimeout(()=>loadFsChart(i),0);
   refreshEMAButtonState();
   startFsWs();
   setTimeout(autoResizeScreener,100);
@@ -5342,10 +5720,13 @@ function goHome(){
 }
 
 async function setFsTf(idx,tf){
+  if(idx<0||idx>=S.fsCharts.length)return;
   S.fsCharts[idx].tf=tf;
+  S.fsChartTfs[idx]=tf;
   const bar=document.getElementById(`fsTfBar${idx}`);
-  bar.querySelectorAll('.fs-tf-btn').forEach(b=>b.classList.toggle('on',b.textContent===tf));
+  if(bar)bar.querySelectorAll('.fs-tf-btn').forEach(b=>b.classList.toggle('on',b.textContent===tf));
   initFsChart(idx);await loadFsChart(idx);startFsWs();
+  schedulePersistUserSettings();
 }
 
 let _wsFsGen=0;
@@ -5425,9 +5806,16 @@ async function loadKlinesBackground(){
   try{
     const top=Object.entries(S.tk).filter(([s])=>S.syms.includes(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
     const all=top.slice(0);
-    Object.assign(S.k5m,await batchKlines(all,'5m',300,null,null,8));
-    Object.assign(S.k1h,await batchKlines(all,'1h',170,null,null,8));
-    Object.assign(S.k1m,await batchKlines(all,'1m',70,null,null,6));
+    const trendTf=S.tf;
+    const trendLim=trendKlineFetchLimit(trendTf);
+    const [k5,k1h,k1m,kTr]=await Promise.all([
+      batchKlines(all,'5m',300,null,null,8),
+      batchKlines(all,'1h',170,null,null,8),
+      batchKlines(all,'1m',70,null,null,6),
+      batchKlines(all,trendTf,trendLim,null,null,8),
+    ]);
+    Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
+    if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
     calcAll();renderTable();
     refreshMetricKlinesSlice();
   }catch(e){
@@ -5442,6 +5830,153 @@ function loadScript(url){return new Promise((res,rej)=>{const s=document.createE
 // ═══════════════════════════════════════════════════════════════
 //  MAIN
 // ═══════════════════════════════════════════════════════════════
+function hydrateUserSession(){
+  const pd=window.__pendingDrawings;
+  if(pd&&typeof pd==='object'){
+    for(const [sym,dr] of Object.entries(pd)){
+      if(!Array.isArray(dr))continue;
+      S.symDrawings[sym]=cloneDrawings(dr);
+    }
+    rebumpDrawIdAfterLoad();
+    window.__pendingDrawings=null;
+  }
+  const ps=window.__pendingUserSettings;
+  window.__pendingUserSettings=null;
+  if(!ps||typeof ps!=='object')return false;
+
+  if(ps.symGroups&&typeof ps.symGroups==='object')
+    Object.assign(S.symGroups,ps.symGroups);
+  if(ps.symFavorites&&typeof ps.symFavorites==='object'){
+    Object.keys(ps.symFavorites).forEach(sym=>{if(ps.symFavorites[sym])S.symFavorites[sym]=true;});
+  }
+  if(ps.lastGroupUsed!=null&&!isNaN(+ps.lastGroupUsed))S.lastGroupUsed=Math.max(1,Math.min(7,+ps.lastGroupUsed|0));
+  if(ps.activeGroupFilter!=null&&!isNaN(+ps.activeGroupFilter))S.activeGroupFilter=Math.max(0,Math.min(FAVORITE_GROUP_ID,+ps.activeGroupFilter|0));
+  if(ps.search!=null)S.q=String(ps.search);
+  if(typeof ps.chartAutoSync==='boolean')S.chartAutoSync=ps.chartAutoSync;
+  if(ps.chartHead&&typeof ps.chartHead==='object'){
+    if(Array.isArray(ps.chartHead.order)){
+      const seen=new Set();
+      const next=[];
+      for(const id of ps.chartHead.order){if(CHART_HEAD_IDS.includes(id)&&!seen.has(id)){next.push(id);seen.add(id);}}
+      for(const id of CHART_HEAD_IDS){if(!seen.has(id))next.push(id);}
+      S.chartHeadOrder=next;
+    }
+    if(Array.isArray(ps.chartHead.visible)){
+      S.chartHeadVisible=new Set(ps.chartHead.visible.filter(id=>CHART_HEAD_IDS.includes(id)));
+      if(!S.chartHeadVisible.size)S.chartHeadVisible=new Set(['chg','vol','trd','natr']);
+    }
+  }
+  if(ps.columns&&typeof ps.columns==='object'){
+    if(Array.isArray(ps.columns.order)){
+      const seen=new Set();
+      const next=[];
+      for(const id of ps.columns.order){if(ALL_COLS.some(c=>c.id===id)&&!seen.has(id)){next.push(id);seen.add(id);}}
+      for(const c of ALL_COLS){if(!seen.has(c.id))next.push(c.id);}
+      S.colOrder=next;
+    }
+    if(Array.isArray(ps.columns.visible)){
+      const vis=ps.columns.visible.filter(id=>ALL_COLS.some(c=>c.id===id));
+      if(vis.length)S.colVisible=new Set(vis);
+    }
+  }
+  if(ps.lineColors&&typeof ps.lineColors==='object'){
+    for(const k of['hray','tline','aray','atline'])if(typeof ps.lineColors[k]==='string'&&ps.lineColors[k].startsWith('#'))S.lineColors[k]=ps.lineColors[k];
+  }
+  if(ps.chartView&&typeof ps.chartView==='object'){
+    if(ps.chartView.chartRightOffset!=null)S.chartRightOffset=Math.max(0,Math.min(40,+ps.chartView.chartRightOffset));
+    if(ps.chartView.chartVisibleBars!=null)S.chartVisibleBars=Math.max(40,Math.min(220,+ps.chartView.chartVisibleBars));
+  }
+  if(ps.sessionFx&&typeof ps.sessionFx==='object'){
+    if(typeof ps.sessionFx.enabled==='boolean')S.sessionFx.enabled=ps.sessionFx.enabled;
+    if(typeof ps.sessionFx.asia==='boolean')S.sessionFx.asia=ps.sessionFx.asia;
+    if(typeof ps.sessionFx.london==='boolean')S.sessionFx.london=ps.sessionFx.london;
+    if(typeof ps.sessionFx.ny==='boolean')S.sessionFx.ny=ps.sessionFx.ny;
+  }
+  if(typeof ps.showOiOnChart==='boolean')S.showOiOnChart=ps.showOiOnChart;
+  if(typeof ps.showBbOverlay==='boolean')S.showBbOverlay=ps.showBbOverlay;
+  if(ps.alertSettings&&typeof ps.alertSettings==='object'){
+    if(typeof ps.alertSettings.repeat==='boolean')S.alertSettings.repeat=ps.alertSettings.repeat;
+    if(ps.alertSettings.cooldown!=null&&!isNaN(+ps.alertSettings.cooldown))S.alertSettings.cooldown=Math.max(1,Math.min(120,+ps.alertSettings.cooldown));
+    if(typeof ps.alertSettings.sound==='boolean')S.alertSettings.sound=ps.alertSettings.sound;
+  }
+  if(typeof ps.emaVisible==='boolean')S.emaVisible=ps.emaVisible;
+  if(typeof ps.emaCrossSound==='boolean')S.emaCrossSound=ps.emaCrossSound;
+  if(Array.isArray(ps.emaSettings)&&ps.emaSettings.length){
+    S.emaSettings=ps.emaSettings.map(c=>({
+      period:Math.max(2,Math.min(400,+(c?.period||20))),
+      color:(typeof c?.color==='string'&&c.color.startsWith('#'))?c.color:'#a855f7',
+      visible:c?.visible!==false,
+    }));
+  }
+  if(ps.emaSymOverrides&&typeof ps.emaSymOverrides==='object')S.emaSymOverrides=JSON.parse(JSON.stringify(ps.emaSymOverrides));
+  if(ps.emaSymEnabled&&typeof ps.emaSymEnabled==='object')S.emaSymEnabled={...ps.emaSymEnabled};
+  if(Array.isArray(ps.potentialPresets))S.potentialPresets=JSON.parse(JSON.stringify(ps.potentialPresets));
+  if(ps.potFilterPreset!=null)S._potFilterPreset=ps.potFilterPreset||null;
+  if(ps.draw&&typeof ps.draw==='object'){
+    if(typeof ps.draw.brushColor==='string'&&ps.draw.brushColor.startsWith('#'))_brushColor=ps.draw.brushColor;
+    if(ps.draw.brushWidth!=null&&!isNaN(+ps.draw.brushWidth))_brushWidth=Math.max(1,Math.min(12,+ps.draw.brushWidth));
+  }
+  if(ps.sortId&&typeof ps.sortId==='string'){
+    S.sortId=ps.sortId;
+    S.sortAlpha=!!ps.sortAlpha;
+  }
+  if(ps.sortDir==='asc'||ps.sortDir==='desc')S.sortDir=ps.sortDir;
+  if(ps.volMin!=null&&!isNaN(+ps.volMin))S.minVol=+ps.volMin;
+  if(ps.minTrd!=null&&!isNaN(+ps.minTrd))S.minTrd=+ps.minTrd;
+  syncVolTrdSlidersFromState();
+
+  const gs=ps.gridLayout?.gridSize;
+  if(ps.gridLayout?.gridRows!=null&&!isNaN(+ps.gridLayout.gridRows))S.gridRows=Math.max(1,Math.min(7,+ps.gridLayout.gridRows|0));
+  if(ps.gridLayout?.gridCols!=null&&!isNaN(+ps.gridLayout.gridCols))S.gridCols=Math.max(1,Math.min(7,+ps.gridLayout.gridCols|0));
+  if(gs!=null&&gs>=1&&gs<=49&&gs!==S.gridSize)setGridSize(gs|0,{skipAutoFill:true});
+  else{
+    const target=Math.max(1,Math.min(49,S.gridRows*S.gridCols));
+    if(target!==S.gridSize)setGridSize(target,{skipAutoFill:true});
+    else buildChartGrid();
+  }
+
+  if(ps.fsLayout&&typeof ps.fsLayout==='object'){
+    if(typeof ps.fsLayout.preset==='string')S.fsLayoutPreset=ps.fsLayout.preset;
+    if(ps.fsLayout.count!=null&&!isNaN(+ps.fsLayout.count))S.fsChartCount=Math.max(2,Math.min(5,+ps.fsLayout.count|0));
+    if(Array.isArray(ps.fsLayout.tfs))S.fsChartTfs=ps.fsLayout.tfs.filter(tf=>FS_TFS.includes(tf)).slice(0,5);
+  }
+  buildFsChartsFromConfig();
+
+  const restoredTf=typeof ps.tf==='string'&&['1m','5m','15m','1h','4h','1d'].includes(ps.tf);
+  if(restoredTf&&ps.tf!==S.tf)
+    setTf(ps.tf,tfToolbarBtnId(ps.tf));
+
+  if(ps.page!=null&&!isNaN(+ps.page))S.page=Math.max(0,+ps.page|0);
+  if(ps.fsSym&&typeof ps.fsSym==='string')S.fsSym=ps.fsSym;
+
+  const chartSyms=ps.chartSymbols;
+  const validArr=Array.isArray(chartSyms)&&chartSyms.some(s=>s&&String(s).length>0);
+  if(validArr){
+    for(let i=0;i<S.charts.length;i++){
+      const sym=chartSyms[i]||null;
+      if(sym&&typeof sym==='string'&&S.syms.includes(sym))loadChart(i,sym);
+      else loadChart(i,null);
+    }
+  }
+  const rowsPg=sortedRows();
+  const tp=Math.max(1,Math.ceil(rowsPg.length/Math.max(1,S.charts.length)));
+  if(S.page>=tp)S.page=Math.max(0,tp-1);
+  updatePagination(rowsPg.length);
+  rebuildScreenerHeaders();
+  try{
+    localStorage.setItem('cs_chartView',JSON.stringify({chartRightOffset:S.chartRightOffset,chartVisibleBars:S.chartVisibleBars}));
+    localStorage.setItem('cs_chartHead',JSON.stringify({order:S.chartHeadOrder,visible:[...S.chartHeadVisible]}));
+    localStorage.setItem('cs_lineColors',JSON.stringify(S.lineColors));
+    localStorage.setItem('cs_chart_autosync',S.chartAutoSync?'1':'0');
+    localStorage.setItem('cs_sess_fx',JSON.stringify(S.sessionFx));
+    localStorage.setItem('cs_oi_chart',S.showOiOnChart?'1':'0');
+    localStorage.setItem('cs_bb_overlay',S.showBbOverlay?'1':'0');
+  }catch(e){}
+  _lastPersistedSettingsJson=JSON.stringify(collectUserSettings());
+  schedulePersistUserSettings();
+  return validArr;
+}
+
 async function main(){
   try{
     loadChartViewPrefs();
@@ -5475,7 +6010,10 @@ async function main(){
     ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
-    updateCharts();restartChartStreams(0);startScreenerWS();
+    const restoredLayout=hydrateUserSession();
+    if(!restoredLayout)updateCharts();
+    renderTable();
+    restartChartStreams(0);startScreenerWS();
     syncFastBtnUi();
     syncChartSyncBtnUi();
     syncOiChartBtnUi();
@@ -6211,7 +6749,6 @@ function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 registerGridBotScreeners({
   S,
   BACKEND,
-  API,
   fj,
   parseKlines,
   batchKlines,
@@ -6220,6 +6757,10 @@ registerGridBotScreeners({
   openFullscreenBySym,
   bollingerOnTail,
   calcATR,
+  GROUP_COLORS,
+  tagScreenerGroup: (sym, g) => {
+    if (sym && g > 0) setSymGroup(sym, g);
+  },
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -6249,6 +6790,9 @@ window.toggleBbOverlay    = toggleBbOverlay;
 window.renderAlertLog     = renderAlertLog;
 window.dragSpl            = dragSpl;
 window.setGridSize        = setGridSize;
+window.setGridRows        = setGridRows;
+window.setGridCols        = setGridCols;
+window.setFsLayoutPreset  = setFsLayoutPreset;
 window.setUpColor         = setUpColor;
 window.setWatermark       = setWatermark;
 window.setSortAbs         = setSortAbs;

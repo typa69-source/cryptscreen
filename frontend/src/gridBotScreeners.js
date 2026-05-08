@@ -257,7 +257,47 @@ function baseSymbol(sym) {
 }
 
 export function registerGridBotScreeners(deps) {
-  const { S, fj, batchKlines, fn, fmtPrice, openFullscreenBySym, bollingerOnTail, calcATR, BACKEND } = deps;
+  const {
+    S,
+    fj,
+    batchKlines,
+    fn,
+    fmtPrice,
+    openFullscreenBySym,
+    bollingerOnTail,
+    calcATR,
+    BACKEND,
+    GROUP_COLORS = ['', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'],
+    tagScreenerGroup,
+  } = deps;
+
+  // ─── Lightweight caches (avoid re-fetch on reopen) ─────────────
+  const KLINE_CACHE_TTL_MS = 2 * 60 * 1000;
+  const _klineCache = new Map(); // key -> { ts, bySym: Map(sym -> klines[]) }
+
+  function _klineKey(iv, lim) {
+    return `${iv}:${lim}`;
+  }
+
+  async function batchKlinesCached(syms, iv, lim, pFrom, pTo, bs = 10) {
+    const key = _klineKey(iv, lim);
+    const now = Date.now();
+    const cached = _klineCache.get(key);
+    const bySym = cached && now - cached.ts < KLINE_CACHE_TTL_MS ? cached.bySym : new Map();
+
+    const missing = [];
+    for (const s of syms) if (!bySym.has(s)) missing.push(s);
+
+    if (missing.length) {
+      const fresh = await batchKlines(missing, iv, lim, pFrom, pTo, bs);
+      for (const [sym, kl] of Object.entries(fresh || {})) bySym.set(sym, kl);
+      _klineCache.set(key, { ts: now, bySym });
+    }
+
+    const out = {};
+    for (const s of syms) if (bySym.has(s)) out[s] = bySym.get(s);
+    return out;
+  }
 
   function vol24For(sym) {
     return S.mx[sym]?.vol24 ?? S.tk[sym]?.qv ?? null;
@@ -394,11 +434,11 @@ export function registerGridBotScreeners(deps) {
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1…`;
       if (ui.renderMeta) ui.renderMeta();
-      const d1 = await batchKlines(syms, '1d', 100, null, null, 8);
+      const d1 = await batchKlinesCached(syms, '1d', 100, null, null, 10);
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h…`;
       if (ui.renderMeta) ui.renderMeta();
-      const j4h = await batchKlines(syms, '4h', 14, null, null, 8);
+      const j4h = await batchKlinesCached(syms, '4h', 14, null, null, 10);
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
       const rows = [];
@@ -454,7 +494,10 @@ export function registerGridBotScreeners(deps) {
     box.style.cssText =
       'width:min(1100px,98vw);height:min(88vh,900px);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
 
-    const ui = {
+    const cacheKey = '__gbs_swing_v1';
+    const cachedUi = typeof window !== 'undefined' ? window[cacheKey] : null;
+
+    const ui = cachedUi || {
       minScore: 7,
       maxAdx: 25,
       atrLo: 2,
@@ -467,7 +510,34 @@ export function registerGridBotScreeners(deps) {
       loading: false,
       lastRun: 0,
       timer: null,
+      listGroup: 0,
     };
+    if (typeof window !== 'undefined') window[cacheKey] = ui;
+    if (ui.listGroup == null) ui.listGroup = 0;
+
+    function renderSwingGroupPicker() {
+      const host = box.querySelector('#gbsSwingGrp');
+      if (!host) return;
+      host.innerHTML = '';
+      const mk = (g, txt, bg) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tbtn' + (ui.listGroup === g ? ' on' : '');
+        b.textContent = txt;
+        if (g > 0)
+          b.style.cssText = `background:${bg};color:#0c0c0e;border-color:transparent;min-width:22px;padding:2px 6px;font-size:10px`;
+        else b.style.cssText = 'min-width:22px;padding:2px 6px;font-size:10px';
+        b.title = g === 0 ? 'Не задавать цветовую группу в списке' : `Пометить отфильтрованные монеты группой ${g}`;
+        b.onclick = () => {
+          ui.listGroup = g;
+          renderSwingGroupPicker();
+          applyFiltersAndRender();
+        };
+        host.appendChild(b);
+      };
+      mk(0, '—', '');
+      for (let g = 1; g <= 7; g++) mk(g, String(g), GROUP_COLORS[g] || '#666');
+    }
 
     function renderMeta() {
       const lu = box.querySelector('#gbsSwingLu');
@@ -547,9 +617,17 @@ export function registerGridBotScreeners(deps) {
         </tr>`;
         }).join('');
       tb.querySelectorAll('.gbs-open').forEach((el) => {
-        el.onclick = () => openFullscreenBySym(el.closest('tr').dataset.sym);
+        el.onclick = () => {
+          // Close modal but keep cached state, so coming back is instant.
+          if (ui.timer) clearInterval(ui.timer);
+          modal.remove();
+          openFullscreenBySym(el.closest('tr').dataset.sym);
+        };
       });
       renderMeta();
+      if (tagScreenerGroup && ui.listGroup > 0) {
+        for (const r of rows) tagScreenerGroup(r.sym, ui.listGroup);
+      }
     }
 
     box.innerHTML = `
@@ -568,6 +646,7 @@ export function registerGridBotScreeners(deps) {
         <span id="gbsSwingMaxAdxV">25</span>
         <label>ATR% от <input type="number" id="gbsSwingAtrLo" value="2" step="0.1" style="width:52px"></label>
         <label>до <input type="number" id="gbsSwingAtrHi" value="8" step="0.1" style="width:52px"></label>
+        <span style="display:flex;align-items:center;gap:5px;color:var(--text3)">Группа в списке <span id="gbsSwingGrp" style="display:flex;gap:3px;flex-wrap:wrap;align-items:center"></span></span>
         <span style="color:var(--text3)">Объём: слайдер в тулбаре (как в списке)</span>
         <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsSwingLu">—</span></span>
       </div>
@@ -578,10 +657,10 @@ export function registerGridBotScreeners(deps) {
             <th class="gbs-th" data-k="ch24">24ч %</th>
             <th class="gbs-th" data-k="h4ch">4ч %</th>
             <th class="gbs-th" data-k="score">Score</th>
-            <th class="gbs-th" data-k="adx">ADX</th>
+            <th class="gbs-th" data-k="adx" title="ADX (Average Directional Index) — сила тренда. Для грида чаще лучше ниже.">ADX</th>
             <th class="gbs-th">Сетка p5–p95</th>
             <th class="gbs-th">Шаг 0.5×ATR</th>
-            <th class="gbs-th">Метрики</th>
+            <th class="gbs-th" title="Наведи на теги метрик в строке — будет пояснение.">Метрики</th>
           </tr></thead>
           <tbody id="gbsSwingBody"></tbody>
         </table>
@@ -591,6 +670,7 @@ export function registerGridBotScreeners(deps) {
 
     modal.appendChild(box);
     document.body.appendChild(modal);
+    renderSwingGroupPicker();
 
     const onHdr = (e) => {
       const th = e.target.closest('.gbs-th');
@@ -665,6 +745,8 @@ export function registerGridBotScreeners(deps) {
     ui.renderMeta = renderMeta;
     ui.applyFiltersAndRender = applyFiltersAndRender;
     ui.timer = setInterval(() => runSwingScan(ui), 300000);
+    // If we already have results, show them immediately; update in background.
+    if (ui.lastRows?.length) ui.applyFiltersAndRender();
     runSwingScan(ui);
   }
 
@@ -893,14 +975,14 @@ export function registerGridBotScreeners(deps) {
       ui.error = 'Нет символов для скана (проверь фильтр объёма / загрузку списка).';
     } else {
       try {
-        const d1 = await batchKlines(syms, '1d', 16, null, null, 8);
-        const h1 = await batchKlines(syms, '1h', 48, null, null, 8);
+        const d1 = await batchKlinesCached(syms, '1d', 16, null, null, 10);
+        const h1 = await batchKlinesCached(syms, '1h', 48, null, null, 10);
         ui.diag = `universe ${syms.length}/${base.length || 0} · d1 ${Object.keys(d1 || {}).length} · 1h ${Object.keys(h1 || {}).length}`;
         const st1Map = {};
         for (const sym of syms) st1Map[sym] = computeStage1(sym, null, h1, d1);
         const passSyms = syms.filter((s) => st1Map[s].pass);
         let m15 = {};
-        if (passSyms.length) m15 = await batchKlines(passSyms, '15m', 200, null, null, 8);
+        if (passSyms.length) m15 = await batchKlinesCached(passSyms, '15m', 200, null, null, 10);
         ui.diag += ` · s1 ${passSyms.length} · 15m ${Object.keys(m15 || {}).length}`;
         if (!passSyms.length) {
           ui.ready = [];
@@ -987,7 +1069,10 @@ export function registerGridBotScreeners(deps) {
     box.style.cssText =
       'width:min(1150px,98vw);height:min(90vh,920px);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
 
-    const ui = {
+    const cacheKey = '__gbs_intra_v1';
+    const cachedUi = typeof window !== 'undefined' ? window[cacheKey] : null;
+
+    const ui = cachedUi || {
       minScore: 7,
       minCons: 0,
       hideFlags: false,
@@ -1007,7 +1092,35 @@ export function registerGridBotScreeners(deps) {
       root: box,
       error: '',
       diag: '',
+      listGroup: 0,
     };
+    if (typeof window !== 'undefined') window[cacheKey] = ui;
+    ui.root = box;
+    if (ui.listGroup == null) ui.listGroup = 0;
+
+    function renderIntraGroupPicker() {
+      const host = box.querySelector('#gbsIntGrp');
+      if (!host) return;
+      host.innerHTML = '';
+      const mk = (g, txt, bg) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'tbtn' + (ui.listGroup === g ? ' on' : '');
+        b.textContent = txt;
+        if (g > 0)
+          b.style.cssText = `background:${bg};color:#0c0c0e;border-color:transparent;min-width:22px;padding:2px 6px;font-size:10px`;
+        else b.style.cssText = 'min-width:22px;padding:2px 6px;font-size:10px';
+        b.title = g === 0 ? 'Не задавать цветовую группу в списке' : `Пометить монеты из отфильтрованного списка группой ${g}`;
+        b.onclick = () => {
+          ui.listGroup = g;
+          renderIntraGroupPicker();
+          applyFiltersAndRender();
+        };
+        host.appendChild(b);
+      };
+      mk(0, '—', '');
+      for (let g = 1; g <= 7; g++) mk(g, String(g), GROUP_COLORS[g] || '#666');
+    }
 
     function applyFiltersAndRender() {
       let rows = ui.ready.filter((r) => r.score >= ui.minScore);
@@ -1082,7 +1195,12 @@ export function registerGridBotScreeners(deps) {
           })
           .join('');
         body.querySelectorAll('.gbs-open').forEach((el) => {
-          el.onclick = () => openFullscreenBySym(el.closest('tr').dataset.sym);
+          el.onclick = () => {
+            if (ui.timer) clearInterval(ui.timer);
+            if (ui.cdTimer) clearInterval(ui.cdTimer);
+            modal.remove();
+            openFullscreenBySym(el.closest('tr').dataset.sym);
+          };
         });
         }
       }
@@ -1110,6 +1228,9 @@ export function registerGridBotScreeners(deps) {
       if (lu && ui.lastRun) lu.textContent = new Date(ui.lastRun).toLocaleTimeString();
       const dg = root.querySelector('#gbsIntDiag');
       if (dg) dg.textContent = ui.diag || '';
+      if (tagScreenerGroup && ui.listGroup > 0 && rows.length) {
+        for (const r of rows) tagScreenerGroup(r.sym, ui.listGroup);
+      }
     }
 
     box.innerHTML = `
@@ -1133,6 +1254,7 @@ export function registerGridBotScreeners(deps) {
           </select>
         </label>
         <label><input type="checkbox" id="gbsIntHideFl"> Скрыть 🔴 флаги</label>
+        <span style="display:flex;align-items:center;gap:5px;color:var(--text3)">Группа <span id="gbsIntGrp" style="display:flex;gap:3px;flex-wrap:wrap;align-items:center"></span></span>
         <span style="color:var(--text3)">Объём — тулбар</span>
         <span style="margin-left:auto">Обновлено: <span id="gbsIntLu">—</span></span>
       </div>
@@ -1163,6 +1285,7 @@ export function registerGridBotScreeners(deps) {
 
     modal.appendChild(box);
     document.body.appendChild(modal);
+    renderIntraGroupPicker();
 
     ui.root.querySelector('thead').addEventListener('click', (e) => {
       const th = e.target.closest('.gbs-ith');
@@ -1240,6 +1363,7 @@ export function registerGridBotScreeners(deps) {
       if (ui.cdLeft <= 0) ui.cdLeft = 30;
     }, 1000);
 
+    if (ui.ready?.length || ui.watch?.length) ui.applyFiltersAndRender();
     runIntradayScan(ui);
   }
 
