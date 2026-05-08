@@ -446,6 +446,12 @@ html,body{
   transition:transform .1s;
 }
 .cg-dot:hover{transform:scale(1.3);}
+.cg-fav-dot{
+  background:transparent !important;
+  border-color:transparent !important;
+  color:#fbbf24;
+  font-size:11px;
+}
 
 /* POTENTIAL PANEL */
 #potentialPanel{

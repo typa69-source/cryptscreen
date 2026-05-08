@@ -264,6 +264,8 @@ const CHART_HEAD_DEFS=[
 const CHART_HEAD_IDS=CHART_HEAD_DEFS.map(d=>d.id);
 
 const GROUP_COLORS=['','#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899'];
+const FAVORITE_GROUP_ID=8;
+const FAVORITE_GROUP_COLOR='#fbbf24';
 // index 0=none, 1=red,2=orange,3=yellow,4=green,5=blue,6=violet,7=pink
 
 function trendColShortLabel(tf){
@@ -321,9 +323,10 @@ const S = {
   densitySettings:{}, // per symbol: {largeMult, medMult, smallMult}
   alertLog:[],
   alertSettings:{repeat:true, cooldown:5, sound:true},
-  // #9: Color groups
+  // #9: Color groups + favorites
   symGroups:{},       // sym → groupIdx (1-7), 0=none
-  activeGroupFilter:0,// 0=all, 1-7=show only that group
+  symFavorites:{},    // sym → true
+  activeGroupFilter:0,// 0=all, 1-7=color group, 8=favorites
   lastGroupUsed:1,    // last group assigned by user
   _savedCpW:'',_savedFsCaW:'',
   // Potential monitor — multi-preset system
@@ -1241,7 +1244,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   interact.addEventListener('mouseup',e=>{
     if(e.button!==0)return;
     const hadStroke=!!ch._brushStroke;
+    const drawSym=hadStroke?getChartSym(ch):null;
     ch._brushStroke=null;
+    if(drawSym)schedulePersistDrawings(drawSym);
     if(hadStroke&&S.drawMode==='brush')setDrawMode(null);
   });
   interact.addEventListener('contextmenu',e=>{
@@ -1438,7 +1443,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   },{capture:true,signal:sig});
   container.addEventListener('mouseup',e=>{
     if(e.button!==0||!ch.draggingDraw)return;
+    const drawSym=getChartSym(ch);
     ch.draggingDraw=null;
+    if(drawSym)schedulePersistDrawings(drawSym);
     if(ch.interact&&!S.drawMode)ch.interact.style.pointerEvents='';
   },{capture:true,signal:sig});
 
@@ -1483,6 +1490,7 @@ const _dirtyDrawSyms=new Set();
 function collectUserSettings(){
   return {
     chartSymbols:S.charts.map(c=>c.sym||null),
+    fsSym:S.fsSym||null,
     gridLayout:{gridSize:S.gridSize},
     volMin:S.minVol,
     minTrd:S.minTrd,
@@ -1492,17 +1500,40 @@ function collectUserSettings(){
     sortAlpha:S.sortAlpha,
     tf:S.tf,
     symGroups:S.symGroups,
+    symFavorites:S.symFavorites,
+    lastGroupUsed:S.lastGroupUsed,
+    activeGroupFilter:S.activeGroupFilter,
     search:S.q,
     chartAutoSync:S.chartAutoSync,
+    chartHead:{order:[...S.chartHeadOrder],visible:[...S.chartHeadVisible]},
+    lineColors:{...S.lineColors},
+    chartView:{chartRightOffset:S.chartRightOffset,chartVisibleBars:S.chartVisibleBars},
+    sessionFx:{...S.sessionFx},
+    showOiOnChart:!!S.showOiOnChart,
+    showBbOverlay:!!S.showBbOverlay,
+    alertSettings:{...S.alertSettings},
+    emaVisible:!!S.emaVisible,
+    emaCrossSound:!!S.emaCrossSound,
+    emaSettings:Array.isArray(S.emaSettings)?S.emaSettings.map(c=>({...c})):[],
+    emaSymOverrides:S.emaSymOverrides&&typeof S.emaSymOverrides==='object'?JSON.parse(JSON.stringify(S.emaSymOverrides)):{},
+    emaSymEnabled:S.emaSymEnabled&&typeof S.emaSymEnabled==='object'?{...S.emaSymEnabled}:{},
+    potentialPresets:Array.isArray(S.potentialPresets)?JSON.parse(JSON.stringify(S.potentialPresets)):[],
+    potFilterPreset:S._potFilterPreset||null,
+    draw:{brushColor:_brushColor,brushWidth:_brushWidth},
   };
 }
 
+let _lastPersistedSettingsJson='';
 function schedulePersistUserSettings(){
   if(!getToken())return;
   clearTimeout(_persistSettingsTimer);
   _persistSettingsTimer=setTimeout(()=>{
     _persistSettingsTimer=null;
-    saveUserSettings(collectUserSettings());
+    const payload=collectUserSettings();
+    const json=JSON.stringify(payload);
+    if(json===_lastPersistedSettingsJson)return;
+    _lastPersistedSettingsJson=json;
+    saveUserSettings(payload);
   },2000);
 }
 
@@ -1745,7 +1776,7 @@ function updateChartHeader(slot,sym){
   const elCorr=document.getElementById(`chs${slot}-corr`);
   if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
   const dot=document.getElementById(`cgd${slot}`);
-  if(dot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';dot.style.background=col||'var(--bg4)';dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';dot.style.display=sym?'':'none';}
+  if(dot)styleGroupDot(dot,sym);
   // If stats wrap into two lines, tighten spacing to avoid clipping.
   const head=document.getElementById(`cc${slot}`)?.querySelector('.chead');
   const stats=document.getElementById(`chs${slot}`);
@@ -2783,6 +2814,8 @@ function showAlertPctInput(ch,drawing,container){
   const confirm=()=>{
     const v=parseFloat(inp.value);
     drawing.alertPct=isNaN(v)||v<=0?null:v;
+    const drawSym=getChartSym(ch);
+    if(drawSym)schedulePersistDrawings(drawSym);
     wrap.remove();
     [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
   };
@@ -2816,6 +2849,7 @@ function onInteractClick(ch,e,container){
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:S.lineColors.hray});
     _lastDrawSym=drawSym||_lastDrawSym;
+    if(drawSym)schedulePersistDrawings(drawSym);
     rCanvas(ch);
     setDrawMode(null);
   }else if(S.drawMode==='tline'){
@@ -2824,6 +2858,7 @@ function onInteractClick(ch,e,container){
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:S.lineColors.tline});
       _lastDrawSym=drawSym||_lastDrawSym;
+      if(drawSym)schedulePersistDrawings(drawSym);
       ch.pendingP1=null;rCanvas(ch);
       setDrawMode(null);
     }
@@ -2832,6 +2867,7 @@ function onInteractClick(ch,e,container){
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push(d);rCanvas(ch);
     _lastDrawSym=drawSym||_lastDrawSym;
+    if(drawSym)schedulePersistDrawings(drawSym);
     showAlertPctInput(ch,d,container);
     setDrawMode(null);
   }else if(S.drawMode==='atline'){
@@ -2841,6 +2877,7 @@ function onInteractClick(ch,e,container){
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=drawSym||_lastDrawSym;
+      if(drawSym)schedulePersistDrawings(drawSym);
       showAlertPctInput(ch,d,container);
       setDrawMode(null);
     }
@@ -2857,6 +2894,7 @@ function onInteractClick(ch,e,container){
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
       _lastDrawSym=drawSym||_lastDrawSym;
+      if(drawSym)schedulePersistDrawings(drawSym);
       setDrawMode(null);
     }
   }
@@ -4096,7 +4134,7 @@ function sortedRows(){
     }
   }
   if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
-  const bypassGroup=(sym)=>S.activeGroupFilter>0&&getSymGroup(sym)===S.activeGroupFilter;
+  const bypassGroup=(sym)=>S.activeGroupFilter>0&&symbolInGroup(sym,S.activeGroupFilter);
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||bypassGroup(r.sym));
   if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||bypassGroup(r.sym));
   // Filters are exclusive: preset OR color group OR all
@@ -4105,7 +4143,7 @@ function sortedRows(){
     if(pr&&Object.keys(pr.matches||{}).length>0)rows=rows.filter(r=>pr.matches[r.sym]);
     else S._potFilterPreset=null; // preset has no matches, clear filter
   }else if(S.activeGroupFilter>0){
-    rows=rows.filter(r=>getSymGroup(r.sym)===S.activeGroupFilter);
+    rows=rows.filter(r=>symbolInGroup(r.sym,S.activeGroupFilter));
   }
   rows.sort((a,b)=>{
     if(S.sortAlpha){
@@ -4157,7 +4195,7 @@ function buildScreenerRow(m,cols){
   row._sym=m.sym;
   const rt=document.createElement('div');rt.className='rtick';
   const gdot=document.createElement('span');gdot.className='cg-dot';
-  gdot.title='Цветовая группа';
+  gdot.title='Группа/избранное';
   gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
   rt.appendChild(gdot);
   const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=m.sym.replace(/USDT$/,'');
@@ -4196,10 +4234,7 @@ function updateScreenerRow(row,m,cols,inChart){
   row._sym=m.sym;
   const gdot=row._gdot;
   if(gdot){
-    const nc=grpCol||'var(--bg4)';
-    const nb=grpCol?'rgba(255,255,255,.2)':'var(--border2)';
-    if(gdot.style.background!==nc)gdot.style.background=nc;
-    if(gdot.style.borderColor!==nb)gdot.style.borderColor=nb;
+    styleGroupDot(gdot,m.sym);
     gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
   }
   const nameTxt=m.sym.replace(/USDT$/,'');
@@ -4756,6 +4791,33 @@ function clearFsDrawings(){
 //  #9: COLOR GROUPS
 // ═══════════════════════════════════════════════════════════════
 function getSymGroup(sym){return S.symGroups[sym]||0;}
+function isSymFavorite(sym){return !!S.symFavorites?.[sym];}
+function symbolInGroup(sym,g){
+  if(!sym||!g)return false;
+  if(g===FAVORITE_GROUP_ID)return isSymFavorite(sym);
+  return getSymGroup(sym)===g;
+}
+function styleGroupDot(dot,sym){
+  if(!dot)return;
+  const grp=getSymGroup(sym);
+  const col=GROUP_COLORS[grp]||'';
+  const fav=!!sym&&isSymFavorite(sym);
+  dot.style.display=sym?'inline-flex':'none';
+  dot.style.alignItems='center';
+  dot.style.justifyContent='center';
+  dot.textContent=fav?'★':'';
+  if(fav){
+    dot.style.color=FAVORITE_GROUP_COLOR;
+    dot.style.fontSize='10px';
+    dot.style.background='transparent';
+    dot.style.borderColor='transparent';
+  }else{
+    dot.style.color='';
+    dot.style.fontSize='';
+    dot.style.background=col||'var(--bg4)';
+    dot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';
+  }
+}
 let _groupUiRaf=0;
 function scheduleGroupUiRefresh(){
   if(_groupUiRaf)return;
@@ -4767,9 +4829,22 @@ function scheduleGroupUiRefresh(){
   });
 }
 function setSymGroup(sym,g){
-  if(g===0)delete S.symGroups[sym];
-  else S.symGroups[sym]=g;
+  if(g===FAVORITE_GROUP_ID){
+    if(sym)S.symFavorites[sym]=true;
+  }else if(g===0){
+    delete S.symGroups[sym];
+  }else{
+    S.symGroups[sym]=g;
+  }
   // update color stripe in chart headers immediately
+  S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
+  scheduleGroupUiRefresh();
+  schedulePersistUserSettings();
+}
+function setSymFavorite(sym,on){
+  if(!sym)return;
+  if(on)S.symFavorites[sym]=true;
+  else delete S.symFavorites[sym];
   S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
   scheduleGroupUiRefresh();
   schedulePersistUserSettings();
@@ -4791,15 +4866,32 @@ function buildGroupFilterBar(){
     allBtn.textContent='Все';
     allBtn.onclick=()=>{S.activeGroupFilter=0;S._potFilterPreset=null;scheduleGroupUiRefresh();};
     grpSec.appendChild(allBtn);
-    for(let g=1;g<=7;g++){
-      const cnt=Object.values(S.symGroups).filter(v=>v===g).length;
+    for(let g=1;g<=FAVORITE_GROUP_ID;g++){
+      const cnt=g===FAVORITE_GROUP_ID
+        ? Object.keys(S.symFavorites).length
+        : Object.values(S.symGroups).filter(v=>v===g).length;
       // Hide group button if no coins assigned AND it's not the active filter
       if(cnt===0&&S.activeGroupFilter!==g)continue;
       const wrap=document.createElement('div');wrap.style.cssText='position:relative;display:flex;align-items:center;';
       const btn=document.createElement('div');
       btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'');
-      btn.style.background=GROUP_COLORS[g];
-      btn.title=`Группа ${g} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
+      if(g===FAVORITE_GROUP_ID){
+        btn.style.background='transparent';
+        btn.style.border='none';
+        btn.style.borderRadius='0';
+        btn.style.width='auto';
+        btn.style.height='auto';
+        btn.style.padding='0 2px';
+        btn.style.color=FAVORITE_GROUP_COLOR;
+        btn.style.display='inline-flex';
+        btn.style.alignItems='center';
+        btn.style.justifyContent='center';
+        btn.textContent='★';
+      }else{
+        btn.style.background=GROUP_COLORS[g];
+        btn.textContent='';
+      }
+      btn.title=`${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
       btn.onclick=()=>{
         const next=S.activeGroupFilter===g?0:g;
         S.activeGroupFilter=next;
@@ -4808,14 +4900,16 @@ function buildGroupFilterBar(){
       };
       btn.oncontextmenu=ev=>{ev.preventDefault();ev.stopPropagation();
         if(!cnt)return;
-        showConfirmModal(`Очистить группу ${g} (${cnt} монет)?`,{
-          title:'Очистка группы',
+        showConfirmModal(`Очистить ${g===FAVORITE_GROUP_ID?'избранное':`группу ${g}`} (${cnt} монет)?`,{
+          title:g===FAVORITE_GROUP_ID?'Очистка избранного':'Очистка группы',
           okText:'Очистить',
           danger:true,
           onConfirm:()=>{
-            Object.keys(S.symGroups).forEach(s=>{if(S.symGroups[s]===g)delete S.symGroups[s];});
+            if(g===FAVORITE_GROUP_ID)S.symFavorites={};
+            else Object.keys(S.symGroups).forEach(s=>{if(S.symGroups[s]===g)delete S.symGroups[s];});
             if(S.activeGroupFilter===g)S.activeGroupFilter=0;
             scheduleGroupUiRefresh();
+            schedulePersistUserSettings();
           }
         });
       };
@@ -4823,7 +4917,7 @@ function buildGroupFilterBar(){
       // Small "+" button to manage this group
       const addBtn=document.createElement('button');
       addBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font:inherit;font-size:8px;padding:0 1px;line-height:1;margin-left:-1px;';
-      addBtn.title=`Управление группой ${g}`;addBtn.textContent='＋';
+      addBtn.title=g===FAVORITE_GROUP_ID?'Управление избранным':`Управление группой ${g}`;addBtn.textContent='＋';
       addBtn.onclick=ev=>{ev.stopPropagation();openGroupManager(g);};
       wrap.appendChild(addBtn);
       grpSec.appendChild(wrap);
@@ -4908,6 +5002,12 @@ function showQuickGroupChanger(sym,anchorEl){
     dot.onclick=()=>{S.lastGroupUsed=g;setSymGroup(sym,g);pick.remove();syncAllGroupDots(sym);};
     row.appendChild(dot);
   }
+  const fav=document.createElement('div');
+  fav.className='cg-dot cg-fav-dot';
+  fav.title='Избранное · нажмите чтобы добавить/убрать';
+  if(isSymFavorite(sym))fav.style.outline='2px solid #fff';
+  fav.onclick=()=>{setSymFavorite(sym,!isSymFavorite(sym));pick.remove();syncAllGroupDots(sym);};
+  row.appendChild(fav);
   pick.appendChild(row);
   document.body.appendChild(pick);
   // Position picker above the anchor when possible (so it doesn't block items below).
@@ -4926,12 +5026,12 @@ function showQuickGroupChanger(sym,anchorEl){
 function syncAllGroupDots(sym){
   S.charts.forEach((ch,i)=>{if(ch.sym===sym)updateChartHeader(i,sym);});
   const fsCgDot=document.getElementById('fsCgDot');
-  if(fsCgDot&&S.fsSym===sym){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
+  if(fsCgDot&&S.fsSym===sym)styleGroupDot(fsCgDot,sym);
 }
 
 function openGroupManager(g){
   const old=document.getElementById('groupMgrModal');if(old)old.remove();
-  const col=GROUP_COLORS[g];
+  const col=g===FAVORITE_GROUP_ID?FAVORITE_GROUP_COLOR:GROUP_COLORS[g];
   const modal=document.createElement('div');modal.id='groupMgrModal';
   modal.style.cssText='position:fixed;inset:0;z-index:700;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;';
   const box=document.createElement('div');
@@ -4939,8 +5039,8 @@ function openGroupManager(g){
   // Header
   const hdr=document.createElement('div');
   hdr.style.cssText='display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);gap:8px;flex-shrink:0';
-  hdr.innerHTML=`<span style="width:12px;height:12px;border-radius:50%;background:${col};display:inline-block;flex-shrink:0"></span>
-    <span style="font-size:11px;font-weight:600;color:#fff;flex:1">Группа ${g}</span>
+  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'★':''}</span>
+    <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`}</span>
     <span style="font-size:9px;color:var(--text3)">Нажмите монету чтобы добавить/убрать</span>
     <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">✕</button>`;
   box.appendChild(hdr);
@@ -4954,20 +5054,24 @@ function openGroupManager(g){
   const buildList=(q='')=>{
     list.innerHTML='';
     const rows=Object.values(S.mx).filter(m=>!q||m.sym.includes(q.toUpperCase())).sort((a,b)=>{
-      const ag=getSymGroup(a.sym)===g?0:1,bg=getSymGroup(b.sym)===g?0:1;
+      const ag=symbolInGroup(a.sym,g)?0:1,bg=symbolInGroup(b.sym,g)?0:1;
       if(ag!==bg)return ag-bg;return a.sym.localeCompare(b.sym);
     });
     const frag=document.createDocumentFragment();
     for(const m of rows){
-      const inGrp=getSymGroup(m.sym)===g;
+      const inGrp=symbolInGroup(m.sym,g);
       const row=document.createElement('div');
       row.style.cssText=`display:flex;align-items:center;padding:5px 12px;cursor:pointer;gap:8px;border-bottom:1px solid rgba(37,37,48,.4);transition:background .06s;${inGrp?'background:rgba(255,255,255,.04)':''}`;
-      row.innerHTML=`<span style="width:8px;height:8px;border-radius:50%;background:${inGrp?col:'var(--bg4)'};border:1px solid ${inGrp?col:'var(--border2)'};flex-shrink:0"></span>
+      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'★':'☆'):''}</span>
         <span style="font-size:10px;font-weight:500;color:${inGrp?'#fff':'var(--text2)'};flex:1">${m.sym.replace(/USDT$/,'')}</span>
         ${inGrp?`<span style="font-size:9px;color:${col}">✓ в группе</span>`:''}`;
       row.onmouseenter=()=>row.style.background=inGrp?'rgba(255,255,255,.07)':'rgba(255,255,255,.025)';
       row.onmouseleave=()=>row.style.background=inGrp?'rgba(255,255,255,.04)':'';
-      row.onclick=()=>{setSymGroup(m.sym,inGrp?0:g);buildList(srch.value);};
+      row.onclick=()=>{
+        if(g===FAVORITE_GROUP_ID)setSymFavorite(m.sym,!inGrp);
+        else setSymGroup(m.sym,inGrp?0:g);
+        buildList(srch.value);
+      };
       frag.appendChild(row);
     }
     list.appendChild(frag);
@@ -5435,7 +5539,7 @@ function openFullscreenBySym(sym){
   setCoinIcon('fsSymIcon',sym);
   // Update FS color dot
   const fsCgDot=document.getElementById('fsCgDot');
-  if(fsCgDot){const grp=getSymGroup(sym);const col=GROUP_COLORS[grp]||'';fsCgDot.style.background=col||'var(--bg4)';fsCgDot.style.borderColor=col?'rgba(255,255,255,.25)':'var(--border2)';}
+  if(fsCgDot)styleGroupDot(fsCgDot,sym);
   updateFsHeaderValues();
   // Build FS screener
   buildScreenerHeader(document.getElementById('fsShdr'));
@@ -5605,8 +5709,63 @@ function hydrateUserSession(){
 
   if(ps.symGroups&&typeof ps.symGroups==='object')
     Object.assign(S.symGroups,ps.symGroups);
+  if(ps.symFavorites&&typeof ps.symFavorites==='object'){
+    Object.keys(ps.symFavorites).forEach(sym=>{if(ps.symFavorites[sym])S.symFavorites[sym]=true;});
+  }
+  if(ps.lastGroupUsed!=null&&!isNaN(+ps.lastGroupUsed))S.lastGroupUsed=Math.max(1,Math.min(7,+ps.lastGroupUsed|0));
+  if(ps.activeGroupFilter!=null&&!isNaN(+ps.activeGroupFilter))S.activeGroupFilter=Math.max(0,Math.min(FAVORITE_GROUP_ID,+ps.activeGroupFilter|0));
   if(ps.search!=null)S.q=String(ps.search);
   if(typeof ps.chartAutoSync==='boolean')S.chartAutoSync=ps.chartAutoSync;
+  if(ps.chartHead&&typeof ps.chartHead==='object'){
+    if(Array.isArray(ps.chartHead.order)){
+      const seen=new Set();
+      const next=[];
+      for(const id of ps.chartHead.order){if(CHART_HEAD_IDS.includes(id)&&!seen.has(id)){next.push(id);seen.add(id);}}
+      for(const id of CHART_HEAD_IDS){if(!seen.has(id))next.push(id);}
+      S.chartHeadOrder=next;
+    }
+    if(Array.isArray(ps.chartHead.visible)){
+      S.chartHeadVisible=new Set(ps.chartHead.visible.filter(id=>CHART_HEAD_IDS.includes(id)));
+      if(!S.chartHeadVisible.size)S.chartHeadVisible=new Set(['chg','vol','trd','natr']);
+    }
+  }
+  if(ps.lineColors&&typeof ps.lineColors==='object'){
+    for(const k of['hray','tline','aray','atline'])if(typeof ps.lineColors[k]==='string'&&ps.lineColors[k].startsWith('#'))S.lineColors[k]=ps.lineColors[k];
+  }
+  if(ps.chartView&&typeof ps.chartView==='object'){
+    if(ps.chartView.chartRightOffset!=null)S.chartRightOffset=Math.max(0,Math.min(40,+ps.chartView.chartRightOffset));
+    if(ps.chartView.chartVisibleBars!=null)S.chartVisibleBars=Math.max(40,Math.min(220,+ps.chartView.chartVisibleBars));
+  }
+  if(ps.sessionFx&&typeof ps.sessionFx==='object'){
+    if(typeof ps.sessionFx.enabled==='boolean')S.sessionFx.enabled=ps.sessionFx.enabled;
+    if(typeof ps.sessionFx.asia==='boolean')S.sessionFx.asia=ps.sessionFx.asia;
+    if(typeof ps.sessionFx.london==='boolean')S.sessionFx.london=ps.sessionFx.london;
+    if(typeof ps.sessionFx.ny==='boolean')S.sessionFx.ny=ps.sessionFx.ny;
+  }
+  if(typeof ps.showOiOnChart==='boolean')S.showOiOnChart=ps.showOiOnChart;
+  if(typeof ps.showBbOverlay==='boolean')S.showBbOverlay=ps.showBbOverlay;
+  if(ps.alertSettings&&typeof ps.alertSettings==='object'){
+    if(typeof ps.alertSettings.repeat==='boolean')S.alertSettings.repeat=ps.alertSettings.repeat;
+    if(ps.alertSettings.cooldown!=null&&!isNaN(+ps.alertSettings.cooldown))S.alertSettings.cooldown=Math.max(1,Math.min(120,+ps.alertSettings.cooldown));
+    if(typeof ps.alertSettings.sound==='boolean')S.alertSettings.sound=ps.alertSettings.sound;
+  }
+  if(typeof ps.emaVisible==='boolean')S.emaVisible=ps.emaVisible;
+  if(typeof ps.emaCrossSound==='boolean')S.emaCrossSound=ps.emaCrossSound;
+  if(Array.isArray(ps.emaSettings)&&ps.emaSettings.length){
+    S.emaSettings=ps.emaSettings.map(c=>({
+      period:Math.max(2,Math.min(400,+(c?.period||20))),
+      color:(typeof c?.color==='string'&&c.color.startsWith('#'))?c.color:'#a855f7',
+      visible:c?.visible!==false,
+    }));
+  }
+  if(ps.emaSymOverrides&&typeof ps.emaSymOverrides==='object')S.emaSymOverrides=JSON.parse(JSON.stringify(ps.emaSymOverrides));
+  if(ps.emaSymEnabled&&typeof ps.emaSymEnabled==='object')S.emaSymEnabled={...ps.emaSymEnabled};
+  if(Array.isArray(ps.potentialPresets))S.potentialPresets=JSON.parse(JSON.stringify(ps.potentialPresets));
+  if(ps.potFilterPreset!=null)S._potFilterPreset=ps.potFilterPreset||null;
+  if(ps.draw&&typeof ps.draw==='object'){
+    if(typeof ps.draw.brushColor==='string'&&ps.draw.brushColor.startsWith('#'))_brushColor=ps.draw.brushColor;
+    if(ps.draw.brushWidth!=null&&!isNaN(+ps.draw.brushWidth))_brushWidth=Math.max(1,Math.min(12,+ps.draw.brushWidth));
+  }
   if(ps.sortId&&typeof ps.sortId==='string'){
     S.sortId=ps.sortId;
     S.sortAlpha=!!ps.sortAlpha;
@@ -5640,6 +5799,16 @@ function hydrateUserSession(){
   if(S.page>=tp)S.page=Math.max(0,tp-1);
   updatePagination(rowsPg.length);
   rebuildScreenerHeaders();
+  try{
+    localStorage.setItem('cs_chartView',JSON.stringify({chartRightOffset:S.chartRightOffset,chartVisibleBars:S.chartVisibleBars}));
+    localStorage.setItem('cs_chartHead',JSON.stringify({order:S.chartHeadOrder,visible:[...S.chartHeadVisible]}));
+    localStorage.setItem('cs_lineColors',JSON.stringify(S.lineColors));
+    localStorage.setItem('cs_chart_autosync',S.chartAutoSync?'1':'0');
+    localStorage.setItem('cs_sess_fx',JSON.stringify(S.sessionFx));
+    localStorage.setItem('cs_oi_chart',S.showOiOnChart?'1':'0');
+    localStorage.setItem('cs_bb_overlay',S.showBbOverlay?'1':'0');
+  }catch(e){}
+  _lastPersistedSettingsJson=JSON.stringify(collectUserSettings());
   schedulePersistUserSettings();
   return validArr;
 }
