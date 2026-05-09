@@ -744,7 +744,7 @@ function alignOiToCandles(candles,oiRaw){
   const src=oiRaw.slice().sort((a,b)=>a.time-b.time);
   const out=[];
   let j=0;
-  let cur=src[0].value;
+  let cur=null;
   for(const c of candles){
     const t=toChartTime(c.t);
     while(j<src.length&&src[j].time<=t){cur=src[j].value;j++;}
@@ -4403,9 +4403,8 @@ function updatePagination(total){
 function updSortHdr(){
   document.querySelectorAll('.mhcol').forEach(e=>e.classList.remove('sa','sd'));
   document.querySelectorAll(`#hc-${S.sortId}`).forEach(el=>el.classList.add(S.sortDir==='desc'?'sd':'sa'));
-  const c=ALL_COLS.find(x=>x.id===S.sortId);
   const si=document.getElementById('sinfo');
-  if(si)si.textContent=S.sortAlpha?`Тикер ${S.sortDir==='asc'?'▲':'▼'}`:(c?`Сорт: ${c.l} ${c.s} ${S.sortDir==='desc'?'↓':'↑'}`:'');
+  if(si)si.textContent='';
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -4970,7 +4969,10 @@ function buildGroupFilterBar(){
 }
 
 function showGroupPicker(sym,anchorEl){
-  // Open picker with explicit color + favorite actions
+  // Quick-assign last used group first (fast tagging), then allow changing in picker.
+  const target=Math.max(1,Math.min(7,S.lastGroupUsed||1));
+  if(getSymGroup(sym)!==target)setSymGroup(sym,target);
+  else setSymGroup(sym,0);
   showQuickGroupChanger(sym,anchorEl);
 }
 
@@ -6033,6 +6035,7 @@ async function main(){
 // ═══════════════════════════════════════════════════════════════
 const POT_FIELDS=[
   {id:'ch24',   label:'ИЗМ 24ч %',  unit:'%',  step:0.5},
+  {id:'ch7d',   label:'ИЗМ 7д %',   unit:'%',  step:0.5},
   {id:'cday',   label:'ИЗМ день %', unit:'%',  step:0.5},
   {id:'bbSqz',  label:'BB Squeeze', unit:'',   step:1},
   {id:'bbBreak',label:'BB Breakout',unit:'',   step:1},
@@ -6049,6 +6052,7 @@ const POT_FIELDS=[
 ];
 const POT_FIELD_DESC={
   ch24:'Изменение цены за 24 часа в процентах.',
+  ch7d:'Изменение цены за 7 дней в процентах.',
   cday:'Изменение цены с начала текущего дня в процентах.',
   bbSqz:'Полосы Боллинджера сжались относительно прошлого бара (узкий диапазон).',
   bbBreak:'Цена вышла за верхнюю/нижнюю полосу Боллинджера на последней свече.',
@@ -6145,7 +6149,7 @@ function renderPotentialPanel(){
         if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
         if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
       }
-      const absTxt=c.abs&&['ch24','cday','bbBreak'].includes(c.field)?'|.| ':'';
+      const absTxt=c.abs&&['ch24','ch7d','cday','bbBreak'].includes(c.field)?'|.| ':'';
       return`<span class="pot-cond-tag">${absTxt}${f?.label||c.field} ${parts.join(' ')}</span>`;
     }).join('');
     body.appendChild(cond);
@@ -6181,7 +6185,7 @@ function renderPotentialPanel(){
         else if(c.field==='bbBreak')fmt=val>0?'↑':val<0?'↓':'·';
         else if(c.field==='emaTouch')fmt=val>=1?`✓(${Math.max(2,Math.min(400,c.period||20))})`:`·(${Math.max(2,Math.min(400,c.period||20))})`;
         else fmt=val!=null?fn(val,2):'—';
-        const absTxt=c.abs&&['ch24','cday','bbBreak'].includes(c.field)?'|.| ':'';
+        const absTxt=c.abs&&['ch24','ch7d','cday','bbBreak'].includes(c.field)?'|.| ':'';
         return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit?f.unit:''}</span>`;
       }).join('');
       item.innerHTML=`
@@ -6243,7 +6247,7 @@ function openPotPresetEditor(presetId){
         <select style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:3px 4px">
           ${POT_FIELDS.map(x=>`<option value="${x.id}"${x.id===c.field?' selected':''}>${x.label}</option>`).join('')}
         </select>
-        <label title="Игнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','cday','bbBreak'].includes(c.field)?'':'visibility:hidden'}">
+        <label title="Игнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','ch7d','cday','bbBreak'].includes(c.field)?'':'visibility:hidden'}">
           |x|
           <input type="checkbox" ${c.abs?'checked':''}>
         </label>
@@ -6376,7 +6380,7 @@ function runPotentialCheck(){
         let val=field==='emaTouch'?calcEmaTouchSignal(sym,c.period||20):m[field];
         // vol24 is in USDT, convert condition to USDT (user enters in M$)
         if(field==='vol24')val=val/1e6;
-        if(c.abs&&['ch24','cday','bbBreak'].includes(field))val=Math.abs(val);
+        if(c.abs&&['ch24','ch7d','cday','bbBreak'].includes(field))val=Math.abs(val);
         if(val==null||isNaN(val))return false;
         if(c.min!=null&&val<c.min)return false;
         if(c.max!=null&&val>c.max)return false;
@@ -6477,6 +6481,107 @@ async function ensureBacktestCandles(sym,tf,bars){
   return(store[sym]||[]).slice(-want);
 }
 
+const GRIDLAB_PREFS_KEY='cs_gridlab_prefs_v2';
+function loadGridLabPrefs(){
+  try{
+    const raw=localStorage.getItem(GRIDLAB_PREFS_KEY);
+    if(!raw)return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500},symbolBounds:{}};
+    const j=JSON.parse(raw);
+    return{
+      global:{
+        tf:['1m','5m','1h'].includes(j?.global?.tf)?j.global.tf:'5m',
+        bars:Math.max(80,Math.min(1200,+(j?.global?.bars||360))),
+        levels:Math.max(3,Math.min(60,+(j?.global?.levels||12))),
+        leverage:Math.max(1,Math.min(25,+(j?.global?.leverage||3))),
+        deposit:Math.max(20,+(j?.global?.deposit||500)),
+      },
+      symbolBounds:(j?.symbolBounds&&typeof j.symbolBounds==='object')?j.symbolBounds:{},
+    };
+  }catch(e){
+    return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500},symbolBounds:{}};
+  }
+}
+function saveGridLabPrefs(prefs){
+  try{localStorage.setItem(GRIDLAB_PREFS_KEY,JSON.stringify(prefs||{}));}catch(e){}
+}
+function buildGridRiskRows(cfg){
+  const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
+  const levels=Math.max(3,+cfg.levels|0);
+  const lev=Math.max(1,+cfg.leverage||1);
+  const dep=Math.max(20,+cfg.deposit||20);
+  if(!(hi>lo)||!(cur>0))return[];
+  const step=(hi-lo)/(levels-1);
+  if(!(step>0))return[];
+  const perStepNotional=(dep*lev)/levels;
+  const qtyPerStep=perStepNotional/cur;
+  const maxDown=Math.max(0,Math.floor((cur-lo)/step));
+  const maxUp=Math.max(0,Math.floor((hi-cur)/step));
+  const maxN=Math.max(maxDown,maxUp);
+  const rows=[];
+  for(let n=1;n<=maxN;n++){
+    let downUsdt=0,upUsdt=0;
+    if(n<=maxDown){
+      const pxNow=cur-step*n;
+      for(let i=1;i<=n;i++){
+        const ent=cur-step*i;
+        downUsdt+=qtyPerStep*(pxNow-ent);
+      }
+    }
+    if(n<=maxUp){
+      const pxNow=cur+step*n;
+      for(let i=1;i<=n;i++){
+        const ent=cur+step*i;
+        upUsdt+=qtyPerStep*(ent-pxNow);
+      }
+    }
+    rows.push({
+      step:n,
+      downUsdt,
+      upUsdt,
+      downPct:(downUsdt/dep)*100,
+      upPct:(upUsdt/dep)*100,
+    });
+  }
+  return rows;
+}
+function renderGridRiskProfile(body,out){
+  const host=body.querySelector('#gbRisk');
+  if(!host){return;}
+  if(!out?.ok){host.innerHTML='';return;}
+  const rows=buildGridRiskRows({
+    lower:out.lower,upper:out.upper,currentPrice:out.candles?.[out.candles.length-1]?.c,
+    levels:out.levels,leverage:out.leverage,deposit:out.startEq,
+  });
+  if(!rows.length){
+    host.innerHTML='<div style="padding:8px;font-size:9px;color:var(--text3)">Недостаточно данных для риск-профиля.</div>';
+    return;
+  }
+  const fmt=(v)=>`${v>0?'+':''}${fn(v,2)}`;
+  const maxLoss=Math.max(...rows.map(r=>Math.max(Math.abs(r.downUsdt),Math.abs(r.upUsdt))),1e-9);
+  host.innerHTML=`
+    <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль одностороннего движения по сеткам (без разворотов)</div>
+    <div style="display:grid;grid-template-columns:52px 1fr 1fr;gap:6px;font-size:9px;color:var(--text3);padding:0 2px 6px">
+      <div>Сетка</div><div>Вниз (лонг-набор)</div><div>Вверх (шорт-набор)</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:4px;max-height:210px;overflow:auto;padding-right:2px">
+      ${rows.map(r=>{
+        const dw=Math.max(2,Math.round(Math.abs(r.downUsdt)/maxLoss*100));
+        const uw=Math.max(2,Math.round(Math.abs(r.upUsdt)/maxLoss*100));
+        return`<div style="display:grid;grid-template-columns:52px 1fr 1fr;gap:6px;align-items:center;font-size:9px">
+          <div style="color:var(--text2)">#${r.step}</div>
+          <div style="position:relative;height:16px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:4px;overflow:hidden">
+            <span style="position:absolute;left:0;top:0;bottom:0;width:${dw}%;background:rgba(239,68,68,.4)"></span>
+            <span style="position:relative;z-index:1;padding-left:4px;color:#fca5a5">${fmt(r.downUsdt)} USDT · ${fmt(r.downPct)}%</span>
+          </div>
+          <div style="position:relative;height:16px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:4px;overflow:hidden">
+            <span style="position:absolute;left:0;top:0;bottom:0;width:${uw}%;background:rgba(239,68,68,.4)"></span>
+            <span style="position:relative;z-index:1;padding-left:4px;color:#fca5a5">${fmt(r.upUsdt)} USDT · ${fmt(r.upPct)}%</span>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
 function runManualGridBacktest(cfg){
   const tf=String(cfg.tf||'5m');
   const candles=(cfg.candles||[]).slice(-Math.max(80,Math.min(1200,cfg.bars||360)));
@@ -6489,7 +6594,7 @@ function runManualGridBacktest(cfg){
   if(!(hi>lo))return{ok:false,msg:'Неверный диапазон сетки'};
   const levels=Math.max(3,Math.min(60,cfg.levels|0));
   const lev=Math.max(1,Math.min(25,cfg.leverage||1));
-  const fee=Math.max(0,Math.min(0.01,cfg.fee||0.0004));
+  const fee=Math.max(0,Math.min(0.01,cfg.fee||0.00055));
   const dep=Math.max(20,cfg.deposit||500);
   const step=(hi-lo)/(levels-1);
   const grid=Array.from({length:levels},(_,i)=>lo+step*i);
@@ -6539,6 +6644,7 @@ function runManualGridBacktest(cfg){
     levels,
     step,
     maxOneSideRun,
+    leverage:lev,
     lower:lo,
     upper:hi,
     fills,
@@ -6623,6 +6729,7 @@ function renderGridLabModal(){
   const body=box.querySelector('#gridLabBody');
   const btnSel=box.querySelector('#gridTabSelector');
   const btnBt=box.querySelector('#gridTabBacktest');
+  const gbPrefs=loadGridLabPrefs();
   const setTab=(tab)=>{
     btnSel.classList.toggle('on',tab==='selector');
     btnBt.classList.toggle('on',tab==='backtest');
@@ -6640,32 +6747,40 @@ function renderGridLabModal(){
       return;
     }
     const defSym=(S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
+    const sb=(gbPrefs.symbolBounds&&gbPrefs.symbolBounds[defSym])||{};
     body.innerHTML=`
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
         <label style="font-size:9px;color:var(--text3)">Символ</label>
         <input id="gbSym" value="${defSym}" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">TF</label>
         <select id="gbTf" style="width:62px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-          <option value="1m">1m</option>
-          <option value="5m" selected>5m</option>
-          <option value="1h">1h</option>
+          <option value="1m"${gbPrefs.global.tf==='1m'?' selected':''}>1m</option>
+          <option value="5m"${gbPrefs.global.tf==='5m'?' selected':''}>5m</option>
+          <option value="1h"${gbPrefs.global.tf==='1h'?' selected':''}>1h</option>
         </select>
         <label style="font-size:9px;color:var(--text3)">Bars</label>
-        <input id="gbBars" type="number" value="360" min="80" max="1200" style="width:70px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbBars" type="number" value="${gbPrefs.global.bars}" min="80" max="1200" style="width:70px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Уровни</label>
-        <input id="gbLevels" type="number" value="12" min="3" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbLevels" type="number" value="${gbPrefs.global.levels}" min="3" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Низ</label>
-        <input id="gbLow" type="number" step="any" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbLow" type="number" step="any" value="${sb.lower||''}" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Верх</label>
-        <input id="gbHigh" type="number" step="any" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbHigh" type="number" step="any" value="${sb.upper||''}" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Плечо</label>
-        <input id="gbLev" type="number" value="3" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbLev" type="number" value="${gbPrefs.global.leverage}" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Депо</label>
-        <input id="gbDep" type="number" value="500" min="20" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="20" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <button class="tbtn on" id="gbRunBtn">Запустить</button>
       </div>
       <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
-      <div id="gbChart" style="height:280px;border:1px solid var(--border2);border-radius:6px;overflow:hidden"></div>`;
+      <div id="gbChart" style="height:280px;border:1px solid var(--border2);border-radius:6px;overflow:hidden"></div>
+      <div id="gbRisk" style="margin-top:8px;border:1px solid var(--border2);border-radius:6px;padding:8px 8px 10px;background:rgba(255,255,255,.01)"></div>`;
+    body.querySelector('#gbSym').addEventListener('change',()=>{
+      const sym=String(body.querySelector('#gbSym').value||'').toUpperCase().trim();
+      const bnd=gbPrefs.symbolBounds?.[sym]||{};
+      body.querySelector('#gbLow').value=bnd.lower??'';
+      body.querySelector('#gbHigh').value=bnd.upper??'';
+    });
     const run=body.querySelector('#gbRunBtn');
     run.onclick=async()=>{
       const cfg={
@@ -6677,12 +6792,20 @@ function renderGridLabModal(){
         upper:+body.querySelector('#gbHigh').value||0,
         leverage:+body.querySelector('#gbLev').value||1,
         deposit:+body.querySelector('#gbDep').value||500,
-        fee:0.0004,
+        fee:0.00055,
       };
+      gbPrefs.global.tf=cfg.tf;
+      gbPrefs.global.bars=cfg.bars;
+      gbPrefs.global.levels=cfg.levels;
+      gbPrefs.global.leverage=cfg.leverage;
+      gbPrefs.global.deposit=cfg.deposit;
+      if(!gbPrefs.symbolBounds||typeof gbPrefs.symbolBounds!=='object')gbPrefs.symbolBounds={};
+      gbPrefs.symbolBounds[cfg.sym]={lower:cfg.lower||null,upper:cfg.upper||null};
+      saveGridLabPrefs(gbPrefs);
       cfg.candles=await ensureBacktestCandles(cfg.sym,cfg.tf,Math.max(cfg.bars,120));
       const out=runManualGridBacktest(cfg);
       const el=body.querySelector('#gbOut');
-      if(!out.ok){el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;renderManualBacktestPreview(body,null);return;}
+      if(!out.ok){el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;renderManualBacktestPreview(body,null);renderGridRiskProfile(body,null);return;}
       const maxSteps=Math.floor((out.upper-out.lower)/Math.max(out.step,1e-12));
       el.innerHTML=`
         <div style="display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:8px">
@@ -6698,6 +6821,7 @@ function renderGridLabModal(){
           <div title="Максимальная серия подряд в одну сторону (buy или sell) в этом тесте">Макс серия 1-сторонних fill: <b style="color:#fff">${out.maxOneSideRun}</b></div>
         </div>`;
       renderManualBacktestPreview(body,out);
+      renderGridRiskProfile(body,out);
     };
   };
   btnSel.onclick=()=>setTab('selector');
