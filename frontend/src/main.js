@@ -6506,14 +6506,14 @@ function saveGridLabPrefs(prefs){
 }
 function buildGridRiskRows(cfg){
   const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
-  const levels=Math.max(3,+cfg.levels|0);
+  const grids=Math.max(2,+cfg.levels|0);
   const lev=Math.max(1,+cfg.leverage||1);
   const dep=Math.max(20,+cfg.deposit||20);
   if(!(hi>lo)||!(cur>0))return[];
-  const step=(hi-lo)/(levels-1);
+  const step=(hi-lo)/grids;
   if(!(step>0))return[];
-  const perStepNotional=(dep*lev)/levels;
-  const grid=Array.from({length:levels},(_,i)=>lo+step*i);
+  const perStepNotional=(dep*lev)/grids;
+  const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
   let centerIdx=0;
   let centerDist=Infinity;
   for(let i=0;i<grid.length;i++){
@@ -6626,12 +6626,12 @@ function runManualGridBacktest(cfg){
   const lo=cfg.lower>0?cfg.lower:Math.min(...lowSeries);
   const hi=cfg.upper>0?cfg.upper:Math.max(...highSeries);
   if(!(hi>lo))return{ok:false,msg:'Неверный диапазон сетки'};
-  const levels=Math.max(3,Math.min(60,cfg.levels|0));
+  const levels=Math.max(2,Math.min(60,cfg.levels|0));
   const lev=Math.max(1,Math.min(25,cfg.leverage||1));
   const fee=Math.max(0,Math.min(0.01,cfg.fee||0.00055));
   const dep=Math.max(20,cfg.deposit||500);
-  const step=(hi-lo)/(levels-1);
-  const grid=Array.from({length:levels},(_,i)=>lo+step*i);
+  const step=(hi-lo)/levels;
+  const grid=Array.from({length:levels+1},(_,i)=>lo+step*i);
   let cash=dep*0.5;
   let asset=(dep*0.5)/closes[0];
   const orderNotional=(dep*lev)/Math.max(8,levels);
