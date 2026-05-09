@@ -6514,13 +6514,15 @@ function buildGridRiskRows(cfg){
   if(!(step>0))return[];
   const perStepNotional=(dep*lev)/grids;
   const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
-  // Binance-like center behavior: current price is a phantom 0-line.
-  // We split levels strictly by current price, so nearest levels around center
-  // (e.g. 2.48 / 2.52) are preserved and shown as the first steps.
+  // Shared zero anchor (phantom center) for both sides:
+  // choose nearest grid level at/above current price.
   const eps=Math.max(1e-10,step*1e-9);
-  const downLevels=grid.filter(p=>p<cur-eps).reverse();
-  const upLevels=grid.filter(p=>p>cur+eps);
-  const maxDown=downLevels.length;
+  let anchorIdx=grid.findIndex(p=>p>=cur-eps);
+  if(anchorIdx<0)anchorIdx=grid.length-1;
+  const anchorPx=grid[anchorIdx];
+  const upLevels=grid.slice(anchorIdx); // includes anchor -> #1 = 0 for short side
+  const downPrices=grid.slice(0,anchorIdx).reverse(); // prices below anchor
+  const maxDown=downPrices.length;
   const maxUp=upLevels.length;
   const maxN=Math.max(maxDown,maxUp);
   const rows=[];
@@ -6528,10 +6530,13 @@ function buildGridRiskRows(cfg){
     let downUsdt=0,upUsdt=0;
     let downPrice=null,upPrice=null;
     if(n<=maxDown){
-      const pxNow=downLevels[n-1];
+      const pxNow=downPrices[n-1];
       downPrice=pxNow;
-      for(let i=1;i<=n;i++){
-        const ent=downLevels[i-1];
+      // Long side uses the same shared anchor as start:
+      // at first step below anchor, position from anchor already has loss.
+      const downEntries=[anchorPx,...downPrices.slice(0,n-1)];
+      for(let i=0;i<downEntries.length;i++){
+        const ent=downEntries[i];
         const qty=perStepNotional/Math.max(ent,1e-12);
         downUsdt+=qty*(pxNow-ent);
       }
