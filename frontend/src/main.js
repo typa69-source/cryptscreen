@@ -6576,8 +6576,9 @@ function renderGridRiskProfile(body,out){
   }
   const fmt=(v)=>`${v>=0?'+':''}${fn(v,2)}`;
   const maxLoss=Math.max(...rows.map(r=>Math.max(Math.abs(r.downUsdt),Math.abs(r.upUsdt))),1e-9);
+  const centerRow=rows.find(r=>r.upPrice!=null&&Math.abs(r.upUsdt)<=1e-10)||null;
   const shortRows=rows
-    .filter(r=>r.upPrice!=null)
+    .filter(r=>r.upPrice!=null&&Math.abs(r.upUsdt)>1e-10)
     .sort((a,b)=>b.step-a.step);
   const longRows=rows
     .filter(r=>r.downPrice!=null)
@@ -6610,6 +6611,9 @@ function renderGridRiskProfile(body,out){
         ${mkBars(shortRows,'upUsdt','upPct','upPrice',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'})}
       </div>
       <div style="height:1px;background:rgba(124,58,237,.55);margin:2px 0"></div>
+      <div style="display:flex;align-items:center;justify-content:center;padding:3px 4px;border:1px dashed rgba(124,58,237,.45);border-radius:4px;background:rgba(124,58,237,.06);font-size:9px;color:#c4b5fd">
+        Якорь (общий нулевой): ${centerRow&&centerRow.upPrice!=null?fmtPrice(centerRow.upPrice):'—'} · 0.00 USDT · 0.00%
+      </div>
       <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">Long side (down)</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
         ${mkBars(longRows,'downUsdt','downPct','downPrice',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'})}
