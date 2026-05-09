@@ -6499,7 +6499,7 @@ const GRIDLAB_PREFS_KEY='cs_gridlab_prefs_v2';
 function loadGridLabPrefs(){
   try{
     const raw=localStorage.getItem(GRIDLAB_PREFS_KEY);
-    if(!raw)return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500},symbolBounds:{}};
+    if(!raw)return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral'},symbolBounds:{}};
     const j=JSON.parse(raw);
     return{
       global:{
@@ -6508,15 +6508,34 @@ function loadGridLabPrefs(){
         levels:Math.max(3,Math.min(60,+(j?.global?.levels||12))),
         leverage:Math.max(1,Math.min(25,+(j?.global?.leverage||3))),
         deposit:Math.max(1,+(j?.global?.deposit||500)),
+        gridMode:['neutral','long','short'].includes(j?.global?.gridMode)?j.global.gridMode:'neutral',
       },
       symbolBounds:(j?.symbolBounds&&typeof j.symbolBounds==='object')?j.symbolBounds:{},
     };
   }catch(e){
-    return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500},symbolBounds:{}};
+    return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral'},symbolBounds:{}};
   }
 }
 function saveGridLabPrefs(prefs){
   try{localStorage.setItem(GRIDLAB_PREFS_KEY,JSON.stringify(prefs||{}));}catch(e){}
+}
+/** Индекс «нулевого» узла сетки: neutral — первый уровень ≥ цены; long — последний ≤ (лонг ниже дорисовывает, сверху продаёт); short — первый строго > (шорт дорисует при росте). */
+function gridRiskAnchorIdx(grid,cur,step,mode){
+  const eps=Math.max(1e-10,(step||0)*1e-9);
+  const m=String(mode||'neutral');
+  if(m==='long'){
+    let idx=-1;
+    for(let i=0;i<grid.length;i++){
+      if(grid[i]<=cur+eps)idx=i;
+    }
+    return idx<0?0:idx;
+  }
+  if(m==='short'){
+    const j=grid.findIndex(p=>p>cur+eps);
+    return j<0?grid.length-1:j;
+  }
+  let j=grid.findIndex(p=>p>=cur-eps);
+  return j<0?grid.length-1:j;
 }
 function buildGridRiskRows(cfg){
   const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
@@ -6528,11 +6547,7 @@ function buildGridRiskRows(cfg){
   if(!(step>0))return[];
   const perStepNotional=(dep*lev)/grids;
   const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
-  // Shared zero anchor (phantom center) for both sides:
-  // choose nearest grid level at/above current price.
-  const eps=Math.max(1e-10,step*1e-9);
-  let anchorIdx=grid.findIndex(p=>p>=cur-eps);
-  if(anchorIdx<0)anchorIdx=grid.length-1;
+  const anchorIdx=gridRiskAnchorIdx(grid,cur,step,cfg.gridMode||'neutral');
   const anchorPx=grid[anchorIdx];
   const upLevels=grid.slice(anchorIdx); // includes anchor -> #1 = 0 for short side
   const downPrices=grid.slice(0,anchorIdx).reverse(); // prices below anchor
@@ -6598,9 +6613,11 @@ function renderGridRiskProfile(body,out){
   const host=body.querySelector('#gbRisk');
   if(!host){return;}
   if(!out?.ok){host.innerHTML='';return;}
+  const gm=String(out.gridRiskMode||'neutral');
   const rows=buildGridRiskRows({
     lower:out.lower,upper:out.upper,currentPrice:out.candles?.[out.candles.length-1]?.c,
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
+    gridMode:gm,
   });
   if(!rows.length){
     host.innerHTML='<div style="padding:8px;font-size:9px;color:var(--text3)">Недостаточно данных для риск-профиля.</div>';
@@ -6634,19 +6651,25 @@ function renderGridRiskProfile(body,out){
       </div>`;
     }).join('');
   };
+  const modeTitle=gm==='long'?'Long grid':gm==='short'?'Short grid':'Neutral grid';
+  const modeHint=gm==='long'
+    ?'Якорь = последний уровень ≤ цены (лонг-сетка: выше закрываем, ниже добираем). Те же формулы маржинального убытка, что в neutral; меняется только деление на «до/после» узла.'
+    :gm==='short'
+      ?'Якорь = первый уровень строго выше цены (шорт-сетка: при росте дорисует шорт). Формулы как в neutral, другой узел отсчёта.'
+      :'Якорь = первый уровень ≥ цены — общий «фантомный» ноль; сверху сценарий роста, снизу — падения (как в отлаженной neutral-модели).';
   host.innerHTML=`
-    <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль одностороннего движения (центр = текущая цена)</div>
-    <div style="font-size:9px;color:var(--text3);margin-bottom:8px">Сверху — шорт-набор при движении вверх, снизу — лонг-набор при движении вниз.</div>
+    <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль · ${modeTitle}</div>
+    <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.35">${modeHint}<br>Вверх — сценарий движения вверх (набор позиции «против роста»); вниз — вниз (набор при просадке).</div>
     <div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:8px">
-      <div style="font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.02em">Short side (up)</div>
+      <div style="font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.02em">Вверх (up)</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
         ${mkBars(shortRows,'upUsdt','upPct','upPrice',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'})}
       </div>
       <div style="height:1px;background:rgba(124,58,237,.55);margin:2px 0"></div>
       <div style="display:flex;align-items:center;justify-content:center;padding:3px 4px;border:1px dashed rgba(124,58,237,.45);border-radius:4px;background:rgba(124,58,237,.06);font-size:9px;color:#c4b5fd">
-        Якорь (общий нулевой): ${centerRow&&centerRow.upPrice!=null?fmtPrice(centerRow.upPrice):'—'} · 0.00 USDT · 0.00%
+        Якорь · 0%: ${centerRow&&centerRow.upPrice!=null?fmtPrice(centerRow.upPrice):'—'} · 0.00 USDT · 0.00%
       </div>
-      <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">Long side (down)</div>
+      <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">Вниз (down)</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
         ${mkBars(longRows,'downUsdt','downPct','downPrice',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'})}
       </div>
@@ -6771,15 +6794,15 @@ function renderManualBacktestPreview(body,out){
   });
   cs.setData(out.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   const lastC=+out.candles[out.candles.length-1]?.c;
+  const gm=String(out.gridRiskMode||'neutral');
   const riskRows=buildGridRiskRows({
     lower:out.lower,upper:out.upper,currentPrice:lastC,
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
+    gridMode:gm,
   });
   const step=out.step||0;
   const gridLv=out.gridLevels||[];
-  const eps=Math.max(1e-10,step*1e-9);
-  let anchorIdx=gridLv.findIndex(p=>p>=lastC-eps);
-  if(anchorIdx<0)anchorIdx=gridLv.length-1;
+  const anchorIdx=gridRiskAnchorIdx(gridLv,lastC,step,gm);
   const anchorPx=gridLv[anchorIdx]??lastC;
   const colShort='#ef4444';
   const colLong='#22c55e';
@@ -6897,6 +6920,12 @@ function renderGridLabModal(){
         <input id="gbLev" type="number" value="${gbPrefs.global.leverage}" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Депо</label>
         <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="1" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <label style="font-size:9px;color:var(--text3)">Риск-сетки</label>
+        <select id="gbGridMode" style="width:132px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+          <option value="neutral"${gbPrefs.global.gridMode==='neutral'?' selected':''}>Neutral (узел ≥ цены)</option>
+          <option value="long"${gbPrefs.global.gridMode==='long'?' selected':''}>Long (узел ≤ цены)</option>
+          <option value="short"${gbPrefs.global.gridMode==='short'?' selected':''}>Short (узел > цены)</option>
+        </select>
         <button class="tbtn on" id="gbRunBtn">Запустить</button>
       </div>
       <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
@@ -6925,18 +6954,22 @@ function renderGridLabModal(){
         upper:+body.querySelector('#gbHigh').value||0,
         leverage:+body.querySelector('#gbLev').value||1,
         deposit:+body.querySelector('#gbDep').value||500,
+        gridMode:String(body.querySelector('#gbGridMode')?.value||'neutral'),
         fee:0.00055,
       };
+      cfg.gridMode=['neutral','long','short'].includes(cfg.gridMode)?cfg.gridMode:'neutral';
       gbPrefs.global.tf=cfg.tf;
       gbPrefs.global.bars=cfg.bars;
       gbPrefs.global.levels=cfg.levels;
       gbPrefs.global.leverage=cfg.leverage;
       gbPrefs.global.deposit=cfg.deposit;
+      gbPrefs.global.gridMode=cfg.gridMode;
       if(!gbPrefs.symbolBounds||typeof gbPrefs.symbolBounds!=='object')gbPrefs.symbolBounds={};
       gbPrefs.symbolBounds[cfg.sym]={lower:cfg.lower||null,upper:cfg.upper||null};
       saveGridLabPrefs(gbPrefs);
       cfg.candles=await ensureBacktestCandles(cfg.sym,cfg.tf,Math.max(cfg.bars,120));
       const out=runManualGridBacktest(cfg);
+      if(out.ok)out.gridRiskMode=cfg.gridMode;
       const el=body.querySelector('#gbOut');
       if(!out.ok){el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;renderManualBacktestPreview(body,null);renderGridRiskProfile(body,null);return;}
       const maxSteps=Math.floor((out.upper-out.lower)/Math.max(out.step,1e-12));
