@@ -6833,7 +6833,7 @@ function renderGridLabModal(){
         upper:+body.querySelector('#gbHigh').value||0,
         leverage:+body.querySelector('#gbLev').value||1,
         deposit:+body.querySelector('#gbDep').value||500,
-        fee:0.00055,
+        fee:0,
       };
       gbPrefs.global.tf=cfg.tf;
       gbPrefs.global.bars=cfg.bars;
