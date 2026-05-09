@@ -6499,7 +6499,7 @@ const GRIDLAB_PREFS_KEY='cs_gridlab_prefs_v2';
 function loadGridLabPrefs(){
   try{
     const raw=localStorage.getItem(GRIDLAB_PREFS_KEY);
-    if(!raw)return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral'},symbolBounds:{}};
+    if(!raw)return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral',openingSlices:3},symbolBounds:{}};
     const j=JSON.parse(raw);
     return{
       global:{
@@ -6509,30 +6509,30 @@ function loadGridLabPrefs(){
         leverage:Math.max(1,Math.min(25,+(j?.global?.leverage||3))),
         deposit:Math.max(1,+(j?.global?.deposit||500)),
         gridMode:['neutral','long','short'].includes(j?.global?.gridMode)?j.global.gridMode:'neutral',
+        openingSlices:(()=>{
+          const raw=Math.floor(Number(j?.global?.openingSlices));
+          if(!(raw>=1)||!isFinite(raw))return 3;
+          return Math.min(60,Math.max(1,raw));
+        })(),
       },
       symbolBounds:(j?.symbolBounds&&typeof j.symbolBounds==='object')?j.symbolBounds:{},
     };
   }catch(e){
-    return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral'},symbolBounds:{}};
+    return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral',openingSlices:3},symbolBounds:{}};
   }
 }
 function saveGridLabPrefs(prefs){
   try{localStorage.setItem(GRIDLAB_PREFS_KEY,JSON.stringify(prefs||{}));}catch(e){}
 }
-/** Индекс «нулевого» узла сетки: neutral — первый уровень ≥ цены; long — последний ≤ (лонг ниже дорисовывает, сверху продаёт); short — первый строго > (шорт дорисует при росте). */
+/** Индекс узла входа под риск: neutral — первый ≥ цены; long — последний ≤ (стартуем с лимиткой на этом уровне); short — первый ≥ (стартуем с этого уровня в шорт-логике Binance). */
 function gridRiskAnchorIdx(grid,cur,step,mode){
   const eps=Math.max(1e-10,(step||0)*1e-9);
-  const m=String(mode||'neutral');
-  if(m==='long'){
+  if(String(mode||'neutral')==='long'){
     let idx=-1;
     for(let i=0;i<grid.length;i++){
       if(grid[i]<=cur+eps)idx=i;
     }
     return idx<0?0:idx;
-  }
-  if(m==='short'){
-    const j=grid.findIndex(p=>p>cur+eps);
-    return j<0?grid.length-1:j;
   }
   let j=grid.findIndex(p=>p>=cur-eps);
   return j<0?grid.length-1:j;
@@ -6547,12 +6547,64 @@ function buildGridRiskRows(cfg){
   if(!(step>0))return[];
   const perStepNotional=(dep*lev)/grids;
   const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
-  const anchorIdx=gridRiskAnchorIdx(grid,cur,step,cfg.gridMode||'neutral');
+  const mode=String(cfg.gridMode||'neutral');
+  const anchorIdx=gridRiskAnchorIdx(grid,cur,step,mode);
   const anchorPx=grid[anchorIdx];
-  const upLevels=grid.slice(anchorIdx); // includes anchor -> #1 = 0 for short side
-  const downPrices=grid.slice(0,anchorIdx).reverse(); // prices below anchor
+  const upLevels=grid.slice(anchorIdx);
+  const downPrices=grid.slice(0,anchorIdx).reverse();
   const maxDown=downPrices.length;
   const maxUp=upLevels.length;
+  /** K одинаковых «стартовых» слайсов по якорной цене (как активные порции позиции при запуске). */
+  const openKRaw=+(cfg.openingSlices ?? 3);
+  const openK=Math.max(1,Math.min(60,isFinite(openKRaw)?Math.floor(openKRaw):3));
+  if(mode==='long'){
+    const rows=[];
+    const qtyOpen=perStepNotional/Math.max(anchorPx,1e-12);
+    for(let n=1;n<=maxDown;n++){
+      const pxNow=downPrices[n-1];
+      let downUsdt=openK*qtyOpen*(pxNow-anchorPx);
+      for(let j=1;j<=n;j++){
+        const ent=downPrices[j-1];
+        const q=perStepNotional/Math.max(ent,1e-12);
+        downUsdt+=q*(pxNow-ent);
+      }
+      rows.push({
+        step:n,
+        downUsdt,
+        upUsdt:0,
+        downPrice:pxNow,
+        upPrice:null,
+        downPct:(downUsdt/dep)*100,
+        upPct:0,
+      });
+    }
+    return rows;
+  }
+  if(mode==='short'){
+    const rows=[];
+    if(maxUp<=1)return rows;
+    const basePx=upLevels[0];
+    const qtyOpen=perStepNotional/Math.max(basePx,1e-12);
+    for(let n=1;n<=maxUp-1;n++){
+      const pxNow=upLevels[n];
+      let upUsdt=openK*qtyOpen*(basePx-pxNow);
+      for(let j=1;j<=n;j++){
+        const ent=upLevels[j];
+        const q=perStepNotional/Math.max(ent,1e-12);
+        upUsdt+=q*(ent-pxNow);
+      }
+      rows.push({
+        step:n,
+        downUsdt:0,
+        upUsdt,
+        downPrice:null,
+        upPrice:pxNow,
+        downPct:0,
+        upPct:(upUsdt/dep)*100,
+      });
+    }
+    return rows;
+  }
   const maxN=Math.max(maxDown,maxUp);
   const rows=[];
   for(let n=1;n<=maxN;n++){
@@ -6561,8 +6613,6 @@ function buildGridRiskRows(cfg){
     if(n<=maxDown){
       const pxNow=downPrices[n-1];
       downPrice=pxNow;
-      // Long side uses the same shared anchor as start:
-      // at first step below anchor, position from anchor already has loss.
       const downEntries=[anchorPx,...downPrices.slice(0,n-1)];
       for(let i=0;i<downEntries.length;i++){
         const ent=downEntries[i];
@@ -6592,13 +6642,16 @@ function buildGridRiskRows(cfg){
   return rows;
 }
 /** Подпись уровня сетки на графике (тот же риск, что в панели). */
-function gridRiskMetaForPrice(price,anchorPx,step,riskRows){
+function gridRiskMetaForPrice(price,anchorPx,step,riskRows,gridMode){
   const tol=Math.max(1e-10,(step||0)*1e-7);
+  const gm=String(gridMode||'neutral');
   if(Math.abs(price-anchorPx)<=tol)return{side:'anchor',usdt:0,pct:0};
   if(price>anchorPx+tol){
+    if(gm==='long')return{side:'tp-up',usdt:0,pct:0}; // лимитные продажи / фикс — модель без убыточного MTM здесь
     const r=riskRows.find(x=>x.upPrice!=null&&Math.abs(x.upPrice-price)<=tol);
     if(r)return{side:'short',usdt:r.upUsdt,pct:r.upPct};
   }else{
+    if(gm==='short')return{side:'tp-down',usdt:0,pct:0}; // ниже анкора — выкупы, не наш сценарий убытка
     const r=riskRows.find(x=>x.downPrice!=null&&Math.abs(x.downPrice-price)<=tol);
     if(r)return{side:'long',usdt:r.downUsdt,pct:r.downPct};
   }
@@ -6606,6 +6659,7 @@ function gridRiskMetaForPrice(price,anchorPx,step,riskRows){
 }
 function fmtGridLineTitle(meta){
   if(meta.side==='anchor')return'0%, 0 USDT';
+  if(meta.side==='tp-up'||meta.side==='tp-down')return'0%, 0 USDT (фиксация)';
   if(meta.usdt==null||meta.pct==null||!isFinite(meta.usdt)||!isFinite(meta.pct))return'';
   return`${fn(meta.pct,2)}%, ${fn(meta.usdt,2)} USDT`;
 }
@@ -6614,10 +6668,12 @@ function renderGridRiskProfile(body,out){
   if(!host){return;}
   if(!out?.ok){host.innerHTML='';return;}
   const gm=String(out.gridRiskMode||'neutral');
+  const os=+(out.gridRiskSlices ?? 3);
   const rows=buildGridRiskRows({
     lower:out.lower,upper:out.upper,currentPrice:out.candles?.[out.candles.length-1]?.c,
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
     gridMode:gm,
+    openingSlices:os,
   });
   if(!rows.length){
     host.innerHTML='<div style="padding:8px;font-size:9px;color:var(--text3)">Недостаточно данных для риск-профиля.</div>';
@@ -6625,7 +6681,11 @@ function renderGridRiskProfile(body,out){
   }
   const fmt=(v)=>`${v>=0?'+':''}${fn(v,2)}`;
   const maxLoss=Math.max(...rows.map(r=>Math.max(Math.abs(r.downUsdt),Math.abs(r.upUsdt))),1e-9);
-  const centerRow=rows.find(r=>r.upPrice!=null&&Math.abs(r.upUsdt)<=1e-10)||null;
+  const lastC=+out.candles?.[out.candles.length-1]?.c;
+  const riskStep=(out.upper-out.lower)/Math.max(2,out.levels|0);
+  const riskGrid=Array.from({length:(out.levels|0)+1},(_,i)=>out.lower+i*riskStep);
+  const ai=gridRiskAnchorIdx(riskGrid,lastC,riskStep,gm);
+  const anchorLbl=fmtPrice(riskGrid[ai]??lastC);
   const shortRows=rows
     .filter(r=>r.upPrice!=null&&Math.abs(r.upUsdt)>1e-10)
     .sort((a,b)=>b.step-a.step);
@@ -6651,25 +6711,26 @@ function renderGridRiskProfile(body,out){
       </div>`;
     }).join('');
   };
+  const ks=+(out.gridRiskSlices ?? 3);
   const modeTitle=gm==='long'?'Long grid':gm==='short'?'Short grid':'Neutral grid';
   const modeHint=gm==='long'
-    ?'Якорь = последний уровень ≤ цены (лонг-сетка: выше закрываем, ниже добираем). Те же формулы маржинального убытка, что в neutral; меняется только деление на «до/после» узла.'
+    ?`Стартовая модель Binance‑лонг: ${ks} активных порций входа по цене якоря (${anchorLbl}); вверх — лимиты на фиксацию (убыток тут не копим); вниз — на каждый новый уровень +1 дорисованный биай (${ks}+1, ${ks}+2, … порций в разметке ниже якоря).`
     :gm==='short'
-      ?'Якорь = первый уровень строго выше цены (шорт-сетка: при росте дорисует шорт). Формулы как в neutral, другой узел отсчёта.'
-      :'Якорь = первый уровень ≥ цены — общий «фантомный» ноль; сверху сценарий роста, снизу — падения (как в отлаженной neutral-модели).';
+      ?`Стартовый шорт: ${ks} порций по якорю (${anchorLbl}); при росте за якорём — дорисовка шорта +1,+2 … (как симметричный к лонгу сценарий). Ниже якоря — выкупы, убыток не моделируем.`
+      :'Якорь = первый уровень ≥ цены — «фантомный» ноль neutral; симметричные сценарии вверх/вниз (как в отлаженной модели).';
   host.innerHTML=`
-    <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль · ${modeTitle}</div>
-    <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.35">${modeHint}<br>Вверх — сценарий движения вверх (набор позиции «против роста»); вниз — вниз (набор при просадке).</div>
+    <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль · ${modeTitle}${gm!=='neutral'?` · K=${fn(ks,0)}`:''}</div>
+    <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.35">${modeHint}</div>
     <div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:8px">
-      <div style="font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.02em">Вверх (up)</div>
+      <div style="font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.02em">${gm==='long'?'Вверх (фиксация, модель без убытка)':'Вверх (up)'}</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
         ${mkBars(shortRows,'upUsdt','upPct','upPrice',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'})}
       </div>
       <div style="height:1px;background:rgba(124,58,237,.55);margin:2px 0"></div>
       <div style="display:flex;align-items:center;justify-content:center;padding:3px 4px;border:1px dashed rgba(124,58,237,.45);border-radius:4px;background:rgba(124,58,237,.06);font-size:9px;color:#c4b5fd">
-        Якорь · 0%: ${centerRow&&centerRow.upPrice!=null?fmtPrice(centerRow.upPrice):'—'} · 0.00 USDT · 0.00%
+        Якорь · 0%: ${anchorLbl} · 0.00 USDT · 0.00%
       </div>
-      <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">Вниз (down)</div>
+      <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">${gm==='short'?'Вниз (выкупы, без убытка)':'Вниз — просадка (down)'}</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
         ${mkBars(longRows,'downUsdt','downPct','downPrice',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'})}
       </div>
@@ -6795,10 +6856,12 @@ function renderManualBacktestPreview(body,out){
   cs.setData(out.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   const lastC=+out.candles[out.candles.length-1]?.c;
   const gm=String(out.gridRiskMode||'neutral');
+  const ks=+(out.gridRiskSlices ?? 3);
   const riskRows=buildGridRiskRows({
     lower:out.lower,upper:out.upper,currentPrice:lastC,
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
     gridMode:gm,
+    openingSlices:ks,
   });
   const step=out.step||0;
   const gridLv=out.gridLevels||[];
@@ -6808,11 +6871,12 @@ function renderManualBacktestPreview(body,out){
   const colLong='#22c55e';
   const colAnchor='#f59e0b';
   gridLv.forEach((p,i)=>{
-    const meta=gridRiskMetaForPrice(p,anchorPx,step,riskRows);
+    const meta=gridRiskMetaForPrice(p,anchorPx,step,riskRows,gm);
     let color='#60a5fa';
     if(meta.side==='short')color=colShort;
     else if(meta.side==='long')color=colLong;
     else if(meta.side==='anchor')color=colAnchor;
+    else if(meta.side==='tp-up'||meta.side==='tp-down')color='#64748b';
     const title=fmtGridLineTitle(meta);
     cs.createPriceLine({
       price:p,
@@ -6924,8 +6988,10 @@ function renderGridLabModal(){
         <select id="gbGridMode" style="width:132px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
           <option value="neutral"${gbPrefs.global.gridMode==='neutral'?' selected':''}>Neutral (узел ≥ цены)</option>
           <option value="long"${gbPrefs.global.gridMode==='long'?' selected':''}>Long (узел ≤ цены)</option>
-          <option value="short"${gbPrefs.global.gridMode==='short'?' selected':''}>Short (узел > цены)</option>
+          <option value="short"${gbPrefs.global.gridMode==='short'?' selected':''}>Short (узел ≥ цены)</option>
         </select>
+        <label style="font-size:9px;color:var(--text3)" title="Стартовых порций входа по цене якоря для Long/Short риска (K в K+1, K+2…)">Порций K</label>
+        <input id="gbOpenSlices" type="number" value="${gbPrefs.global.openingSlices??3}" min="1" max="60" title="Количество активных порций при старте (Binance‑style)" style="width:46px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <button class="tbtn on" id="gbRunBtn">Запустить</button>
       </div>
       <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
@@ -6955,6 +7021,7 @@ function renderGridLabModal(){
         leverage:+body.querySelector('#gbLev').value||1,
         deposit:+body.querySelector('#gbDep').value||500,
         gridMode:String(body.querySelector('#gbGridMode')?.value||'neutral'),
+        openingSlices:Math.min(60,Math.max(1,Math.floor(+body.querySelector('#gbOpenSlices')?.value||3)||3)),
         fee:0.00055,
       };
       cfg.gridMode=['neutral','long','short'].includes(cfg.gridMode)?cfg.gridMode:'neutral';
@@ -6964,12 +7031,13 @@ function renderGridLabModal(){
       gbPrefs.global.leverage=cfg.leverage;
       gbPrefs.global.deposit=cfg.deposit;
       gbPrefs.global.gridMode=cfg.gridMode;
+      gbPrefs.global.openingSlices=cfg.openingSlices;
       if(!gbPrefs.symbolBounds||typeof gbPrefs.symbolBounds!=='object')gbPrefs.symbolBounds={};
       gbPrefs.symbolBounds[cfg.sym]={lower:cfg.lower||null,upper:cfg.upper||null};
       saveGridLabPrefs(gbPrefs);
       cfg.candles=await ensureBacktestCandles(cfg.sym,cfg.tf,Math.max(cfg.bars,120));
       const out=runManualGridBacktest(cfg);
-      if(out.ok)out.gridRiskMode=cfg.gridMode;
+      if(out.ok){out.gridRiskMode=cfg.gridMode;out.gridRiskSlices=cfg.openingSlices;}
       const el=body.querySelector('#gbOut');
       if(!out.ok){el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;renderManualBacktestPreview(body,null);renderGridRiskProfile(body,null);return;}
       const maxSteps=Math.floor((out.upper-out.lower)/Math.max(out.step,1e-12));
