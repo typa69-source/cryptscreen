@@ -6513,24 +6513,38 @@ function buildGridRiskRows(cfg){
   const step=(hi-lo)/(levels-1);
   if(!(step>0))return[];
   const perStepNotional=(dep*lev)/levels;
-  const maxDown=Math.max(0,Math.floor((cur-lo)/step));
-  const maxUp=Math.max(0,Math.floor((hi-cur)/step));
+  const grid=Array.from({length:levels},(_,i)=>lo+step*i);
+  let centerIdx=0;
+  let centerDist=Infinity;
+  for(let i=0;i<grid.length;i++){
+    const d=Math.abs(grid[i]-cur);
+    if(d<centerDist){centerDist=d;centerIdx=i;}
+  }
+  // Binance-like center behavior: nearest level to current acts as phantom 0-line
+  // (no order there), creating a wider "double" gap between nearest buy/sell levels.
+  const downLevels=grid.slice(0,centerIdx).reverse();
+  const upLevels=grid.slice(centerIdx+1);
+  const maxDown=downLevels.length;
+  const maxUp=upLevels.length;
   const maxN=Math.max(maxDown,maxUp);
   const rows=[];
   for(let n=1;n<=maxN;n++){
     let downUsdt=0,upUsdt=0;
+    let downPrice=null,upPrice=null;
     if(n<=maxDown){
-      const pxNow=cur-step*n;
+      const pxNow=downLevels[n-1];
+      downPrice=pxNow;
       for(let i=1;i<=n;i++){
-        const ent=cur-step*i;
+        const ent=downLevels[i-1];
         const qty=perStepNotional/Math.max(ent,1e-12);
         downUsdt+=qty*(pxNow-ent);
       }
     }
     if(n<=maxUp){
-      const pxNow=cur+step*n;
+      const pxNow=upLevels[n-1];
+      upPrice=pxNow;
       for(let i=1;i<=n;i++){
-        const ent=cur+step*i;
+        const ent=upLevels[i-1];
         const qty=perStepNotional/Math.max(ent,1e-12);
         upUsdt+=qty*(ent-pxNow);
       }
@@ -6539,6 +6553,8 @@ function buildGridRiskRows(cfg){
       step:n,
       downUsdt,
       upUsdt,
+      downPrice,
+      upPrice,
       downPct:(downUsdt/dep)*100,
       upPct:(upUsdt/dep)*100,
     });
@@ -6561,23 +6577,25 @@ function renderGridRiskProfile(body,out){
   const maxLoss=Math.max(...rows.map(r=>Math.max(Math.abs(r.downUsdt),Math.abs(r.upUsdt))),1e-9);
   const shortRows=rows
     .filter(r=>r.step<=0||Math.abs(r.upUsdt)>1e-8)
-    .sort((a,b)=>a.step-b.step);
+    .sort((a,b)=>b.step-a.step);
   const longRows=rows
     .filter(r=>r.step<=0||Math.abs(r.downUsdt)>1e-8)
     .sort((a,b)=>a.step-b.step);
-  const mkBars=(list,fieldUsdt,fieldPct,tone)=>{
+  const mkBars=(list,fieldUsdt,fieldPct,fieldPrice,tone)=>{
     if(!list.length){
       return '<div style="font-size:9px;color:var(--text3);padding:8px 0;text-align:center">Нет уровней в этой стороне</div>';
     }
     return list.map(r=>{
       const val=r[fieldUsdt];
       const pct=r[fieldPct];
+      const px=r[fieldPrice];
       const w=Math.max(2,Math.round(Math.abs(val)/maxLoss*100));
+      const pxTxt=px!=null&&isFinite(px)?fmtPrice(px):'—';
       return `<div style="display:flex;align-items:center;gap:6px;height:16px">
         <div style="width:26px;text-align:right;color:var(--text2);font-size:9px">#${r.step}</div>
         <div style="position:relative;flex:1;height:100%;background:${tone.bg};border:1px solid ${tone.bd};border-radius:4px;overflow:hidden">
           <span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:${tone.fill}"></span>
-          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmt(val)} USDT · ${fmt(pct)}%</span>
+          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmt(val)} USDT · ${fmt(pct)}% · ${pxTxt}</span>
         </div>
       </div>`;
     }).join('');
@@ -6588,12 +6606,12 @@ function renderGridRiskProfile(body,out){
     <div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:8px">
       <div style="font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.02em">Short side (up)</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
-        ${mkBars(shortRows,'upUsdt','upPct',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'})}
+        ${mkBars(shortRows,'upUsdt','upPct','upPrice',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'})}
       </div>
       <div style="height:1px;background:rgba(124,58,237,.55);margin:2px 0"></div>
       <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">Long side (down)</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
-        ${mkBars(longRows,'downUsdt','downPct',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'})}
+        ${mkBars(longRows,'downUsdt','downPct','downPrice',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'})}
       </div>
     </div>`;
 }
@@ -6730,7 +6748,7 @@ function renderGridLabModal(){
   modal.id='gridLabModal';
   modal.style.cssText='position:fixed;inset:0;z-index:820;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;';
   const box=document.createElement('div');
-  box.style.cssText='width:min(980px,95vw);height:min(760px,92vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
+  box.style.cssText='width:min(1220px,98vw);height:min(760px,92vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
   box.innerHTML=`
     <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)">
       <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Coin Selector + Manual Backtest</span>
