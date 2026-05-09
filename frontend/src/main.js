@@ -6514,16 +6514,12 @@ function buildGridRiskRows(cfg){
   if(!(step>0))return[];
   const perStepNotional=(dep*lev)/grids;
   const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
-  let centerIdx=0;
-  let centerDist=Infinity;
-  for(let i=0;i<grid.length;i++){
-    const d=Math.abs(grid[i]-cur);
-    if(d<centerDist){centerDist=d;centerIdx=i;}
-  }
-  // Binance-like center behavior: nearest level to current acts as phantom 0-line
-  // (no order there), creating a wider "double" gap between nearest buy/sell levels.
-  const downLevels=grid.slice(0,centerIdx).reverse();
-  const upLevels=grid.slice(centerIdx+1);
+  // Binance-like center behavior: current price is a phantom 0-line.
+  // We split levels strictly by current price, so nearest levels around center
+  // (e.g. 2.48 / 2.52) are preserved and shown as the first steps.
+  const eps=Math.max(1e-10,step*1e-9);
+  const downLevels=grid.filter(p=>p<cur-eps).reverse();
+  const upLevels=grid.filter(p=>p>cur+eps);
   const maxDown=downLevels.length;
   const maxUp=upLevels.length;
   const maxN=Math.max(maxDown,maxUp);
@@ -6576,10 +6572,10 @@ function renderGridRiskProfile(body,out){
   const fmt=(v)=>`${v>=0?'+':''}${fn(v,2)}`;
   const maxLoss=Math.max(...rows.map(r=>Math.max(Math.abs(r.downUsdt),Math.abs(r.upUsdt))),1e-9);
   const shortRows=rows
-    .filter(r=>r.step<=0||Math.abs(r.upUsdt)>1e-8)
+    .filter(r=>r.upPrice!=null)
     .sort((a,b)=>b.step-a.step);
   const longRows=rows
-    .filter(r=>r.step<=0||Math.abs(r.downUsdt)>1e-8)
+    .filter(r=>r.downPrice!=null)
     .sort((a,b)=>a.step-b.step);
   const mkBars=(list,fieldUsdt,fieldPct,fieldPrice,tone)=>{
     if(!list.length){
