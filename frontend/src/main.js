@@ -2158,7 +2158,19 @@ function rCanvas(ch){
   });
 }
 
+function _rCanvasGridLabImmediate(ch){
+  const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs)return;
+  const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  const drawW=Math.max(1,W-PRICE_AXIS_W);
+  const drawH=Math.max(1,H-TIME_AXIS_H);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
+  if(ch.ruler)drawRuler(ctx,ch);
+  ctx.restore();
+}
+
 function _rCanvasImmediate(ch){
+  if(ch._gridLabChart)return _rCanvasGridLabImmediate(ch);
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   ch._emaHoverZones=[];
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
@@ -3086,10 +3098,12 @@ function onRulerStart(ch,e,container){
   if(!ch.lc||!ch.cs)return;
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   const pt=snapPoint(ch,x,y,e.ctrlKey)||pixelToPoint(ch,x,y);if(!pt)return;
-  // Clear rulers on charts from opposite context
-  [...S.charts,...S.fsCharts].forEach((c,i)=>{if(c!==ch&&c.ruler){c.ruler=null;rCanvas(c);}});
+  // Clear rulers on charts from opposite context (не трогаем основные графики из Grid Lab)
+  if(!ch._gridLabChart){
+    [...S.charts,...S.fsCharts].forEach((c)=>{if(c!==ch&&c.ruler){c.ruler=null;rCanvas(c);}});
+  }
   ch.ruler={active:true,p1:pt,p2:pt,mouseX:e.clientX,mouseY:e.clientY};
-  ch._rulerIsFsChart=S.fsCharts.includes(ch);
+  ch._rulerIsFsChart=!ch._gridLabChart&&S.fsCharts.includes(ch);
   rCanvas(ch);
 }
 function onRulerMove(ch,e,container){
@@ -6715,15 +6729,33 @@ function runManualGridBacktest(cfg){
 }
 
 function renderManualBacktestPreview(body,out){
+  const wrap=body.querySelector('#gbChartWrap');
   const host=body.querySelector('#gbChart');
-  if(!host)return;
+  if(!wrap||!host)return;
   const prev=body._gbChartCtx;
+  if(prev?.gbLabSig)try{prev.gbLabSig.abort();}catch(e){}
   if(prev?.ro){try{prev.ro.disconnect();}catch(e){}}
   if(prev?.lc){try{prev.lc.remove();}catch(e){}}
-  body._gbChartCtx={lc:null,cs:null,ro:null};
+  body._gbChartCtx={lc:null,cs:null,ro:null,gbCh:null,gbLabSig:null};
   host.innerHTML='';
+  let rulerCanvas=body.querySelector('#gbRulerCanvas');
+  if(!rulerCanvas){
+    rulerCanvas=document.createElement('canvas');
+    rulerCanvas.id='gbRulerCanvas';
+    rulerCanvas.style.cssText='position:absolute;inset:0;z-index:12;pointer-events:none';
+    wrap.appendChild(rulerCanvas);
+  }
   if(!S.LC||!out?.ok||!Array.isArray(out.candles)||!out.candles.length)return;
+  const syncCanvasSize=()=>{
+    const w=Math.max(1,wrap.clientWidth|0),h=Math.max(1,wrap.clientHeight|0);
+    try{lc.applyOptions({width:w,height:h});}catch(e){}
+    rulerCanvas.width=w;rulerCanvas.height=h;
+    rulerCanvas.style.width=w+'px';rulerCanvas.style.height=h+'px';
+    if(body._gbChartCtx?.gbCh)rCanvas(body._gbChartCtx.gbCh);
+  };
   const lc=S.LC.createChart(host,{
+    width:wrap.clientWidth||400,
+    height:wrap.clientHeight||420,
     layout:{background:{color:'#0a0a0b'},textColor:'#606070'},
     grid:{vertLines:{color:'#141418'},horzLines:{color:'#141418'}},
     rightPriceScale:{borderColor:'#252530'},
@@ -6769,11 +6801,37 @@ function renderManualBacktestPreview(body,out){
     });
   });
   if(typeof cs.setMarkers==='function')cs.setMarkers([]);
-  const ro=new ResizeObserver(()=>{
-    try{lc.applyOptions({width:host.clientWidth,height:host.clientHeight});}catch(e){}
-  });
-  ro.observe(host);
-  body._gbChartCtx={lc,cs,ro};
+  const gbCh={
+    lc,cs,
+    candles:out.candles,
+    ruler:null,
+    canvas:rulerCanvas,
+    _gridLabChart:true,
+    drawings:[],
+    hoveredIdx:-1,
+    hoverX:0,
+    hoverY:0,
+  };
+  const gbLabSig=new AbortController();
+  const sig=gbLabSig.signal;
+  wrap.addEventListener('mousedown',e=>{if(e.button===1){e.preventDefault();onRulerStart(gbCh,e,wrap);}},{capture:true,signal:sig});
+  wrap.addEventListener('mousemove',e=>{if(gbCh.ruler?.active)onRulerMove(gbCh,e,wrap);},{capture:true,signal:sig});
+  wrap.addEventListener('mouseup',e=>{if(e.button===1&&gbCh.ruler?.active)onRulerEnd(gbCh,e);},{capture:true,signal:sig});
+  wrap.addEventListener('contextmenu',e=>{
+    e.preventDefault();
+    if(gbCh.ruler?.p1&&gbCh.ruler?.p2){
+      const{x,y}=getCoords(wrap,e.clientX,e.clientY);
+      if(isNearRuler(gbCh,x,y)){
+        gbCh.ruler=null;
+        document.getElementById('rulerTooltip').style.display='none';
+        rCanvas(gbCh);
+      }
+    }
+  },{signal:sig});
+  const ro=new ResizeObserver(()=>{syncCanvasSize();});
+  ro.observe(wrap);
+  requestAnimationFrame(syncCanvasSize);
+  body._gbChartCtx={lc,cs,ro,gbCh,gbLabSig};
 }
 
 function renderGridLabModal(){
@@ -6782,12 +6840,12 @@ function renderGridLabModal(){
   modal.id='gridLabModal';
   modal.style.cssText='position:fixed;inset:0;z-index:820;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;';
   const box=document.createElement('div');
-  box.style.cssText='width:min(1220px,98vw);height:min(760px,92vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
+  box.style.cssText='width:min(1220px,98vw);height:min(860px,94vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
   box.innerHTML=`
     <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)">
-      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Coin Selector + Manual Backtest</span>
+      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Бэктест + Coin Selector</span>
+      <button class="tbtn on" id="gridTabBacktest">Бэктест</button>
       <button class="tbtn" id="gridTabSelector">Coin Selector</button>
-      <button class="tbtn" id="gridTabBacktest">Manual Backtest</button>
       <button class="tbtn" id="gridCloseBtn">Закрыть</button>
     </div>
     <div id="gridLabBody" style="flex:1;min-height:0;overflow:auto;padding:12px"></div>
@@ -6799,8 +6857,8 @@ function renderGridLabModal(){
   const btnBt=box.querySelector('#gridTabBacktest');
   const gbPrefs=loadGridLabPrefs();
   const setTab=(tab)=>{
-    btnSel.classList.toggle('on',tab==='selector');
     btnBt.classList.toggle('on',tab==='backtest');
+    btnSel.classList.toggle('on',tab==='selector');
     if(tab==='selector'){
       const rows=getGridSelectorRows(24);
       body.innerHTML=`
@@ -6817,7 +6875,8 @@ function renderGridLabModal(){
     const defSym=(S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
     const sb=(gbPrefs.symbolBounds&&gbPrefs.symbolBounds[defSym])||{};
     body.innerHTML=`
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+      <div style="display:flex;flex-direction:column;gap:8px;min-height:min(72vh,720px)">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0;flex-shrink:0">
         <label style="font-size:9px;color:var(--text3)">Символ</label>
         <input id="gbSym" value="${defSym}" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">TF</label>
@@ -6840,10 +6899,14 @@ function renderGridLabModal(){
         <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="1" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <button class="tbtn on" id="gbRunBtn">Запустить</button>
       </div>
-      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
-      <div style="display:flex;gap:8px;min-height:300px;align-items:stretch">
-        <div id="gbChart" style="flex:1 1 auto;min-width:0;height:300px;border:1px solid var(--border2);border-radius:6px;overflow:hidden"></div>
-        <div id="gbRisk" style="width:min(340px,34%);min-width:260px;border:1px solid var(--border2);border-radius:6px;padding:8px 8px 10px;background:rgba(255,255,255,.01);display:flex;flex-direction:column;min-height:300px"></div>
+      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
+      <div style="display:flex;gap:8px;flex:1;min-height:min(56vh,560px);align-items:stretch">
+        <div id="gbChartWrap" style="position:relative;flex:1 1 auto;min-width:0;min-height:min(56vh,560px);height:min(56vh,560px);border:1px solid var(--border2);border-radius:6px;overflow:hidden">
+          <div id="gbChart" style="position:absolute;inset:0"></div>
+          <canvas id="gbRulerCanvas" width="400" height="400" style="position:absolute;inset:0;z-index:12;pointer-events:none"></canvas>
+        </div>
+        <div id="gbRisk" style="width:min(340px,34%);min-width:260px;border:1px solid var(--border2);border-radius:6px;padding:8px 8px 10px;background:rgba(255,255,255,.01);display:flex;flex-direction:column;min-height:min(56vh,560px)"></div>
+      </div>
       </div>`;
     body.querySelector('#gbSym').addEventListener('change',()=>{
       const sym=String(body.querySelector('#gbSym').value||'').toUpperCase().trim();
@@ -6862,7 +6925,7 @@ function renderGridLabModal(){
         upper:+body.querySelector('#gbHigh').value||0,
         leverage:+body.querySelector('#gbLev').value||1,
         deposit:+body.querySelector('#gbDep').value||500,
-        fee:0,
+        fee:0.00055,
       };
       gbPrefs.global.tf=cfg.tf;
       gbPrefs.global.bars=cfg.bars;
@@ -6898,13 +6961,14 @@ function renderGridLabModal(){
   btnBt.onclick=()=>setTab('backtest');
   const closeModal=()=>{
     const ctx=body._gbChartCtx;
+    if(ctx?.gbLabSig)try{ctx.gbLabSig.abort();}catch(e){}
     if(ctx?.ro){try{ctx.ro.disconnect();}catch(e){}}
     if(ctx?.lc){try{ctx.lc.remove();}catch(e){}}
     modal.remove();
   };
   box.querySelector('#gridCloseBtn').onclick=closeModal;
   modal.addEventListener('mousedown',e=>{if(e.target===modal)closeModal();});
-  setTab('selector');
+  setTab('backtest');
 }
 
 function toggleGridLab(){
