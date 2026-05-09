@@ -6513,7 +6513,6 @@ function buildGridRiskRows(cfg){
   const step=(hi-lo)/(levels-1);
   if(!(step>0))return[];
   const perStepNotional=(dep*lev)/levels;
-  const qtyPerStep=perStepNotional/cur;
   const maxDown=Math.max(0,Math.floor((cur-lo)/step));
   const maxUp=Math.max(0,Math.floor((hi-cur)/step));
   const maxN=Math.max(maxDown,maxUp);
@@ -6524,14 +6523,16 @@ function buildGridRiskRows(cfg){
       const pxNow=cur-step*n;
       for(let i=1;i<=n;i++){
         const ent=cur-step*i;
-        downUsdt+=qtyPerStep*(pxNow-ent);
+        const qty=perStepNotional/Math.max(ent,1e-12);
+        downUsdt+=qty*(pxNow-ent);
       }
     }
     if(n<=maxUp){
       const pxNow=cur+step*n;
       for(let i=1;i<=n;i++){
         const ent=cur+step*i;
-        upUsdt+=qtyPerStep*(ent-pxNow);
+        const qty=perStepNotional/Math.max(ent,1e-12);
+        upUsdt+=qty*(ent-pxNow);
       }
     }
     rows.push({
@@ -6556,29 +6557,44 @@ function renderGridRiskProfile(body,out){
     host.innerHTML='<div style="padding:8px;font-size:9px;color:var(--text3)">Недостаточно данных для риск-профиля.</div>';
     return;
   }
-  const fmt=(v)=>`${v>0?'+':''}${fn(v,2)}`;
+  const fmt=(v)=>`${v>=0?'+':''}${fn(v,2)}`;
   const maxLoss=Math.max(...rows.map(r=>Math.max(Math.abs(r.downUsdt),Math.abs(r.upUsdt))),1e-9);
+  const shortRows=rows
+    .filter(r=>r.step<=0||Math.abs(r.upUsdt)>1e-8)
+    .sort((a,b)=>a.step-b.step);
+  const longRows=rows
+    .filter(r=>r.step<=0||Math.abs(r.downUsdt)>1e-8)
+    .sort((a,b)=>a.step-b.step);
+  const mkBars=(list,fieldUsdt,fieldPct,tone)=>{
+    if(!list.length){
+      return '<div style="font-size:9px;color:var(--text3);padding:8px 0;text-align:center">Нет уровней в этой стороне</div>';
+    }
+    return list.map(r=>{
+      const val=r[fieldUsdt];
+      const pct=r[fieldPct];
+      const w=Math.max(2,Math.round(Math.abs(val)/maxLoss*100));
+      return `<div style="display:flex;align-items:center;gap:6px;height:16px">
+        <div style="width:26px;text-align:right;color:var(--text2);font-size:9px">#${r.step}</div>
+        <div style="position:relative;flex:1;height:100%;background:${tone.bg};border:1px solid ${tone.bd};border-radius:4px;overflow:hidden">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:${tone.fill}"></span>
+          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmt(val)} USDT · ${fmt(pct)}%</span>
+        </div>
+      </div>`;
+    }).join('');
+  };
   host.innerHTML=`
-    <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль одностороннего движения по сеткам (без разворотов)</div>
-    <div style="display:grid;grid-template-columns:52px 1fr 1fr;gap:6px;font-size:9px;color:var(--text3);padding:0 2px 6px">
-      <div>Сетка</div><div>Вниз (лонг-набор)</div><div>Вверх (шорт-набор)</div>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:4px;max-height:210px;overflow:auto;padding-right:2px">
-      ${rows.map(r=>{
-        const dw=Math.max(2,Math.round(Math.abs(r.downUsdt)/maxLoss*100));
-        const uw=Math.max(2,Math.round(Math.abs(r.upUsdt)/maxLoss*100));
-        return`<div style="display:grid;grid-template-columns:52px 1fr 1fr;gap:6px;align-items:center;font-size:9px">
-          <div style="color:var(--text2)">#${r.step}</div>
-          <div style="position:relative;height:16px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:4px;overflow:hidden">
-            <span style="position:absolute;left:0;top:0;bottom:0;width:${dw}%;background:rgba(239,68,68,.4)"></span>
-            <span style="position:relative;z-index:1;padding-left:4px;color:#fca5a5">${fmt(r.downUsdt)} USDT · ${fmt(r.downPct)}%</span>
-          </div>
-          <div style="position:relative;height:16px;background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.2);border-radius:4px;overflow:hidden">
-            <span style="position:absolute;left:0;top:0;bottom:0;width:${uw}%;background:rgba(239,68,68,.4)"></span>
-            <span style="position:relative;z-index:1;padding-left:4px;color:#fca5a5">${fmt(r.upUsdt)} USDT · ${fmt(r.upPct)}%</span>
-          </div>
-        </div>`;
-      }).join('')}
+    <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль одностороннего движения (центр = текущая цена)</div>
+    <div style="font-size:9px;color:var(--text3);margin-bottom:8px">Сверху — шорт-набор при движении вверх, снизу — лонг-набор при движении вниз.</div>
+    <div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:8px">
+      <div style="font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.02em">Short side (up)</div>
+      <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
+        ${mkBars(shortRows,'upUsdt','upPct',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'})}
+      </div>
+      <div style="height:1px;background:rgba(124,58,237,.55);margin:2px 0"></div>
+      <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">Long side (down)</div>
+      <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
+        ${mkBars(longRows,'downUsdt','downPct',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'})}
+      </div>
     </div>`;
 }
 
@@ -6773,8 +6789,10 @@ function renderGridLabModal(){
         <button class="tbtn on" id="gbRunBtn">Запустить</button>
       </div>
       <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
-      <div id="gbChart" style="height:280px;border:1px solid var(--border2);border-radius:6px;overflow:hidden"></div>
-      <div id="gbRisk" style="margin-top:8px;border:1px solid var(--border2);border-radius:6px;padding:8px 8px 10px;background:rgba(255,255,255,.01)"></div>`;
+      <div style="display:flex;gap:8px;min-height:300px;align-items:stretch">
+        <div id="gbChart" style="flex:1 1 auto;min-width:0;height:300px;border:1px solid var(--border2);border-radius:6px;overflow:hidden"></div>
+        <div id="gbRisk" style="width:min(340px,34%);min-width:260px;border:1px solid var(--border2);border-radius:6px;padding:8px 8px 10px;background:rgba(255,255,255,.01);display:flex;flex-direction:column;min-height:300px"></div>
+      </div>`;
     body.querySelector('#gbSym').addEventListener('change',()=>{
       const sym=String(body.querySelector('#gbSym').value||'').toUpperCase().trim();
       const bnd=gbPrefs.symbolBounds?.[sym]||{};
