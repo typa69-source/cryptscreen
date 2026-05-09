@@ -20,7 +20,7 @@ router.post('/register', async (req, res) => {
     )
     res.json({ ok: true, userId: result.rows[0].id })
   } catch (e) {
-    console.error('register error:', e)
+    console.error('register error:', e.message, e.code || '')
     res.status(500).json({ error: 'Ошибка сервера' })
   }
 })
@@ -41,7 +41,7 @@ router.post('/login', async (req, res) => {
     const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET, { expiresIn: '30d' })
     res.json({ token, email: user.email })
   } catch (e) {
-    console.error('login error:', e)
+    console.error('login error:', e.message, e.code || '')
     res.status(500).json({ error: 'Ошибка сервера' })
   }
 })

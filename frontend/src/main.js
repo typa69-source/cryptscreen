@@ -6562,6 +6562,24 @@ function buildGridRiskRows(cfg){
   }
   return rows;
 }
+/** Подпись уровня сетки на графике (тот же риск, что в панели). */
+function gridRiskMetaForPrice(price,anchorPx,step,riskRows){
+  const tol=Math.max(1e-10,(step||0)*1e-7);
+  if(Math.abs(price-anchorPx)<=tol)return{side:'anchor',usdt:0,pct:0};
+  if(price>anchorPx+tol){
+    const r=riskRows.find(x=>x.upPrice!=null&&Math.abs(x.upPrice-price)<=tol);
+    if(r)return{side:'short',usdt:r.upUsdt,pct:r.upPct};
+  }else{
+    const r=riskRows.find(x=>x.downPrice!=null&&Math.abs(x.downPrice-price)<=tol);
+    if(r)return{side:'long',usdt:r.downUsdt,pct:r.downPct};
+  }
+  return{side:'unknown',usdt:null,pct:null};
+}
+function fmtGridLineTitle(meta){
+  if(meta.side==='anchor')return'0%, 0 USDT';
+  if(meta.usdt==null||meta.pct==null||!isFinite(meta.usdt)||!isFinite(meta.pct))return'';
+  return`${fn(meta.pct,2)}%, ${fn(meta.usdt,2)} USDT`;
+}
 function renderGridRiskProfile(body,out){
   const host=body.querySelector('#gbRisk');
   if(!host){return;}
@@ -6720,26 +6738,37 @@ function renderManualBacktestPreview(body,out){
     priceFormat:{type:'custom',formatter:p=>fmtPrice(p),minMove:0.0000001},
   });
   cs.setData(out.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-  (out.gridLevels||[]).forEach((p,i)=>{
+  const lastC=+out.candles[out.candles.length-1]?.c;
+  const riskRows=buildGridRiskRows({
+    lower:out.lower,upper:out.upper,currentPrice:lastC,
+    levels:out.levels,leverage:out.leverage,deposit:out.startEq,
+  });
+  const step=out.step||0;
+  const gridLv=out.gridLevels||[];
+  const eps=Math.max(1e-10,step*1e-9);
+  let anchorIdx=gridLv.findIndex(p=>p>=lastC-eps);
+  if(anchorIdx<0)anchorIdx=gridLv.length-1;
+  const anchorPx=gridLv[anchorIdx]??lastC;
+  const colShort='#ef4444';
+  const colLong='#22c55e';
+  const colAnchor='#f59e0b';
+  gridLv.forEach((p,i)=>{
+    const meta=gridRiskMetaForPrice(p,anchorPx,step,riskRows);
+    let color='#60a5fa';
+    if(meta.side==='short')color=colShort;
+    else if(meta.side==='long')color=colLong;
+    else if(meta.side==='anchor')color=colAnchor;
+    const title=fmtGridLineTitle(meta);
     cs.createPriceLine({
       price:p,
-      color:'#60a5fa',
-      lineWidth:i===0||i===(out.gridLevels.length-1)?2:1,
+      color,
+      lineWidth:i===0||i===gridLv.length-1?2:1,
       lineStyle:2,
-      axisLabelVisible:false,
-      title:'',
+      axisLabelVisible:true,
+      title,
     });
   });
-  if(typeof cs.setMarkers==='function'){
-    const markers=(out.trades||[]).map(t=>({
-      time:t.time,
-      position:t.side==='buy'?'belowBar':'aboveBar',
-      color:t.side==='buy'?'#16a34a':'#ef4444',
-      shape:t.side==='buy'?'arrowUp':'arrowDown',
-      text:t.side==='buy'?'B':'S',
-    }));
-    cs.setMarkers(markers);
-  }
+  if(typeof cs.setMarkers==='function')cs.setMarkers([]);
   const ro=new ResizeObserver(()=>{
     try{lc.applyOptions({width:host.clientWidth,height:host.clientHeight});}catch(e){}
   });

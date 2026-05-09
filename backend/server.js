@@ -1,6 +1,7 @@
 require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
+const db = require('./db/pool')
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -20,8 +21,28 @@ app.use('/api/auth', require('./routes/auth'))
 app.use('/api/user', require('./routes/user'))
 app.use('/api/proxy', require('./routes/proxy'))
 
-// Health check
-app.get('/health', (req, res) => res.json({ ok: true, ts: Date.now() }))
+// Health check (+ опционально проверка Postgres для диагностики логина)
+app.get('/health', async (req, res) => {
+  const payload = { ok: true, ts: Date.now() }
+  if (!process.env.DATABASE_URL) {
+    payload.db = 'not_configured'
+    return res.json(payload)
+  }
+  try {
+    const t0 = Date.now()
+    await db.query('SELECT 1')
+    payload.db = 'ok'
+    payload.dbPingMs = Date.now() - t0
+    return res.json(payload)
+  } catch (e) {
+    console.error('health db check:', e.message)
+    payload.ok = false
+    payload.db = 'error'
+    payload.dbMessage =
+      process.env.NODE_ENV === 'development' ? e.message : 'database_unreachable'
+    return res.status(503).json(payload)
+  }
+})
 
 // 404
 app.use((req, res) => res.status(404).json({ error: 'Not found' }))
