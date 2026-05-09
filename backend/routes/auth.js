@@ -29,6 +29,10 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   const { email, password } = req.body
   if (!email || !password) return res.status(400).json({ error: 'Нужен email и пароль' })
+  if (!process.env.JWT_SECRET) {
+    console.error('login: JWT_SECRET is not set (Render / .env)')
+    return res.status(503).json({ error: 'Сервер не настроен: задайте JWT_SECRET' })
+  }
 
   try {
     const result = await db.query('SELECT * FROM users WHERE email=$1', [email.toLowerCase()])

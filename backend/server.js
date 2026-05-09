@@ -21,9 +21,14 @@ app.use('/api/auth', require('./routes/auth'))
 app.use('/api/user', require('./routes/user'))
 app.use('/api/proxy', require('./routes/proxy'))
 
-// Health check (+ опционально проверка Postgres для диагностики логина)
+// Health: всегда отдаём признаки env (без секретов) + при наличии URL — пинг БД
 app.get('/health', async (req, res) => {
-  const payload = { ok: true, ts: Date.now() }
+  const payload = {
+    ok: true,
+    ts: Date.now(),
+    hasDatabaseUrl: !!process.env.DATABASE_URL,
+    hasJwtSecret: !!process.env.JWT_SECRET,
+  }
   if (!process.env.DATABASE_URL) {
     payload.db = 'not_configured'
     return res.json(payload)
