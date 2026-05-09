@@ -6493,7 +6493,7 @@ function loadGridLabPrefs(){
         bars:Math.max(80,Math.min(1200,+(j?.global?.bars||360))),
         levels:Math.max(3,Math.min(60,+(j?.global?.levels||12))),
         leverage:Math.max(1,Math.min(25,+(j?.global?.leverage||3))),
-        deposit:Math.max(20,+(j?.global?.deposit||500)),
+        deposit:Math.max(1,+(j?.global?.deposit||500)),
       },
       symbolBounds:(j?.symbolBounds&&typeof j.symbolBounds==='object')?j.symbolBounds:{},
     };
@@ -6508,7 +6508,7 @@ function buildGridRiskRows(cfg){
   const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
   const grids=Math.max(2,+cfg.levels|0);
   const lev=Math.max(1,+cfg.leverage||1);
-  const dep=Math.max(20,+cfg.deposit||20);
+  const dep=Math.max(1,+cfg.deposit||1);
   if(!(hi>lo)||!(cur>0))return[];
   const step=(hi-lo)/grids;
   if(!(step>0))return[];
@@ -6629,7 +6629,7 @@ function runManualGridBacktest(cfg){
   const levels=Math.max(2,Math.min(60,cfg.levels|0));
   const lev=Math.max(1,Math.min(25,cfg.leverage||1));
   const fee=Math.max(0,Math.min(0.01,cfg.fee||0.00055));
-  const dep=Math.max(20,cfg.deposit||500);
+  const dep=Math.max(1,cfg.deposit||500);
   const step=(hi-lo)/levels;
   const grid=Array.from({length:levels+1},(_,i)=>lo+step*i);
   let cash=dep*0.5;
@@ -6803,7 +6803,7 @@ function renderGridLabModal(){
         <label style="font-size:9px;color:var(--text3)">Плечо</label>
         <input id="gbLev" type="number" value="${gbPrefs.global.leverage}" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Депо</label>
-        <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="20" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="1" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <button class="tbtn on" id="gbRunBtn">Запустить</button>
       </div>
       <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
