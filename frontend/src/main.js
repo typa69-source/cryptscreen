@@ -1435,8 +1435,8 @@ function initLCChart(slot,isFs=false,fsIdx=null){
         }
         rCanvas(ch);return;
       }
-      // Vertical drags — use price coordinate
-      const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
+      // Vertical drags — Ctrl: OHLC/live; иначе вертикаль к свече, цена от курсора
+      const pt=e.ctrlKey?snapPoint(ch,x,y,true):snapPoint(ch,x,y,false);
       if(!pt)return;
       if(part==='entry'){
         const slDist=Math.abs(ch.draggingDraw.orig_sl-ch.draggingDraw.orig_entry);
@@ -1450,7 +1450,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
         d.tpPrice=pt.price; // TP moves independently
       }
     } else {
-      const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
+      const pt=e.ctrlKey?snapPoint(ch,x,y,true):snapPoint(ch,x,y,false);
       if(!pt)return;
       d[ch.draggingDraw.pointKey]=pt;checkAlerts(ch,d);
     }
@@ -1815,11 +1815,13 @@ async function loadMoreHistory(slot){
     if(!raw||!raw.length){ch.histLoading=false;return;}
     const nc=parseKlines(raw);if(!ch.cs||!ch.lc)return;
     const tsApi=ch.lc.timeScale();
-    let logRange=null;
+    let logRange=null,vTime=null;
     try{
       logRange=(typeof tsApi.getVisibleLogicalRange==='function')?tsApi.getVisibleLogicalRange():null;
     }catch(e){}
-    const vr=!logRange&&(typeof tsApi.getVisibleRange==='function'?tsApi.getVisibleRange():null);
+    try{
+      if(typeof tsApi.getVisibleRange==='function')vTime=tsApi.getVisibleRange();
+    }catch(e){}
     let pr=null;
     try{
       const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
@@ -1838,9 +1840,10 @@ async function loadMoreHistory(slot){
         ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
         const tsScale=ch.lc.timeScale();
-        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
+        if(vTime&&vTime.from!=null&&vTime.to!=null){try{tsScale.setVisibleRange(vTime);}catch(e){}}
+        else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
           try{tsScale.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
-        }else if(vr)try{tsScale.setVisibleRange(vr);}catch(e){}
+        }
         try{
           const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
@@ -1907,9 +1910,20 @@ function pixelToPoint(ch,x,y){
   return{time,price};
 }
 
+/** Last / ticker price for Ctrl+snap (OHLC ∪ live). */
+function chartLivePriceForSnap(ch){
+  const sym=ch.sym||S.fsSym;
+  if(sym&&S.tk&&S.tk[sym]!=null&&isFinite(+S.tk[sym].p))return+S.tk[sym].p;
+  if(ch.candles?.length)return+ch.candles[ch.candles.length-1].c;
+  return null;
+}
+
+/**
+ * ctrl=false: прилипание по X к ближайшей свече, цена — как у курсора (Y свободно).
+ * ctrl=true: то же по X, по Y — ближайшая из O/H/L/C или текущей цены к raw.price.
+ */
 function snapPoint(ch,x,y,ctrl){
   const raw=pixelToPoint(ch,x,y);if(!raw)return null;
-  if(!ctrl)return raw;
   if(!ch.candles?.length||!ch.cs||!ch.lc)return raw;
   const ts=ch.lc.timeScale();
   let bestC=null,bestDx=Infinity;
@@ -1920,16 +1934,18 @@ function snapPoint(ch,x,y,ctrl){
     if(d<bestDx){bestDx=d;bestC=c;}
   }
   if(!bestC)return raw;
-  const yH=ch.cs.priceToCoordinate(bestC.h),yL=ch.cs.priceToCoordinate(bestC.l);
-  if(yH!=null&&yL!=null){
-    const yTop=Math.min(yH,yL),yBot=Math.max(yH,yL);
-    const clampY=Math.max(yTop,Math.min(yBot,y));
-    const px=ch.cs.coordinateToPrice(clampY);
-    if(px!=null&&isFinite(px))return{time:toChartTime(bestC.t),price:px};
+  const tSnapped=toChartTime(bestC.t);
+  if(!ctrl)return{time:tSnapped,price:raw.price};
+  const ohlc=[bestC.o,bestC.h,bestC.l,bestC.c];
+  const live=chartLivePriceForSnap(ch);
+  const candidates=live!=null&&isFinite(live)?[...ohlc,live]:ohlc;
+  let bestP=candidates[0],bestDist=Infinity;
+  for(const p of candidates){
+    if(p==null||!isFinite(p))continue;
+    const d=Math.abs(p-raw.price);
+    if(d<bestDist){bestDist=d;bestP=p;}
   }
-  const ohlc=[bestC.o,bestC.h,bestC.l,bestC.c];let sp=ohlc[0],sd=Infinity;
-  for(const p of ohlc){const d=Math.abs(p-raw.price);if(d<sd){sd=d;sp=p;}}
-  return{time:toChartTime(bestC.t),price:sp};
+  return{time:tSnapped,price:bestP};
 }
 
 // Distance from point to drawing (screen pixels)
@@ -2213,7 +2229,33 @@ function _rCanvasGridLabImmediate(ch){
   const drawH=Math.max(1,H-TIME_AXIS_H);
   ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
   if(ch.ruler)drawRuler(ctx,ch);
+  let dragPr=null,dgKind=null;
+  try{
+    const modal=document.getElementById('gridLabModal');
+    const body=modal?.querySelector('#gridLabBody');
+    const gctx=body?._gbChartCtx;
+    const dg=gctx?._gbDrag;
+    if(dg&&(dg.kind==='high'||dg.kind==='low')&&dg.previewPrice!=null&&isFinite(+dg.previewPrice)){
+      dragPr=+dg.previewPrice;
+      dgKind=dg.kind;
+    }
+  }catch(e){}
+  if(dragPr!=null){
+    const yy=ch.cs.priceToCoordinate(dragPr);
+    if(yy!=null&&!isNaN(yy)){
+      ctx.save();
+      ctx.strokeStyle=dgKind==='high'?'rgba(239,68,68,.78)':'rgba(52,211,153,.75)';
+      ctx.lineWidth=1.5;
+      ctx.setLineDash([5,5]);
+      ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(drawW,yy);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
   ctx.restore();
+  if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
+    drawCustomCrosshair(ctx,ch,drawW,H);
+  }
 }
 
 function _rCanvasImmediate(ch){
@@ -2267,22 +2309,19 @@ function _rCanvasImmediate(ch){
   drawEMAs(ctx,ch,drawW,drawH);
   if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
-  // Custom crosshair: always visible when cursor is on chart
-  // In cursor mode: free (no snap). In draw mode or Ctrl: snap to candle OHLC
+  // Custom crosshair: всегда при X к свече; без Ctrl — Y свободно; с Ctrl — Y к O/H/L/C или к цене.
   if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
     drawCustomCrosshair(ctx,ch,drawW,H);
   }
 }
 
-// Custom crosshair drawn on canvas
-// - No Ctrl: free (grey, no snap)
-// - Ctrl: snap к ближайшей свече по X и по Y к лини high–low — визуал как без Ctrl (серый крест, без синего)
+// Custom crosshair: без Ctrl — вертикаль к свече, горизонталь свободна; с Ctrl — + магнит по цене к OHLC/текущей.
 function drawCustomCrosshair(ctx,ch,W,H){
   const x=ch.hoverX,y=ch.hoverY;
-  const shouldSnap=_ctrlHeld;
-  const snapped=shouldSnap?snapPoint(ch,x,y,true):null;
-  const dx=snapped?(timeToCoordX(ch,snapped.time)??x):x;
-  const dy=snapped?(ch.cs.priceToCoordinate(snapped.price)??y):y;
+  const ptV=snapPoint(ch,x,y,false);
+  const dx=ptV?(timeToCoordX(ch,ptV.time)??x):x;
+  const ptH=_ctrlHeld?snapPoint(ch,x,y,true):null;
+  const dy=ptH?(ch.cs.priceToCoordinate(ptH.price)??y):y;
   const col='#60607088';
   ctx.save();
   ctx.setLineDash([3,3]);
@@ -2292,7 +2331,7 @@ function drawCustomCrosshair(ctx,ch,W,H){
   ctx.beginPath();ctx.moveTo(dx,0);ctx.lineTo(dx,H);ctx.stroke();
   ctx.setLineDash([]);
   // Price label
-  const price=snapped?snapped.price:ch.cs?.coordinateToPrice(y);
+  const price=ptH?ptH.price:ch.cs?.coordinateToPrice(y);
   if(price!=null){
     const label=fmtPrice(price);
     ctx.font='9px JetBrains Mono,monospace';
@@ -3454,7 +3493,7 @@ function repaintChartSeries(ch,cacheKey=''){
   let logRange=null,vTime=null,pRange=null;
   if(ch._histBootstrapDone&&ch.lc){
     try{logRange=(typeof ch.lc.timeScale().getVisibleLogicalRange==='function')?ch.lc.timeScale().getVisibleLogicalRange():null;}catch(e){}
-    try{vTime=logRange?null:(typeof ch.lc.timeScale().getVisibleRange==='function'?ch.lc.timeScale().getVisibleRange():null);}catch(e){}
+    try{if(typeof ch.lc.timeScale().getVisibleRange==='function')vTime=ch.lc.timeScale().getVisibleRange();}catch(e){}
     try{
       const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
       if(ps&&typeof ps.getVisibleRange==='function')pRange=ps.getVisibleRange();
@@ -3462,10 +3501,10 @@ function repaintChartSeries(ch,cacheKey=''){
   }
   ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-  if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
-    try{if(typeof ch.lc.timeScale().setVisibleLogicalRange==='function')ch.lc.timeScale().setVisibleLogicalRange(logRange);}catch(e){}
-  }else if(vTime){
+  if(vTime&&vTime.from!=null&&vTime.to!=null){
     try{ch.lc.timeScale().setVisibleRange(vTime);}catch(e){}
+  }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
+    try{if(typeof ch.lc.timeScale().setVisibleLogicalRange==='function')ch.lc.timeScale().setVisibleLogicalRange(logRange);}catch(e){}
   }
   try{
     const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
@@ -4997,12 +5036,16 @@ function buildGroupFilterBar(){
         btn.style.border='none';
         btn.style.borderRadius='0';
         btn.style.width='auto';
+        btn.style.minWidth='22px';
         btn.style.height='auto';
-        btn.style.padding='0 2px';
+        btn.style.minHeight='22px';
+        btn.style.padding='0 4px';
         btn.style.color=FAVORITE_GROUP_COLOR;
         btn.style.display='inline-flex';
         btn.style.alignItems='center';
         btn.style.justifyContent='center';
+        btn.style.fontSize='19px';
+        btn.style.lineHeight='1';
         btn.textContent='★';
       }else{
         btn.style.background=GROUP_COLORS[g];
@@ -5740,9 +5783,9 @@ async function loadMoreFsHistory(idx){
     if(!raw?.length){fch.histLoading=false;return;}
     const nc=parseKlines(raw);if(!fch.cs||!fch.lc)return;
     const fts=fch.lc.timeScale();
-    let logRange=null;
+    let logRange=null,vTime=null;
     try{logRange=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;}catch(e){}
-    const vr=!logRange&&(typeof fts.getVisibleRange==='function'?fts.getVisibleRange():null);
+    try{if(typeof fts.getVisibleRange==='function')vTime=fts.getVisibleRange();}catch(e){}
     let pr=null;
     try{
       const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
@@ -5756,9 +5799,10 @@ async function loadMoreFsHistory(idx){
       try{
         fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
+        if(vTime&&vTime.from!=null&&vTime.to!=null){try{fts.setVisibleRange(vTime);}catch(e){}}
+        else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
           try{fts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
-        }else if(vr)try{fts.setVisibleRange(vr);}catch(e){}
+        }
         try{
           const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
@@ -6778,7 +6822,7 @@ function fmtGridLineTitle(meta){
   if(meta.usdt==null||meta.pct==null||!isFinite(meta.usdt)||!isFinite(meta.pct))return'';
   return`${fn(meta.pct,2)}%, ${fn(meta.usdt,2)} USDT`;
 }
-function renderGridRiskProfile(body,out){
+function renderGridRiskProfile(body,out,gbPrefs){
   const host=body.querySelector('#gbRisk');
   if(!host){return;}
   if(!out?.ok){host.innerHTML='';return;}
@@ -6806,7 +6850,8 @@ function renderGridRiskProfile(body,out){
   const longRows=rows
     .filter(r=>r.downPrice!=null)
     .sort((a,b)=>a.step-b.step);
-  const mkBars=(list,fieldUsdt,fieldPct,fieldPrice,tone)=>{
+  const mkBars=(list,fieldUsdt,fieldPct,fieldPrice,tone,barOpts)=>{
+    const numRev=barOpts?.numRev;
     if(!list.length){
       return '<div style="font-size:9px;color:var(--text3);padding:8px 0;text-align:center">Нет уровней в этой стороне</div>';
     }
@@ -6816,8 +6861,9 @@ function renderGridRiskProfile(body,out){
       const px=r[fieldPrice];
       const w=Math.max(2,Math.round(Math.abs(val)/maxLoss*100));
       const pxTxt=px!=null&&isFinite(px)?fmtPrice(px):'—';
+      const num=numRev?(list.length-idx):(idx+1);
       return `<div style="display:flex;align-items:center;gap:6px;height:16px">
-        <div style="width:26px;text-align:right;color:var(--text2);font-size:9px">#${idx+1}</div>
+        <div style="width:26px;text-align:right;color:var(--text2);font-size:9px">#${num}</div>
         <div style="position:relative;flex:1;height:100%;background:${tone.bg};border:1px solid ${tone.bd};border-radius:4px;overflow:hidden">
           <span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:${tone.fill}"></span>
           <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmt(val)} USDT · ${fmt(pct)}% · ${pxTxt}</span>
@@ -6842,20 +6888,52 @@ function renderGridRiskProfile(body,out){
     <div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:8px">
       <div style="font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.02em">${gm==='long'?'Вверх (фиксация, модель без убытка)':'Вверх (up)'}</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
-        ${mkBars(shortRows,'upUsdt','upPct','upPrice',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'})}
+        ${mkBars(shortRows,'upUsdt','upPct','upPrice',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'},{numRev:true})}
       </div>
-      <div style="display:flex;align-items:center;gap:6px;height:16px">
+      <div data-gb-anchor-drag="1" style="display:flex;align-items:center;gap:6px;height:16px;cursor:ns-resize" title="Потяните вверх/вниз — сменить уровень якоря #0">
         <div style="width:26px;text-align:right;color:#fdba74;font-size:9px">#0</div>
         <div style="position:relative;flex:1;height:100%;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.24);border-radius:4px;overflow:hidden">
           <span style="position:absolute;left:0;top:0;bottom:0;width:2%;background:rgba(245,158,11,.55)"></span>
-          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:#fdba74">${anchorLbl} · 0.00 USDT · 0.00%</span>
+          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:#fdba74;display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px">${anchorLbl} · 0.00 USDT · 0.00%<span class="gb-anchor-hint" style="font-size:8px;color:var(--text3);font-weight:400"></span></span>
         </div>
       </div>
       <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">${gm==='short'?'Вниз (выкупы, без убытка)':'Вниз — просадка (down)'}</div>
       <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
-        ${mkBars(longRows,'downUsdt','downPct','downPrice',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'})}
+        ${mkBars(longRows,'downUsdt','downPct','downPrice',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'},null)}
       </div>
     </div>`;
+  const zRow=host.querySelector('[data-gb-anchor-drag]');
+  if(zRow&&gbPrefs){
+    zRow.onmousedown=e=>{
+      e.preventDefault();e.stopPropagation();
+      const sym=String(out.symbol||'').toUpperCase().trim();
+      if(!sym||!riskGrid.length)return;
+      const startY=e.clientY;
+      const startAi=ai;
+      let curAi=startAi;
+      const hint=zRow.querySelector('.gb-anchor-hint');
+      const onMove=ev=>{
+        const dIdx=Math.round((startY-ev.clientY)/14);
+        const ni=Math.max(0,Math.min(riskGrid.length-1,startAi+dIdx));
+        if(ni===curAi)return;
+        curAi=ni;
+        if(hint)hint.textContent=ni===startAi?'':`→ ${fmtPrice(riskGrid[ni])}`;
+      };
+      const onUp=()=>{
+        document.removeEventListener('mousemove',onMove);
+        document.removeEventListener('mouseup',onUp);
+        if(hint)hint.textContent='';
+        if(curAi!==startAi){
+          if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+          gbPrefs.symbolBounds[sym]={...gbPrefs.symbolBounds[sym],anchorPrice:riskGrid[curAi]};
+          saveGridLabPrefs(gbPrefs);
+          scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
+        }
+      };
+      document.addEventListener('mousemove',onMove);
+      document.addEventListener('mouseup',onUp);
+    };
+  }
 }
 
 /** Сводка по сетке без симуляции сделок (PnL/maxDD скрыты). */
@@ -7015,7 +7093,7 @@ async function prependGridLabHistory(body,sym,tf){
     const ts=ctx.lc.timeScale();
     let logRange=null,vTime=null,pRange=null;
     try{logRange=(typeof ts.getVisibleLogicalRange==='function')?ts.getVisibleLogicalRange():null;}catch(e){}
-    try{vTime=!logRange&&typeof ts.getVisibleRange==='function'?ts.getVisibleRange():null;}catch(e){}
+    try{if(typeof ts.getVisibleRange==='function')vTime=ts.getVisibleRange();}catch(e){}
     try{
       const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
       if(ps&&typeof ps.getVisibleRange==='function')pRange=ps.getVisibleRange();
@@ -7027,20 +7105,34 @@ async function prependGridLabHistory(body,sym,tf){
     const lastC=+m[m.length-1]?.c||1;
     try{ctx.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastC)}});}catch(e){}
     ctx.cs.setData(m.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-    if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
+    if(vTime&&vTime.from!=null&&vTime.to!=null){try{ts.setVisibleRange(vTime);}catch(e){}}
+    else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
       try{if(typeof ts.setVisibleLogicalRange==='function')ts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
-    }else if(vTime){try{ts.setVisibleRange(vTime);}catch(e){}}
+    }
     try{
       const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
       if(pRange&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pRange);
     }catch(e){}
   }catch(e){}finally{ctx._histLoading=false;}
 }
-function renderManualBacktestPreview(body,out,gbPrefs){
+function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
+  viewOpts=viewOpts||{};
   const wrap=body.querySelector('#gbChartWrap');
   const host=body.querySelector('#gbChart');
   if(!wrap||!host)return;
   const prev=body._gbChartCtx;
+  let savedView=null;
+  if(viewOpts.keepViewport&&prev?.lc&&prev?.cs){
+    try{
+      const ts=prev.lc.timeScale();
+      savedView={
+        log:(typeof ts.getVisibleLogicalRange==='function')?ts.getVisibleLogicalRange():null,
+        vt:(typeof ts.getVisibleRange==='function')?ts.getVisibleRange():null,
+      };
+      const ps=typeof prev.cs.priceScale==='function'?prev.cs.priceScale():null;
+      savedView.pr=(ps&&typeof ps.getVisibleRange==='function')?ps.getVisibleRange():null;
+    }catch(e){savedView=null;}
+  }
   if(prev?.gbLabSig)try{prev.gbLabSig.abort();}catch(e){}
   if(prev?._pollTimer){clearInterval(prev._pollTimer);}
   if(prev?.ro){try{prev.ro.disconnect();}catch(e){}}
@@ -7072,8 +7164,8 @@ function renderManualBacktestPreview(body,out,gbPrefs){
     grid:{vertLines:{color:'#141418'},horzLines:{color:'#141418'}},
     crosshair:{
       mode:0,
-      vertLine:{color:'#60607055',style:2,width:1,labelBackgroundColor:'#252530'},
-      horzLine:{color:'#60607055',style:2,width:1,labelBackgroundColor:'#252530'},
+      vertLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#252530',labelVisible:false},
+      horzLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#252530',labelVisible:false},
     },
     rightPriceScale:{borderColor:'#252530'},
     timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false},
@@ -7089,7 +7181,18 @@ function renderManualBacktestPreview(body,out,gbPrefs){
   const lastCInit=+merged[merged.length-1]?.c||1;
   try{cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastCInit)}});}catch(e){}
   cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-  try{lc.timeScale().fitContent();}catch(e){}
+  if(savedView){
+    try{
+      if(savedView.vt&&savedView.vt.from!=null&&savedView.vt.to!=null)lc.timeScale().setVisibleRange(savedView.vt);
+      else if(savedView.log&&typeof savedView.log.from==='number'&&typeof savedView.log.to==='number'&&typeof lc.timeScale().setVisibleLogicalRange==='function'){
+        lc.timeScale().setVisibleLogicalRange(savedView.log);
+      }
+    }catch(e){}
+    try{
+      const ps=cs.priceScale();
+      if(savedView.pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(savedView.pr);
+    }catch(e){}
+  }else{try{lc.timeScale().fitContent();}catch(e){}}
   const lastCForLines=+merged[merged.length-1]?.c;
   const gm=String(out.gridRiskMode||'neutral');
   const riskRowsGb=buildGridRiskRows({
@@ -7121,6 +7224,7 @@ function renderManualBacktestPreview(body,out,gbPrefs){
   if(typeof cs.setMarkers==='function')cs.setMarkers([]);
   const gbCh={
     lc,cs,
+    sym:out.symbol||null,
     candles:merged,
     ruler:null,
     canvas:rulerCanvas,
@@ -7149,32 +7253,33 @@ function renderManualBacktestPreview(body,out,gbPrefs){
     if(pr==null)return;
     const hi=+out.upper,lo=+out.lower;
     const ctxB=body._gbChartCtx;
-    const anchors=gridRiskAnchorIdx(out.gridLevels||[],+merged[merged.length-1]?.c||0,out.step||0,String(out.gridRiskMode||'neutral'),out.anchorPrice);
-    const apx=out.gridLevels?.[anchors]??(+merged[merged.length-1]?.c);
-    if(hitNearPrice(pr,hi))ctxB._gbDrag={kind:'high'};
-    else if(hitNearPrice(pr,lo))ctxB._gbDrag={kind:'low'};
-    else if(hitNearPrice(pr,apx))ctxB._gbDrag={kind:'anchor'};
+    if(hitNearPrice(pr,hi))ctxB._gbDrag={kind:'high',previewPrice:hi};
+    else if(hitNearPrice(pr,lo))ctxB._gbDrag={kind:'low',previewPrice:lo};
   },{signal:sig});
   wrap.addEventListener('mousemove',e=>{
-    const ctxB=body._gbChartCtx;if(!ctxB._gbDrag)return;
-    const pr=hitPrice(e.clientY);if(pr==null)return;
-    if(ctxB._gbDrag.kind==='high')body.querySelector('#gbHigh').value=String(+pr.toFixed(8));
-    if(ctxB._gbDrag.kind==='low')body.querySelector('#gbLow').value=String(+pr.toFixed(8));
+    const ctxB=body._gbChartCtx;if(!ctxB?.gbCh)return;
+    const pr=hitPrice(e.clientY);
+    if(ctxB._gbDrag&&pr!=null){
+      ctxB._gbDrag.previewPrice=pr;
+      if(ctxB._gbDrag.kind==='high')body.querySelector('#gbHigh').value=String(+pr.toFixed(8));
+      if(ctxB._gbDrag.kind==='low')body.querySelector('#gbLow').value=String(+pr.toFixed(8));
+      rCanvas(ctxB.gbCh);
+      return;
+    }
+    const{x,y}=getCoords(wrap,e.clientX,e.clientY);
+    ctxB.gbCh.hoverX=x;ctxB.gbCh.hoverY=y;
+    rCanvas(ctxB.gbCh);
   },{signal:sig,capture:true});
+  wrap.addEventListener('mouseleave',()=>{
+    const ctxB=body._gbChartCtx;if(!ctxB?.gbCh)return;
+    ctxB.gbCh.hoverX=0;ctxB.gbCh.hoverY=0;rCanvas(ctxB.gbCh);
+  },{signal:sig});
   wrap.addEventListener('mouseup',e=>{
     const ctxB=body._gbChartCtx;const dg=ctxB._gbDrag;
     ctxB._gbDrag=null;if(!dg||e.button!==0)return;
-    const symI=body.querySelector('#gbSym');const tfI=body.querySelector('#gbTf');
+    if(ctxB.gbCh)rCanvas(ctxB.gbCh);
+    const symI=body.querySelector('#gbSym');
     const sym=String(symI?.value||'').toUpperCase().trim();
-    const pr=hitPrice(e.clientY);
-    if(dg.kind==='anchor'&&sym&&pr!=null){
-      let best=out.gridLevels[0],bd=Infinity;
-      for(const p of out.gridLevels){const d=Math.abs(p-pr);if(d<bd){bd=d;best=p;}}
-      if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
-      gbPrefs.symbolBounds[sym]=gbPrefs.symbolBounds[sym]||{};
-      gbPrefs.symbolBounds[sym].anchorPrice=best;
-      saveGridLabPrefs(gbPrefs);
-    }
     if(dg.kind==='high'||dg.kind==='low'){
       if(sym){
         const lo=parseFloat(body.querySelector('#gbLow').value)||null;
@@ -7252,11 +7357,12 @@ async function runGridLabSync(body,gbPrefs,opt={}){
   const el=body.querySelector('#gbOut');
   if(!out.ok){
     if(el)el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;
-    renderManualBacktestPreview(body,null,gbPrefs);renderGridRiskProfile(body,null);return;
+    renderManualBacktestPreview(body,null,gbPrefs,{});renderGridRiskProfile(body,null);return;
   }
-  if(el)el.innerHTML=`<span style="color:var(--text3)">${out.symbol.replace(/USDT$/,'')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)} — границы и #0 можно тянуть ЛКМ.</span>`;
-  renderManualBacktestPreview(body,out,gbPrefs);
-  renderGridRiskProfile(body,out);
+  if(el)el.innerHTML=`<span style="color:var(--text3)">${out.symbol.replace(/USDT$/,'')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)} — верх/низ: тянуть на графике · #0: тянуть в панели «Риск-профиль» справа.</span>`;
+  const keepVp=!!(reuse&&lcRef&&body._gbChartCtx?.merged?.length);
+  renderManualBacktestPreview(body,out,gbPrefs,{keepViewport:keepVp});
+  renderGridRiskProfile(body,out,gbPrefs);
 }
 function scheduleGridLabSync(body,gbPrefs,opt={}){
   if(body._gridLabUiTimer)clearTimeout(body._gridLabUiTimer);
