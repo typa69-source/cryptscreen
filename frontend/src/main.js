@@ -5089,17 +5089,17 @@ function buildGroupFilterBar(){
         btn.style.background='transparent';
         btn.style.border='2px solid transparent';
         btn.style.borderRadius='50%';
-        btn.style.width='16px';
-        btn.style.height='16px';
-        btn.style.minWidth='16px';
-        btn.style.minHeight='16px';
+        btn.style.width='18px';
+        btn.style.height='18px';
+        btn.style.minWidth='18px';
+        btn.style.minHeight='18px';
         btn.style.padding='0';
         btn.style.boxSizing='border-box';
         btn.style.color=FAVORITE_GROUP_COLOR;
         btn.style.display='inline-flex';
         btn.style.alignItems='center';
         btn.style.justifyContent='center';
-        btn.style.fontSize='11px';
+        btn.style.fontSize='13px';
         btn.style.lineHeight='1';
         btn.textContent='★';
       }else{
@@ -6856,6 +6856,65 @@ function buildGridRiskRows(cfg){
   }
   return rows;
 }
+/** Прибыль по сетке в «нашу» сторону: long — рост к верхним линиям; short — падение к нижним. */
+function buildGridFavorableRows(cfg){
+  const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
+  const grids=Math.max(2,+cfg.levels|0);
+  const lev=Math.max(1,+cfg.leverage||1);
+  const dep=Math.max(1,+cfg.deposit||1);
+  if(!(hi>lo)||!(cur>0))return[];
+  const step=(hi-lo)/grids;
+  if(!(step>0))return[];
+  const perStepNotional=(dep*lev)/grids;
+  const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
+  const mode=String(cfg.gridMode||'neutral');
+  const anchorIdx=gridRiskAnchorIdx(grid,cur,step,mode,cfg.anchorPrice);
+  const anchorPx=grid[anchorIdx];
+  const upLevels=grid.slice(anchorIdx);
+  const downPrices=grid.slice(0,anchorIdx).reverse();
+  const rows=[];
+  if(mode==='long'){
+    const maxUp=upLevels.length;
+    for(let n=1;n<maxUp;n++){
+      const pxNow=upLevels[n];
+      let pnl=0;
+      for(let i=1;i<=n;i++){
+        const ent=upLevels[i-1];
+        const q=perStepNotional/Math.max(ent,1e-12);
+        pnl+=q*(pxNow-ent);
+      }
+      rows.push({step:n,price:pxNow,usdt:pnl,pct:(pnl/dep)*100});
+    }
+    return rows;
+  }
+  if(mode==='short'){
+    const maxDn=downPrices.length;
+    for(let n=1;n<=maxDn;n++){
+      const pxNow=downPrices[n-1];
+      let pnl=0;
+      for(let i=1;i<=n;i++){
+        const ent=i===1?anchorPx:downPrices[i-2];
+        const q=perStepNotional/Math.max(ent,1e-12);
+        pnl+=q*(ent-pxNow);
+      }
+      rows.push({step:n,price:pxNow,usdt:pnl,pct:(pnl/dep)*100});
+    }
+    return rows;
+  }
+  return [];
+}
+function captureGbLabViewport(lc,cs){
+  if(!lc||!cs)return null;
+  try{
+    const ts=lc.timeScale();
+    const ps=typeof cs.priceScale==='function'?cs.priceScale():null;
+    return{
+      log:(typeof ts.getVisibleLogicalRange==='function')?ts.getVisibleLogicalRange():null,
+      vt:(typeof ts.getVisibleRange==='function')?ts.getVisibleRange():null,
+      pr:(ps&&typeof ps.getVisibleRange==='function')?ps.getVisibleRange():null,
+    };
+  }catch(e){return null;}
+}
 /** Подпись уровня сетки на графике (тот же риск, что в панели). */
 function gridRiskMetaForPrice(price,anchorPx,step,riskRows,gridMode){
   const tol=Math.max(1e-10,(step||0)*1e-7);
@@ -6901,28 +6960,33 @@ function renderGridRiskProfile(body,out,gbPrefs){
   const ai=gridRiskAnchorIdx(riskGrid,lastC,riskStep,gm,out.anchorPrice);
   const anchorLbl=fmtPrice(riskGrid[ai]??lastC);
   const anchorPxUi=riskGrid[ai]??lastC;
+  const distUp=r=>Math.abs((r.upPrice??0)-anchorPxUi);
+  const distDn=r=>Math.abs((r.downPrice??0)-anchorPxUi);
   const shortRows=rows
     .filter(r=>r.upPrice!=null&&Math.abs(r.upUsdt)>1e-10)
-    .sort((a,b)=>{
-      const da=Math.abs((a.upPrice??0)-anchorPxUi),db=Math.abs((b.upPrice??0)-anchorPxUi);
-      return da-db||(a.step-b.step);
-    });
+    .sort((a,b)=>distUp(b)-distUp(a)||a.step-b.step);
   const longRows=rows
     .filter(r=>r.downPrice!=null)
-    .sort((a,b)=>{
-      const da=Math.abs((a.downPrice??0)-anchorPxUi),db=Math.abs((b.downPrice??0)-anchorPxUi);
-      return da-db||(a.step-b.step);
-    });
+    .sort((a,b)=>distDn(a)-distDn(b)||a.step-b.step);
+  const favRows=buildGridFavorableRows({
+    lower:out.lower,upper:out.upper,currentPrice:lastC,
+    levels:out.levels,leverage:out.leverage,deposit:out.startEq,
+    gridMode:gm,anchorPrice:out.anchorPrice,
+  });
+  const distFavPx=r=>Math.abs((r.price??0)-anchorPxUi);
+  const favSortedAsc=favRows.slice().sort((a,b)=>distFavPx(a)-distFavPx(b)||a.step-b.step);
+  const favSortedDesc=favRows.slice().sort((a,b)=>distFavPx(b)-distFavPx(a)||a.step-b.step);
+  const maxAbs=Math.max(maxLoss,...favRows.map(r=>Math.abs(r.usdt)),1e-9);
   const mkBars=(list,fieldUsdt,fieldPct,fieldPrice,tone,barOpts)=>{
     const numRev=barOpts?.numRev;
     if(!list.length){
-      return '<div style="font-size:9px;color:var(--text3);padding:8px 0;text-align:center">Нет уровней в этой стороне</div>';
+      return '<div style="font-size:9px;color:var(--text3);padding:8px 0;text-align:center">Нет уровней</div>';
     }
     return list.map((r,idx)=>{
       const val=r[fieldUsdt];
       const pct=r[fieldPct];
       const px=r[fieldPrice];
-      const w=Math.max(2,Math.round(Math.abs(val)/maxLoss*100));
+      const w=Math.max(2,Math.round(Math.abs(val)/maxAbs*100));
       const pxTxt=px!=null&&isFinite(px)?fmtPrice(px):'—';
       const num=numRev?(list.length-idx):(idx+1);
       return `<div style="display:flex;align-items:center;gap:6px;height:16px">
@@ -6934,6 +6998,29 @@ function renderGridRiskProfile(body,out,gbPrefs){
       </div>`;
     }).join('');
   };
+  const mkFavBars=(list,numRev,tone)=>{
+    if(!list.length){
+      return '<div style="font-size:9px;color:var(--text3);padding:8px 0;text-align:center">Нет уровней</div>';
+    }
+    return list.map((r,idx)=>{
+      const val=r.usdt;
+      const pct=r.pct;
+      const px=r.price;
+      const w=Math.max(2,Math.round(Math.abs(val)/maxAbs*100));
+      const pxTxt=px!=null&&isFinite(px)?fmtPrice(px):'—';
+      const num=numRev?(list.length-idx):(idx+1);
+      return `<div style="display:flex;align-items:center;gap:6px;height:16px">
+        <div style="width:26px;text-align:right;color:var(--text2);font-size:9px">#${num}</div>
+        <div style="position:relative;flex:1;height:100%;background:${tone.bg};border:1px solid ${tone.bd};border-radius:4px;overflow:hidden">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:${tone.fill}"></span>
+          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmt(val)} USDT · ${fmt(pct)}% · ${pxTxt}</span>
+        </div>
+      </div>`;
+    }).join('');
+  };
+  const toneLossUp={bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'};
+  const toneLossDn={bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'};
+  const toneFav={bg:'rgba(59,130,246,.1)',bd:'rgba(59,130,246,.28)',fill:'rgba(59,130,246,.5)',tx:'#93c5fd'};
   const autoK=gm==='long'
     ?Math.max(0,(out.levels|0)-ai)
     :gm==='short'
@@ -6941,30 +7028,40 @@ function renderGridRiskProfile(body,out,gbPrefs){
       :0;
   const modeTitle=gm==='long'?'Long grid':gm==='short'?'Short grid':'Neutral grid';
   const modeHint=gm==='long'
-    ?`Стартовая long-позиция считается автоматически по числу верхних сеток: ${autoK}. Цена #0: ${anchorLbl}. Вверх — фиксация (без накопления убытка), вниз — добор +1, +2...`
+    ?`Стартовая long-позиция считается автоматически по числу верхних сеток: ${autoK}. Цена #0: ${anchorLbl}. Сверху — прибыль при росте по сетке; снизу — просадка при доборе вниз.`
     :gm==='short'
-      ?`Стартовая short-позиция считается автоматически по числу нижних сеток: ${autoK}. Цена #0: ${anchorLbl}. При росте — добор шорта +1, +2..., вниз — выкупы (убыток не копим).`
+      ?`Стартовая short-позиция считается автоматически по числу нижних сеток: ${autoK}. Цена #0: ${anchorLbl}. Сверху — убыток при росте; снизу — прибыль при падении по сетке.`
       :'#0 = первый уровень ≥ цены в neutral; симметричные сценарии вверх/вниз (как в отлаженной модели).';
+  let topBlock,bottomBlock;
+  if(gm==='long'){
+    topBlock=mkFavBars(favSortedDesc,true,toneFav);
+    bottomBlock=mkBars(longRows,'downUsdt','downPct','downPrice',toneLossDn,{numRev:false});
+  }else if(gm==='short'){
+    topBlock=mkBars(shortRows,'upUsdt','upPct','upPrice',toneLossUp,{numRev:true});
+    bottomBlock=mkFavBars(favSortedAsc,false,toneFav);
+  }else{
+    topBlock=mkBars(shortRows,'upUsdt','upPct','upPrice',toneLossUp,{numRev:true});
+    bottomBlock=mkBars(longRows,'downUsdt','downPct','downPrice',toneLossDn,{numRev:false});
+  }
   host.innerHTML=`
     <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль · ${modeTitle}${gm!=='neutral'?` · старт: ${fn(autoK,0)} поз.`:''}</div>
-    <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.35">${modeHint}</div>
-    <div style="display:flex;flex-direction:column;height:100%;min-height:0;gap:8px">
-      <div style="font-size:9px;color:#fca5a5;text-transform:uppercase;letter-spacing:.02em">${gm==='long'?'Вверх (фиксация, модель без убытка)':'Вверх (up)'}</div>
-      <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
-        ${mkBars(shortRows,'upUsdt','upPct','upPrice',{bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'},{numRev:true})}
+    <div style="font-size:9px;color:var(--text3);margin-bottom:6px;line-height:1.35">${modeHint}</div>
+    <div style="display:flex;flex-direction:column;height:100%;min-height:0;justify-content:center;gap:5px">
+      <div style="flex:0 0 auto;max-height:42%;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
+        ${topBlock}
       </div>
-      <div data-gb-anchor-drag="1" style="display:flex;align-items:center;gap:6px;height:16px;cursor:ns-resize" title="Потяните вверх/вниз — сменить уровень якоря #0">
+      <div data-gb-anchor-drag="1" style="display:flex;align-items:center;gap:6px;height:16px;cursor:ns-resize;flex-shrink:0" title="Потяните вверх/вниз — сменить уровень якоря #0">
         <div style="width:26px;text-align:right;color:#fdba74;font-size:9px">#0</div>
         <div style="position:relative;flex:1;height:100%;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.24);border-radius:4px;overflow:hidden">
           <span style="position:absolute;left:0;top:0;bottom:0;width:2%;background:rgba(245,158,11,.55)"></span>
           <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:#fdba74;display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px">${anchorLbl} · 0.00 USDT · 0.00%<span class="gb-anchor-hint" style="font-size:8px;color:var(--text3);font-weight:400"></span></span>
         </div>
       </div>
-      <div style="font-size:9px;color:#86efac;text-transform:uppercase;letter-spacing:.02em">${gm==='short'?'Вниз (выкупы, без убытка)':'Вниз — просадка (down)'}</div>
-      <div style="flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
-        ${mkBars(longRows,'downUsdt','downPct','downPrice',{bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'},null)}
+      <div style="flex:0 0 auto;max-height:42%;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
+        ${bottomBlock}
       </div>
-    </div>`;
+    </div>
+    <div style="font-size:8px;color:var(--text3);margin-top:8px;line-height:1.4">Убыток/прибыль в строке — для момента, когда цена <b>доходит до цены в строке</b> (уровень сетки сработал), а не до соседней линии.</div>`;
   const zRow=host.querySelector('[data-gb-anchor-drag]');
   if(zRow&&gbPrefs){
     zRow.onmousedown=e=>{
@@ -7197,16 +7294,11 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
   if(!wrap||!host)return;
   const prev=body._gbChartCtx;
   let savedView=null;
-  if(viewOpts.keepViewport&&prev?.lc&&prev?.cs){
-    try{
-      const ts=prev.lc.timeScale();
-      savedView={
-        log:(typeof ts.getVisibleLogicalRange==='function')?ts.getVisibleLogicalRange():null,
-        vt:(typeof ts.getVisibleRange==='function')?ts.getVisibleRange():null,
-      };
-      const ps=typeof prev.cs.priceScale==='function'?prev.cs.priceScale():null;
-      savedView.pr=(ps&&typeof ps.getVisibleRange==='function')?ps.getVisibleRange():null;
-    }catch(e){savedView=null;}
+  if(body._gbPendingViewport){
+    savedView=body._gbPendingViewport;
+    body._gbPendingViewport=null;
+  }else if(viewOpts.keepViewport&&prev?.lc&&prev?.cs){
+    savedView=captureGbLabViewport(prev.lc,prev.cs);
   }
   if(prev?.gbLabSig)try{prev.gbLabSig.abort();}catch(e){}
   if(prev?._pollTimer){clearInterval(prev._pollTimer);}
@@ -7258,15 +7350,28 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
   cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   if(savedView){
     try{
-      if(savedView.vt&&savedView.vt.from!=null&&savedView.vt.to!=null)lc.timeScale().setVisibleRange(savedView.vt);
-      else if(savedView.log&&typeof savedView.log.from==='number'&&typeof savedView.log.to==='number'&&typeof lc.timeScale().setVisibleLogicalRange==='function'){
+      if(savedView.log&&typeof savedView.log.from==='number'&&typeof savedView.log.to==='number'&&typeof lc.timeScale().setVisibleLogicalRange==='function'){
         lc.timeScale().setVisibleLogicalRange(savedView.log);
+      }else if(savedView.vt&&savedView.vt.from!=null&&savedView.vt.to!=null){
+        lc.timeScale().setVisibleRange(savedView.vt);
       }
     }catch(e){}
     try{
       const ps=cs.priceScale();
       if(savedView.pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(savedView.pr);
     }catch(e){}
+    requestAnimationFrame(()=>{
+      try{
+        if(!savedView)return;
+        if(savedView.log&&typeof savedView.log.from==='number'&&typeof savedView.log.to==='number'&&typeof lc.timeScale().setVisibleLogicalRange==='function'){
+          lc.timeScale().setVisibleLogicalRange(savedView.log);
+        }else if(savedView.vt&&savedView.vt.from!=null&&savedView.vt.to!=null){
+          lc.timeScale().setVisibleRange(savedView.vt);
+        }
+        const ps=cs.priceScale();
+        if(savedView.pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(savedView.pr);
+      }catch(e){}
+    });
   }else{try{lc.timeScale().fitContent();}catch(e){}}
   const lastCForLines=+merged[merged.length-1]?.c;
   const gm=String(out.gridRiskMode||'neutral');
@@ -7337,6 +7442,7 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
     else if(hitNearPrice(pr,lo))drag={kind:'low',previewPrice:lo};
     if(!drag)return;
     e.preventDefault();e.stopPropagation();
+    body._gbPendingViewport=captureGbLabViewport(lc,cs);
     ctxB._gbDrag=drag;
     try{
       lc.applyOptions({
