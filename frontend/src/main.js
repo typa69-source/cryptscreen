@@ -289,7 +289,7 @@ function tfToolbarBtnId(tf){
 }
 
 const S = {
-  syms:[], tk:{}, k5m:{}, k1h:{}, k1m:{}, kTrend:{}, mx:{}, btcR:[],
+  syms:[], tk:{}, k5m:{}, k15m:{}, k1h:{}, k1m:{}, kTrend:{}, mx:{}, btcR:[],
   charts: Array.from({length:9},()=>mkChart()),
   wsScreener:null, wsCharts:null, wsChartTrades:null,
   sortId:'vol24', sortDir:'desc', sortAlpha:false,
@@ -725,30 +725,41 @@ function oiPeriodForTf(tf){
 }
 async function fetchOiHistoryForChart(sym,tf){
   const period=oiPeriodForTf(tf);
-  const limit=Math.max(60,Math.min(240,Math.round(HIST_INITIAL/3)));
+  const limit=500;
   const raw=await fj(`${API_FDATA}/openInterestHist?symbol=${encodeURIComponent(sym)}&period=${period}&limit=${limit}`,12000,0);
   if(!Array.isArray(raw)||raw.length<2)return[];
-  const base=+raw[0]?.sumOpenInterest;
-  if(!isFinite(base)||base<=0)return[];
   const out=[];
   for(const row of raw){
     const oi=+row.sumOpenInterest;
     const ts=+row.timestamp;
     if(!isFinite(oi)||!isFinite(ts)||ts<=0)continue;
-    out.push({time:toChartTime(ts),value:(oi/base-1)*100});
+    out.push({time:toChartTime(ts),oi});
   }
-  return out;
+  return out.sort((a,b)=>a.time-b.time);
 }
+/** Линейная интерполяция OI по времени под каждую свечу; % изменения относительно OI на первом баре окна. */
 function alignOiToCandles(candles,oiRaw){
   if(!Array.isArray(candles)||!candles.length||!Array.isArray(oiRaw)||!oiRaw.length)return[];
-  const src=oiRaw.slice().sort((a,b)=>a.time-b.time);
+  const pts=oiRaw.slice().filter(p=>p&&isFinite(p.oi)&&p.time!=null).sort((a,b)=>a.time-b.time);
+  if(pts.length<2)return[];
+  function oiAtChartTime(tv){
+    if(tv<=pts[0].time)return pts[0].oi;
+    const last=pts[pts.length-1];if(tv>=last.time)return last.oi;
+    let lo=0,hi=pts.length-1;
+    while(lo+1<hi){
+      const mid=(lo+hi)>>1;
+      if(pts[mid].time<=tv)lo=mid;else hi=mid;
+    }
+    const a=pts[lo],b=pts[lo+1];
+    const w=(tv-a.time)/Math.max(1,(b.time-a.time));
+    return a.oi+w*(b.oi-a.oi);
+  }
+  const base=Math.max(1e-12,oiAtChartTime(toChartTime(candles[0].t)));
   const out=[];
-  let j=0;
-  let cur=null;
   for(const c of candles){
     const t=toChartTime(c.t);
-    while(j<src.length&&src[j].time<=t){cur=src[j].value;j++;}
-    if(isFinite(cur))out.push({time:t,value:cur});
+    const oi=oiAtChartTime(t);
+    out.push({time:t,value:(oi/base-1)*100});
   }
   return out;
 }
@@ -857,7 +868,8 @@ function appendCandleWithGaps(arr,candle,stepMs){
     }
     for(let ts=prev.t+stepMs;ts<candle.t;ts+=stepMs){
       const base=arr[arr.length-1]?.c??prev.c;
-      arr.push({t:ts,o:base,h:base,l:base,c:base,v:0,tr:0,qv:0,_synthetic:true});
+      const carryQv=+(arr[arr.length-1]?.qv??prev.qv??0)||0;
+      arr.push({t:ts,o:base,h:base,l:base,c:base,v:0,tr:0,qv:carryQv,_synthetic:true});
     }
   }
   arr.push(candle);
@@ -1802,7 +1814,18 @@ async function loadMoreHistory(slot){
     const raw=await fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${ch.candles[0].t-1}`);
     if(!raw||!raw.length){ch.histLoading=false;return;}
     const nc=parseKlines(raw);if(!ch.cs||!ch.lc)return;
-    const vr=ch.lc.timeScale().getVisibleRange();
+    const tsApi=ch.lc.timeScale();
+    let logRange=null;
+    try{
+      logRange=(typeof tsApi.getVisibleLogicalRange==='function')?tsApi.getVisibleLogicalRange():null;
+    }catch(e){}
+    const vr=!logRange&&(typeof tsApi.getVisibleRange==='function'?tsApi.getVisibleRange():null);
+    let pr=null;
+    try{
+      const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
+      if(ps&&typeof ps.getVisibleRange==='function')pr=ps.getVisibleRange();
+    }catch(e){}
+    const prepended=nc.length;
     ch.candles=[...nc,...ch.candles].slice(-HIST_CACHE_MAX);
     // Keep cache bounded and avoid persisting too-short histories (causes inconsistent visible bars on next load).
     const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
@@ -1814,7 +1837,17 @@ async function loadMoreHistory(slot){
       try{
         ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-        if(vr)try{ch.lc.timeScale().setVisibleRange(vr);}catch(e){}
+        const tsScale=ch.lc.timeScale();
+        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
+          try{tsScale.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+        }else if(vr)try{tsScale.setVisibleRange(vr);}catch(e){}
+        try{
+          const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
+          if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
+        }catch(e){}
+        repaintBbSeries(ch);
+        ch._oiHist=alignOiToCandles(merged,ch._oiRaw||[]);
+        repaintOiSeries(ch);
       }catch(e){}
     };
     // Wait for pan to finish before doing expensive setData so we don't freeze a drag in progress
@@ -1877,12 +1910,26 @@ function pixelToPoint(ch,x,y){
 function snapPoint(ch,x,y,ctrl){
   const raw=pixelToPoint(ch,x,y);if(!raw)return null;
   if(!ctrl)return raw;
-  const tMs=raw.time;let best=null,bd=Infinity;
-  for(const c of ch.candles){const d=Math.abs(toChartTime(c.t)-tMs);if(d<bd){bd=d;best=c;}}
-  if(!best)return raw;
-  const ohlc=[best.o,best.h,best.l,best.c];let sp=ohlc[0],sd=Infinity;
+  if(!ch.candles?.length||!ch.cs||!ch.lc)return raw;
+  const ts=ch.lc.timeScale();
+  let bestC=null,bestDx=Infinity;
+  for(const c of ch.candles){
+    const bx=ts.timeToCoordinate(toChartTime(c.t));
+    if(bx==null)continue;
+    const d=Math.abs(bx-x);
+    if(d<bestDx){bestDx=d;bestC=c;}
+  }
+  if(!bestC)return raw;
+  const yH=ch.cs.priceToCoordinate(bestC.h),yL=ch.cs.priceToCoordinate(bestC.l);
+  if(yH!=null&&yL!=null){
+    const yTop=Math.min(yH,yL),yBot=Math.max(yH,yL);
+    const clampY=Math.max(yTop,Math.min(yBot,y));
+    const px=ch.cs.coordinateToPrice(clampY);
+    if(px!=null&&isFinite(px))return{time:toChartTime(bestC.t),price:px};
+  }
+  const ohlc=[bestC.o,bestC.h,bestC.l,bestC.c];let sp=ohlc[0],sd=Infinity;
   for(const p of ohlc){const d=Math.abs(p-raw.price);if(d<sd){sd=d;sp=p;}}
-  return{time:toChartTime(best.t),price:sp};
+  return{time:toChartTime(bestC.t),price:sp};
 }
 
 // Distance from point to drawing (screen pixels)
@@ -2228,15 +2275,15 @@ function _rCanvasImmediate(ch){
 }
 
 // Custom crosshair drawn on canvas
-// - Cursor mode, no Ctrl: free (grey, no snap)
-// - Ctrl held or draw mode: snap to candle OHLC (blue dot)
+// - No Ctrl: free (grey, no snap)
+// - Ctrl: snap к ближайшей свече по X и по Y к лини high–low — визуал как без Ctrl (серый крест, без синего)
 function drawCustomCrosshair(ctx,ch,W,H){
   const x=ch.hoverX,y=ch.hoverY;
   const shouldSnap=_ctrlHeld;
   const snapped=shouldSnap?snapPoint(ch,x,y,true):null;
   const dx=snapped?(timeToCoordX(ch,snapped.time)??x):x;
   const dy=snapped?(ch.cs.priceToCoordinate(snapped.price)??y):y;
-  const col=snapped?'#3b82f6aa':'#60607088';
+  const col='#60607088';
   ctx.save();
   ctx.setLineDash([3,3]);
   ctx.strokeStyle=col;
@@ -2250,13 +2297,10 @@ function drawCustomCrosshair(ctx,ch,W,H){
     const label=fmtPrice(price);
     ctx.font='9px JetBrains Mono,monospace';
     const tw=ctx.measureText(label).width+8;
-    ctx.fillStyle=snapped?'#3b82f6':'#252530';
+    ctx.fillStyle='#252530';
     ctx.fillRect(W-tw-2,dy-9,tw+2,14);
-    ctx.fillStyle=snapped?'#fff':'#80809a';
+    ctx.fillStyle='#80809a';
     ctx.textAlign='right';ctx.fillText(label,W-4,dy+1);ctx.textAlign='left';
-  }
-  if(snapped){
-    ctx.beginPath();ctx.fillStyle='#3b82f6';ctx.arc(dx,dy,4,0,Math.PI*2);ctx.fill();
   }
   // Time label on X axis
   if(ch.lc){
@@ -2283,11 +2327,11 @@ function drawCustomCrosshair(ctx,ch,W,H){
       ctx.save();ctx.font='9px JetBrains Mono,monospace';
       const tw=Math.max(ctx.measureText(tStr).width,volStr?ctx.measureText(volStr).width:0)+8;
       const lx=Math.min(Math.max(dx-tw/2,0),W-tw);
-      ctx.fillStyle=snapped?'#3b82f6':'#1c1c28';
+      ctx.fillStyle='#1c1c28';
       const lblH=volStr?24:14;
       const y0=H-lblH;
       ctx.fillRect(lx,y0,tw,lblH);
-      ctx.fillStyle=snapped?'#fff':'#80809a';
+      ctx.fillStyle='#80809a';
       ctx.textAlign='left';
       ctx.fillText(tStr,lx+4,y0+10);
       if(volStr)ctx.fillText(volStr,lx+4,y0+20);
@@ -3407,9 +3451,28 @@ async function handleResumeRecovery(reason='resume'){
 function repaintChartSeries(ch,cacheKey=''){
   if(!ch?.cs||!ch?.vs||!ch?.candles?.length)return;
   ch._histBootstrapDone=ch.candles.length>=MIN_CHART_CANDLES;
+  let logRange=null,vTime=null,pRange=null;
+  if(ch._histBootstrapDone&&ch.lc){
+    try{logRange=(typeof ch.lc.timeScale().getVisibleLogicalRange==='function')?ch.lc.timeScale().getVisibleLogicalRange():null;}catch(e){}
+    try{vTime=logRange?null:(typeof ch.lc.timeScale().getVisibleRange==='function'?ch.lc.timeScale().getVisibleRange():null);}catch(e){}
+    try{
+      const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
+      if(ps&&typeof ps.getVisibleRange==='function')pRange=ps.getVisibleRange();
+    }catch(e){}
+  }
   ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+  if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
+    try{if(typeof ch.lc.timeScale().setVisibleLogicalRange==='function')ch.lc.timeScale().setVisibleLogicalRange(logRange);}catch(e){}
+  }else if(vTime){
+    try{ch.lc.timeScale().setVisibleRange(vTime);}catch(e){}
+  }
+  try{
+    const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
+    if(pRange&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pRange);
+  }catch(e){}
   repaintBbSeries(ch);
+  ch._oiHist=alignOiToCandles(ch.candles,ch._oiRaw||[]);
   repaintOiSeries(ch);
   const lc=ch.candles[ch.candles.length-1];
   if(lc)syncLivePriceLabel(ch,lc.c,lc.o);
@@ -3569,6 +3632,34 @@ function syncLivePriceLabel(ch,price,openPrice=null){
   }catch(e){}
 }
 
+/** Живое обновление последней цены на графике Grid Lab (без добавления символа в streams сделок). */
+function pulseGridLabFromTicker(symU,price,tsMs){
+  const modal=document.getElementById('gridLabModal');
+  const body=modal?.querySelector('#gridLabBody');
+  const ctx=body?._gbChartCtx;
+  if(!ctx?.cs||!ctx.merged?.length||ctx.sym!==symU)return;
+  const tf=ctx.tf||'5m';
+  const pseudo={candles:ctx.merged,cs:ctx.cs};
+  if(price==null||!isFinite(price))return;
+  if(!applyLivePriceToCandle(pseudo,tf,price,tsMs)){return;}
+  const lc=pseudo.candles[pseudo.candles.length-1];
+  try{
+    ctx.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
+  }catch(e){}
+}
+function kickGridLabPricePoll(symU){
+  const m=document.getElementById('gridLabModal');
+  const body=m?.querySelector('#gridLabBody');
+  const ctx=body?._gbChartCtx;
+  if(ctx?._pollTimer){clearInterval(ctx._pollTimer);ctx._pollTimer=null;}
+  if(!symU)return;
+  ctx._pollTimer=setInterval(()=>{
+    if(!document.getElementById('gridLabModal'))return;
+    const p=S.tk[symU]?.p;
+    if(p!=null&&isFinite(+p))pulseGridLabFromTicker(symU,+p,Date.now());
+  },460);
+}
+
 function startChartTradesWS(){
   if(_wsChartTradesReconnectTimer){clearTimeout(_wsChartTradesReconnectTimer);_wsChartTradesReconnectTimer=null;}
   closeChartTradesSockets();
@@ -3586,11 +3677,12 @@ function startChartTradesWS(){
     else if(isFinite(bid)&&bid>0)price=bid;
     else if(isFinite(ask)&&ask>0)price=ask;
     if(price==null)return;
+    const ts=+(d.T||d.E)||Date.now();
+    pulseGridLabFromTicker(symU,price,ts);
     const slot=S.charts.findIndex(c=>c.sym===symU);
     if(slot===-1)return;
     const ch=S.charts[slot];
     if(!ch?.cs||!ch._histBootstrapDone||!ch.candles?.length)return;
-    const ts=+(d.T||d.E)||Date.now();
     if(!applyLivePriceToCandle(ch,S.tf,price,ts))return;
     ch._lastRtUpdateTs=Date.now();
     S.histCache[`${S.tf}:${symU}`]=ch.candles.slice(-HIST_CACHE_MAX);
@@ -4899,7 +4991,7 @@ function buildGroupFilterBar(){
       if(cnt===0&&S.activeGroupFilter!==g)continue;
       const wrap=document.createElement('div');wrap.style.cssText='position:relative;display:flex;align-items:center;';
       const btn=document.createElement('div');
-      btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'');
+      btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'')+(g===FAVORITE_GROUP_ID?' cg-filter-fav':'');
       if(g===FAVORITE_GROUP_ID){
         btn.style.background='transparent';
         btn.style.border='none';
@@ -5647,7 +5739,16 @@ async function loadMoreFsHistory(idx){
     const raw=await fj(`${API}/klines?symbol=${S.fsSym}&interval=${fch.tf}&limit=${HIST_LIMIT}&endTime=${fch.candles[0].t-1}`);
     if(!raw?.length){fch.histLoading=false;return;}
     const nc=parseKlines(raw);if(!fch.cs||!fch.lc)return;
-    const vr=fch.lc.timeScale().getVisibleRange();
+    const fts=fch.lc.timeScale();
+    let logRange=null;
+    try{logRange=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;}catch(e){}
+    const vr=!logRange&&(typeof fts.getVisibleRange==='function'?fts.getVisibleRange():null);
+    let pr=null;
+    try{
+      const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
+      if(ps&&typeof ps.getVisibleRange==='function')pr=ps.getVisibleRange();
+    }catch(e){}
+    const prepended=nc.length;
     fch.candles=[...nc,...fch.candles];
     const merged=fch.candles;
     const doSet=()=>{
@@ -5655,9 +5756,16 @@ async function loadMoreFsHistory(idx){
       try{
         fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
+          try{fts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+        }else if(vr)try{fts.setVisibleRange(vr);}catch(e){}
+        try{
+          const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
+          if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
+        }catch(e){}
         repaintBbSeries(fch);
+        fch._oiHist=alignOiToCandles(merged,fch._oiRaw||[]);
         repaintOiSeries(fch);
-        if(vr)try{fch.lc.timeScale().setVisibleRange(vr);}catch(e){}
       }catch(e){}
     };
     if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(doSet,{timeout:2000});}
@@ -6482,7 +6590,8 @@ function getGridSelectorRows(limit=20){
 }
 
 async function ensureBacktestCandles(sym,tf,bars){
-  const key=tf==='1m'?'k1m':tf==='1h'?'k1h':'k5m';
+  const key=tf==='1m'?'k1m':tf==='15m'?'k15m':tf==='1h'?'k1h':'k5m';
+  if(!S[key])S[key]={};
   const store=S[key];
   const want=Math.max(120,Math.min(1500,bars|0));
   const have=(store[sym]||[]).length;
@@ -6503,7 +6612,7 @@ function loadGridLabPrefs(){
     const j=JSON.parse(raw);
     return{
       global:{
-        tf:['1m','5m','1h'].includes(j?.global?.tf)?j.global.tf:'5m',
+        tf:['1m','5m','15m','1h'].includes(j?.global?.tf)?j.global.tf:'5m',
         bars:Math.max(80,Math.min(1200,+(j?.global?.bars||360))),
         levels:Math.max(3,Math.min(60,+(j?.global?.levels||12))),
         leverage:Math.max(1,Math.min(25,+(j?.global?.leverage||3))),
@@ -6520,7 +6629,15 @@ function saveGridLabPrefs(prefs){
   try{localStorage.setItem(GRIDLAB_PREFS_KEY,JSON.stringify(prefs||{}));}catch(e){}
 }
 /** Индекс узла входа под риск: neutral — первый ≥ цены; long — последний ≤ (стартуем с лимиткой на этом уровне); short — первый ≥ (стартуем с этого уровня в шорт-логике Binance). */
-function gridRiskAnchorIdx(grid,cur,step,mode){
+function gridRiskAnchorIdx(grid,cur,step,mode,anchorOverridePx=null){
+  if(anchorOverridePx!=null&&isFinite(+anchorOverridePx)&&Array.isArray(grid)&&grid.length){
+    let bi=0,bd=Infinity;
+    for(let i=0;i<grid.length;i++){
+      const d=Math.abs(grid[i]-+anchorOverridePx);
+      if(d<bd){bd=d;bi=i;}
+    }
+    return bi;
+  }
   const eps=Math.max(1e-10,(step||0)*1e-9);
   if(String(mode||'neutral')==='long'){
     let idx=-1;
@@ -6543,7 +6660,7 @@ function buildGridRiskRows(cfg){
   const perStepNotional=(dep*lev)/grids;
   const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
   const mode=String(cfg.gridMode||'neutral');
-  const anchorIdx=gridRiskAnchorIdx(grid,cur,step,mode);
+  const anchorIdx=gridRiskAnchorIdx(grid,cur,step,mode,cfg.anchorPrice);
   const anchorPx=grid[anchorIdx];
   const upLevels=grid.slice(anchorIdx);
   const downPrices=grid.slice(0,anchorIdx).reverse();
@@ -6670,6 +6787,7 @@ function renderGridRiskProfile(body,out){
     lower:out.lower,upper:out.upper,currentPrice:out.candles?.[out.candles.length-1]?.c,
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
     gridMode:gm,
+    anchorPrice:out.anchorPrice,
   });
   if(!rows.length){
     host.innerHTML='<div style="padding:8px;font-size:9px;color:var(--text3)">Недостаточно данных для риск-профиля.</div>';
@@ -6680,11 +6798,11 @@ function renderGridRiskProfile(body,out){
   const lastC=+out.candles?.[out.candles.length-1]?.c;
   const riskStep=(out.upper-out.lower)/Math.max(2,out.levels|0);
   const riskGrid=Array.from({length:(out.levels|0)+1},(_,i)=>out.lower+i*riskStep);
-  const ai=gridRiskAnchorIdx(riskGrid,lastC,riskStep,gm);
+  const ai=gridRiskAnchorIdx(riskGrid,lastC,riskStep,gm,out.anchorPrice);
   const anchorLbl=fmtPrice(riskGrid[ai]??lastC);
   const shortRows=rows
     .filter(r=>r.upPrice!=null&&Math.abs(r.upUsdt)>1e-10)
-    .sort((a,b)=>b.step-a.step);
+    .sort((a,b)=>a.step-b.step);
   const longRows=rows
     .filter(r=>r.downPrice!=null)
     .sort((a,b)=>a.step-b.step);
@@ -6740,6 +6858,41 @@ function renderGridRiskProfile(body,out){
     </div>`;
 }
 
+/** Сводка по сетке без симуляции сделок (PnL/maxDD скрыты). */
+function compileGridLabState(cfg){
+  const tf=String(cfg.tf||'5m');
+  const candles=cfg.candles||[];
+  if(candles.length<12)return{ok:false,msg:`Недостаточно ${tf} истории для сетки (нужно ≥12 баров)`};
+  const lowSeries=candles.map(c=>c.l);
+  const highSeries=candles.map(c=>c.h);
+  const lo=cfg.lower>0?cfg.lower:Math.min(...lowSeries);
+  const hi=cfg.upper>0?cfg.upper:Math.max(...highSeries);
+  if(!(hi>lo))return{ok:false,msg:'Неверный диапазон сетки'};
+  const levels=Math.max(2,Math.min(60,cfg.levels|0));
+  const lev=Math.max(1,Math.min(25,cfg.leverage||1));
+  const dep=Math.max(1,cfg.deposit||500);
+  const step=(hi-lo)/levels;
+  const grid=Array.from({length:levels+1},(_,i)=>lo+step*i);
+  let anchorPrice=cfg.anchorPrice;
+  if(anchorPrice!=null&&!isFinite(+anchorPrice))anchorPrice=null;
+  const gm=String(cfg.gridMode||'neutral');
+  return{
+    ok:true,
+    symbol:cfg.sym,
+    tf,
+    candles,
+    gridLevels:grid,
+    levels,
+    step,
+    leverage:lev,
+    lower:lo,
+    upper:hi,
+    startEq:dep,
+    gridRiskMode:['neutral','long','short'].includes(gm)?gm:'neutral',
+    anchorPrice:anchorPrice!=null?+anchorPrice:null,
+    maxOneSideRun:0,
+  };
+}
 function runManualGridBacktest(cfg){
   const tf=String(cfg.tf||'5m');
   const candles=(cfg.candles||[]).slice(-Math.max(80,Math.min(1200,cfg.bars||360)));
@@ -6815,15 +6968,84 @@ function runManualGridBacktest(cfg){
   };
 }
 
-function renderManualBacktestPreview(body,out){
+function gbWantBarsFromVisible(lc,fallback){
+  try{
+    const r=lc?.timeScale?.()?.getVisibleLogicalRange?.();
+    if(r&&typeof r.from==='number'&&typeof r.to==='number'){
+      return Math.max(200,Math.min(1400,Math.ceil(r.to-r.from)+480));
+    }
+  }catch(e){}
+  return Math.max(300,Math.min(1200,+fallback||900));
+}
+function readGridLabInputs(body,gbPrefs,wantBars,mergedCand){
+  const sym=String(body.querySelector('#gbSym')?.value||'').toUpperCase().trim();
+  const tf=String(body.querySelector('#gbTf')?.value||'5m');
+  const levI=body.querySelector('#gbLev');
+  const depI=body.querySelector('#gbDep');
+  const lvlI=body.querySelector('#gbLevels');
+  const lowI=body.querySelector('#gbLow');
+  const highI=body.querySelector('#gbHigh');
+  const modeI=body.querySelector('#gbGridMode');
+  const rawLo=parseFloat(lowI?.value||'');
+  const rawHi=parseFloat(highI?.value||'');
+  const anchorPrice=gbPrefs.symbolBounds?.[sym]?.anchorPrice;
+  const anchor=isFinite(+anchorPrice)?+anchorPrice:null;
+  return{
+    sym,
+    tf,
+    levels:Math.max(3,Math.min(60,+lvlI?.value||12)),
+    lower:isFinite(rawLo)?rawLo:0,
+    upper:isFinite(rawHi)?rawHi:0,
+    leverage:Math.max(1,Math.min(25,+levI?.value||3)),
+    deposit:Math.max(1,+depI?.value||500),
+    gridMode:String(modeI?.value||'neutral'),
+    wantBars:Math.max(120,Math.min(1400,wantBars|0)),
+    candles:mergedCand||[],
+    anchorPrice:anchor,
+  };
+}
+async function prependGridLabHistory(body,sym,tf){
+  const ctx=body._gbChartCtx;
+  if(!ctx?.merged?.length||ctx._histLoading)return;
+  ctx._histLoading=true;
+  try{
+    const raw=await fj(`${API}/klines?symbol=${encodeURIComponent(sym)}&interval=${tf}&limit=${HIST_LIMIT}&endTime=${ctx.merged[0].t-1}`);
+    if(!raw?.length)return;
+    const nc=parseKlines(raw);if(!nc.length)return;
+    const ts=ctx.lc.timeScale();
+    let logRange=null,vTime=null,pRange=null;
+    try{logRange=(typeof ts.getVisibleLogicalRange==='function')?ts.getVisibleLogicalRange():null;}catch(e){}
+    try{vTime=!logRange&&typeof ts.getVisibleRange==='function'?ts.getVisibleRange():null;}catch(e){}
+    try{
+      const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
+      if(ps&&typeof ps.getVisibleRange==='function')pRange=ps.getVisibleRange();
+    }catch(e){}
+    const prepended=nc.length;
+    const m=ctx.merged;
+    m.unshift(...nc);
+    if(m.length>HIST_CACHE_MAX)m.splice(0,m.length-HIST_CACHE_MAX);
+    const lastC=+m[m.length-1]?.c||1;
+    try{ctx.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastC)}});}catch(e){}
+    ctx.cs.setData(m.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
+    if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
+      try{if(typeof ts.setVisibleLogicalRange==='function')ts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+    }else if(vTime){try{ts.setVisibleRange(vTime);}catch(e){}}
+    try{
+      const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
+      if(pRange&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pRange);
+    }catch(e){}
+  }catch(e){}finally{ctx._histLoading=false;}
+}
+function renderManualBacktestPreview(body,out,gbPrefs){
   const wrap=body.querySelector('#gbChartWrap');
   const host=body.querySelector('#gbChart');
   if(!wrap||!host)return;
   const prev=body._gbChartCtx;
   if(prev?.gbLabSig)try{prev.gbLabSig.abort();}catch(e){}
+  if(prev?._pollTimer){clearInterval(prev._pollTimer);}
   if(prev?.ro){try{prev.ro.disconnect();}catch(e){}}
   if(prev?.lc){try{prev.lc.remove();}catch(e){}}
-  body._gbChartCtx={lc:null,cs:null,ro:null,gbCh:null,gbLabSig:null};
+  body._gbChartCtx={lc:null,cs:null,ro:null,gbCh:null,gbLabSig:null,merged:null,sym:null,tf:null,_gbManagedLines:[],_histLoading:false,_gbDrag:null};
   host.innerHTML='';
   let rulerCanvas=body.querySelector('#gbRulerCanvas');
   if(!rulerCanvas){
@@ -6833,21 +7055,28 @@ function renderManualBacktestPreview(body,out){
     wrap.appendChild(rulerCanvas);
   }
   if(!S.LC||!out?.ok||!Array.isArray(out.candles)||!out.candles.length)return;
+  const merged=out.candles;
+  body._gbChartCtx.sym=out.symbol;body._gbChartCtx.tf=out.tf;body._gbChartCtx.merged=merged;
   const syncCanvasSize=()=>{
+    const ctx=body._gbChartCtx;const lcA=ctx.lc;if(!lcA)return;
     const w=Math.max(1,wrap.clientWidth|0),h=Math.max(1,wrap.clientHeight|0);
-    try{lc.applyOptions({width:w,height:h});}catch(e){}
+    try{lcA.applyOptions({width:w,height:h});}catch(e){}
     rulerCanvas.width=w;rulerCanvas.height=h;
     rulerCanvas.style.width=w+'px';rulerCanvas.style.height=h+'px';
-    if(body._gbChartCtx?.gbCh)rCanvas(body._gbChartCtx.gbCh);
+    if(ctx.gbCh)rCanvas(ctx.gbCh);
   };
   const lc=S.LC.createChart(host,{
     width:wrap.clientWidth||400,
     height:wrap.clientHeight||420,
     layout:{background:{color:'#0a0a0b'},textColor:'#606070'},
     grid:{vertLines:{color:'#141418'},horzLines:{color:'#141418'}},
+    crosshair:{
+      mode:0,
+      vertLine:{color:'#60607055',style:2,width:1,labelBackgroundColor:'#252530'},
+      horzLine:{color:'#60607055',style:2,width:1,labelBackgroundColor:'#252530'},
+    },
     rightPriceScale:{borderColor:'#252530'},
     timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false},
-    crosshair:{mode:_ctrlHeld?1:0},
     handleScroll:{mouseWheel:true,pressedMouseMove:true},
     handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
   });
@@ -6856,46 +7085,43 @@ function renderManualBacktestPreview(body,out){
     wickUpColor:S.upColor,wickDownColor:'#e04040',
     priceFormat:{type:'custom',formatter:p=>fmtPrice(p),minMove:0.0000001},
   });
-  cs.setData(out.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-  const applyGridLabCrosshairMode=()=>{
-    try{lc.applyOptions({crosshair:{mode:_ctrlHeld?1:0}});}catch(e){}
-  };
-  applyGridLabCrosshairMode();
-  const lastC=+out.candles[out.candles.length-1]?.c;
+  body._gbChartCtx.lc=lc;body._gbChartCtx.cs=cs;
+  const lastCInit=+merged[merged.length-1]?.c||1;
+  try{cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastCInit)}});}catch(e){}
+  cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
+  try{lc.timeScale().fitContent();}catch(e){}
+  const lastCForLines=+merged[merged.length-1]?.c;
   const gm=String(out.gridRiskMode||'neutral');
-  const riskRows=buildGridRiskRows({
-    lower:out.lower,upper:out.upper,currentPrice:lastC,
+  const riskRowsGb=buildGridRiskRows({
+    lower:out.lower,upper:out.upper,currentPrice:lastCForLines,
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
     gridMode:gm,
+    anchorPrice:out.anchorPrice,
   });
-  const step=out.step||0;
-  const gridLv=out.gridLevels||[];
-  const anchorIdx=gridRiskAnchorIdx(gridLv,lastC,step,gm);
-  const anchorPx=gridLv[anchorIdx]??lastC;
-  const colShort='#ef4444';
-  const colLong='#22c55e';
-  const colAnchor='#f59e0b';
-  gridLv.forEach((p,i)=>{
-    const meta=gridRiskMetaForPrice(p,anchorPx,step,riskRows,gm);
-    let color='#60a5fa';
-    if(meta.side==='short')color=colShort;
-    else if(meta.side==='long')color=colLong;
-    else if(meta.side==='anchor')color=colAnchor;
-    else if(meta.side==='tp-up'||meta.side==='tp-down')color='#64748b';
-    const title=fmtGridLineTitle(meta);
+  const stepPf=out.step||0;
+  const gridLvPf=out.gridLevels||[];
+  const anchorIdxPf=gridRiskAnchorIdx(gridLvPf,lastCForLines,stepPf,gm,out.anchorPrice);
+  const anchorPxPf=gridLvPf[anchorIdxPf]??lastCForLines;
+  gridLvPf.forEach((p,i)=>{
+    const meta=gridRiskMetaForPrice(p,anchorPxPf,stepPf,riskRowsGb,gm);
+    let colorPf='#60a5fa';
+    if(meta.side==='short')colorPf='#ef4444';
+    else if(meta.side==='long')colorPf='#22c55e';
+    else if(meta.side==='anchor')colorPf='#f59e0b';
+    else if(meta.side==='tp-up'||meta.side==='tp-down')colorPf='#64748b';
+    const titlePf=fmtGridLineTitle(meta);
     cs.createPriceLine({
-      price:p,
-      color,
-      lineWidth:i===0||i===gridLv.length-1?2:1,
+      price:p,color:colorPf,
+      lineWidth:i===0||i===gridLvPf.length-1?2:1,
       lineStyle:2,
       axisLabelVisible:true,
-      title,
+      title:titlePf,
     });
   });
   if(typeof cs.setMarkers==='function')cs.setMarkers([]);
   const gbCh={
     lc,cs,
-    candles:out.candles,
+    candles:merged,
     ruler:null,
     canvas:rulerCanvas,
     _gridLabChart:true,
@@ -6906,9 +7132,68 @@ function renderManualBacktestPreview(body,out){
   };
   const gbLabSig=new AbortController();
   const sig=gbLabSig.signal;
-  window.addEventListener('keydown',applyGridLabCrosshairMode,{signal:sig});
-  window.addEventListener('keyup',applyGridLabCrosshairMode,{signal:sig});
-  window.addEventListener('blur',applyGridLabCrosshairMode,{signal:sig});
+  const hitPrice=(clientY)=>{
+    const r=host.getBoundingClientRect();
+    return cs.coordinateToPrice(clientY-r.top);
+  };
+  const hitNearPrice=(touchPx,targetPx)=>{
+    if(targetPx==null||!isFinite(+targetPx))return false;
+    const yT=cs.priceToCoordinate(+targetPx);
+    const yU=cs.priceToCoordinate(+touchPx);
+    if(yT!=null&&yU!=null)return Math.abs(yT-yU)<13;
+    return Math.abs(+touchPx-targetPx)/Math.max(Math.abs(+targetPx),1e-12)<0.006;
+  };
+  wrap.addEventListener('mousedown',e=>{
+    if(e.button!==0)return;
+    const pr=hitPrice(e.clientY);
+    if(pr==null)return;
+    const hi=+out.upper,lo=+out.lower;
+    const ctxB=body._gbChartCtx;
+    const anchors=gridRiskAnchorIdx(out.gridLevels||[],+merged[merged.length-1]?.c||0,out.step||0,String(out.gridRiskMode||'neutral'),out.anchorPrice);
+    const apx=out.gridLevels?.[anchors]??(+merged[merged.length-1]?.c);
+    if(hitNearPrice(pr,hi))ctxB._gbDrag={kind:'high'};
+    else if(hitNearPrice(pr,lo))ctxB._gbDrag={kind:'low'};
+    else if(hitNearPrice(pr,apx))ctxB._gbDrag={kind:'anchor'};
+  },{signal:sig});
+  wrap.addEventListener('mousemove',e=>{
+    const ctxB=body._gbChartCtx;if(!ctxB._gbDrag)return;
+    const pr=hitPrice(e.clientY);if(pr==null)return;
+    if(ctxB._gbDrag.kind==='high')body.querySelector('#gbHigh').value=String(+pr.toFixed(8));
+    if(ctxB._gbDrag.kind==='low')body.querySelector('#gbLow').value=String(+pr.toFixed(8));
+  },{signal:sig,capture:true});
+  wrap.addEventListener('mouseup',e=>{
+    const ctxB=body._gbChartCtx;const dg=ctxB._gbDrag;
+    ctxB._gbDrag=null;if(!dg||e.button!==0)return;
+    const symI=body.querySelector('#gbSym');const tfI=body.querySelector('#gbTf');
+    const sym=String(symI?.value||'').toUpperCase().trim();
+    const pr=hitPrice(e.clientY);
+    if(dg.kind==='anchor'&&sym&&pr!=null){
+      let best=out.gridLevels[0],bd=Infinity;
+      for(const p of out.gridLevels){const d=Math.abs(p-pr);if(d<bd){bd=d;best=p;}}
+      if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+      gbPrefs.symbolBounds[sym]=gbPrefs.symbolBounds[sym]||{};
+      gbPrefs.symbolBounds[sym].anchorPrice=best;
+      saveGridLabPrefs(gbPrefs);
+    }
+    if(dg.kind==='high'||dg.kind==='low'){
+      if(sym){
+        const lo=parseFloat(body.querySelector('#gbLow').value)||null;
+        const hi=parseFloat(body.querySelector('#gbHigh').value)||null;
+        if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+        gbPrefs.symbolBounds[sym]={...gbPrefs.symbolBounds[sym],lower:lo,upper:hi};
+        saveGridLabPrefs(gbPrefs);
+      }
+    }
+    scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
+  },{signal:sig,capture:true});
+  try{
+    lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
+      if(range&&typeof range.from==='number'&&range.from<40){
+        clearTimeout(body._gbPrepT);
+        body._gbPrepT=setTimeout(()=>prependGridLabHistory(body,out.symbol,out.tf),220);
+      }
+    });
+  }catch(e){}
   wrap.addEventListener('mousedown',e=>{if(e.button===1){e.preventDefault();onRulerStart(gbCh,e,wrap);}},{capture:true,signal:sig});
   wrap.addEventListener('mousemove',e=>{if(gbCh.ruler?.active)onRulerMove(gbCh,e,wrap);},{capture:true,signal:sig});
   wrap.addEventListener('mouseup',e=>{if(e.button===1&&gbCh.ruler?.active)onRulerEnd(gbCh,e);},{capture:true,signal:sig});
@@ -6923,10 +7208,59 @@ function renderManualBacktestPreview(body,out){
       }
     }
   },{signal:sig});
-  const ro=new ResizeObserver(()=>{syncCanvasSize();});
+  const ro=new ResizeObserver(()=>syncCanvasSize());
   ro.observe(wrap);
   requestAnimationFrame(syncCanvasSize);
-  body._gbChartCtx={lc,cs,ro,gbCh,gbLabSig};
+  kickGridLabPricePoll(out.symbol);
+  body._gbChartCtx={...body._gbChartCtx,ro,gbCh,gbLabSig};
+}
+
+async function runGridLabSync(body,gbPrefs,opt={}){
+  const reuse=!!opt.reuseCandles;
+  const lcRef=body._gbChartCtx?.lc;
+  const want=reuse&&lcRef?gbWantBarsFromVisible(lcRef,940):Math.max(400,Math.min(1200,+(gbPrefs.global?.bars||940)));
+  const cfg=readGridLabInputs(body,gbPrefs,want,reuse&&body._gbChartCtx?.merged?.length?body._gbChartCtx.merged:[]);
+  cfg.sym=String(cfg.sym||'').trim();
+  if(!cfg.sym)return;
+  cfg.gridMode=['neutral','long','short'].includes(cfg.gridMode)?cfg.gridMode:'neutral';
+  let candles=[];
+  if(reuse&&body._gbChartCtx?.merged?.length)candles=body._gbChartCtx.merged;
+  else{
+    candles=await ensureBacktestCandles(cfg.sym,cfg.tf,want);
+    if(candles.length>want)candles=candles.slice(-want);
+  }
+  cfg.candles=candles;
+  gbPrefs.global.tf=cfg.tf;
+  gbPrefs.global.levels=cfg.levels;
+  gbPrefs.global.leverage=cfg.leverage;
+  gbPrefs.global.deposit=cfg.deposit;
+  gbPrefs.global.gridMode=cfg.gridMode;
+  if(!gbPrefs.symbolBounds||typeof gbPrefs.symbolBounds!=='object')gbPrefs.symbolBounds={};
+  const loP=body.querySelector('#gbLow')?.value;
+  const hiP=body.querySelector('#gbHigh')?.value;
+  const loNv=parseFloat(loP||'');
+  const hiNv=parseFloat(hiP||'');
+  gbPrefs.symbolBounds[cfg.sym]={
+    ...(gbPrefs.symbolBounds[cfg.sym]||{}),
+    lower:(loP!=null&&String(loP).trim()!==''&&isFinite(loNv))?loNv:null,
+    upper:(hiP!=null&&String(hiP).trim()!==''&&isFinite(hiNv))?hiNv:null,
+  };
+  saveGridLabPrefs(gbPrefs);
+  cfg.anchorPrice=gbPrefs.symbolBounds[cfg.sym]?.anchorPrice;
+  const out=compileGridLabState(cfg);
+  out.gridRiskMode=cfg.gridMode;
+  const el=body.querySelector('#gbOut');
+  if(!out.ok){
+    if(el)el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;
+    renderManualBacktestPreview(body,null,gbPrefs);renderGridRiskProfile(body,null);return;
+  }
+  if(el)el.innerHTML=`<span style="color:var(--text3)">${out.symbol.replace(/USDT$/,'')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)} — границы и #0 можно тянуть ЛКМ.</span>`;
+  renderManualBacktestPreview(body,out,gbPrefs);
+  renderGridRiskProfile(body,out);
+}
+function scheduleGridLabSync(body,gbPrefs,opt={}){
+  if(body._gridLabUiTimer)clearTimeout(body._gridLabUiTimer);
+  body._gridLabUiTimer=setTimeout(()=>{void runGridLabSync(body,gbPrefs,opt);},opt.immediate?0:95);
 }
 
 function renderGridLabModal(){
@@ -6938,8 +7272,8 @@ function renderGridLabModal(){
   box.style.cssText='width:min(1220px,98vw);height:min(860px,94vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
   box.innerHTML=`
     <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)">
-      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Бэктест + Coin Selector</span>
-      <button class="tbtn on" id="gridTabBacktest">Бэктест</button>
+      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Сетка + Coin Selector</span>
+      <button class="tbtn on" id="gridTabBacktest">Сетка</button>
       <button class="tbtn" id="gridTabSelector">Coin Selector</button>
       <button class="tbtn" id="gridCloseBtn">Закрыть</button>
     </div>
@@ -6978,10 +7312,9 @@ function renderGridLabModal(){
         <select id="gbTf" style="width:62px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
           <option value="1m"${gbPrefs.global.tf==='1m'?' selected':''}>1m</option>
           <option value="5m"${gbPrefs.global.tf==='5m'?' selected':''}>5m</option>
+          <option value="15m"${gbPrefs.global.tf==='15m'?' selected':''}>15m</option>
           <option value="1h"${gbPrefs.global.tf==='1h'?' selected':''}>1h</option>
         </select>
-        <label style="font-size:9px;color:var(--text3)">Bars</label>
-        <input id="gbBars" type="number" value="${gbPrefs.global.bars}" min="80" max="1200" style="width:70px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Уровни</label>
         <input id="gbLevels" type="number" value="${gbPrefs.global.levels}" min="3" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Низ</label>
@@ -6998,74 +7331,45 @@ function renderGridLabModal(){
           <option value="long"${gbPrefs.global.gridMode==='long'?' selected':''}>Long (узел ≤ цены)</option>
           <option value="short"${gbPrefs.global.gridMode==='short'?' selected':''}>Short (узел ≥ цены)</option>
         </select>
-        <button class="tbtn on" id="gbRunBtn">Запустить</button>
       </div>
-      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
-      <div style="display:flex;gap:8px;flex:1;min-height:min(56vh,560px);align-items:stretch">
-        <div id="gbChartWrap" style="position:relative;flex:1 1 auto;min-width:0;min-height:min(56vh,560px);height:min(56vh,560px);border:1px solid var(--border2);border-radius:6px;overflow:hidden">
+      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Загрузка сетки...</div>
+      <div style="display:flex;gap:8px;flex:1;min-height:min(60vh,620px);align-items:stretch">
+        <div id="gbChartWrap" style="position:relative;flex:1 1 auto;min-width:0;min-height:min(60vh,620px);height:min(60vh,620px);border:1px solid var(--border2);border-radius:6px;overflow:hidden">
           <div id="gbChart" style="position:absolute;inset:0"></div>
           <canvas id="gbRulerCanvas" width="400" height="400" style="position:absolute;inset:0;z-index:12;pointer-events:none"></canvas>
         </div>
-        <div id="gbRisk" style="width:min(340px,34%);min-width:260px;border:1px solid var(--border2);border-radius:6px;padding:8px 8px 10px;background:rgba(255,255,255,.01);display:flex;flex-direction:column;min-height:min(56vh,560px)"></div>
+        <div id="gbRisk" style="width:min(340px,34%);min-width:260px;border:1px solid var(--border2);border-radius:6px;padding:8px 8px 10px;background:rgba(255,255,255,.01);display:flex;flex-direction:column;min-height:min(60vh,620px)"></div>
       </div>
       </div>`;
-    body.querySelector('#gbSym').addEventListener('change',()=>{
-      const sym=String(body.querySelector('#gbSym').value||'').toUpperCase().trim();
+    const bindGbInput=(id,reuseOnly)=>{
+      const el=body.querySelector(id);if(!el)return;
+      el.addEventListener('input',()=>scheduleGridLabSync(body,gbPrefs,{reuseCandles:reuseOnly}));
+      el.addEventListener('change',()=>scheduleGridLabSync(body,gbPrefs,{reuseCandles:reuseOnly}));
+    };
+    bindGbInput('#gbLevels',true);
+    bindGbInput('#gbLow',true);
+    bindGbInput('#gbHigh',true);
+    bindGbInput('#gbLev',true);
+    bindGbInput('#gbDep',true);
+    bindGbInput('#gbGridMode',true);
+    const symEl=body.querySelector('#gbSym');
+    const syncSymBounds=()=>{
+      const sym=String(symEl.value||'').toUpperCase().trim();
       const bnd=gbPrefs.symbolBounds?.[sym]||{};
       body.querySelector('#gbLow').value=bnd.lower??'';
       body.querySelector('#gbHigh').value=bnd.upper??'';
-    });
-    const run=body.querySelector('#gbRunBtn');
-    run.onclick=async()=>{
-      const cfg={
-        sym:String(body.querySelector('#gbSym').value||'').toUpperCase().trim(),
-        tf:String(body.querySelector('#gbTf').value||'5m'),
-        bars:+body.querySelector('#gbBars').value||360,
-        levels:+body.querySelector('#gbLevels').value||12,
-        lower:+body.querySelector('#gbLow').value||0,
-        upper:+body.querySelector('#gbHigh').value||0,
-        leverage:+body.querySelector('#gbLev').value||1,
-        deposit:+body.querySelector('#gbDep').value||500,
-        gridMode:String(body.querySelector('#gbGridMode')?.value||'neutral'),
-        fee:0.00055,
-      };
-      cfg.gridMode=['neutral','long','short'].includes(cfg.gridMode)?cfg.gridMode:'neutral';
-      gbPrefs.global.tf=cfg.tf;
-      gbPrefs.global.bars=cfg.bars;
-      gbPrefs.global.levels=cfg.levels;
-      gbPrefs.global.leverage=cfg.leverage;
-      gbPrefs.global.deposit=cfg.deposit;
-      gbPrefs.global.gridMode=cfg.gridMode;
-      if(!gbPrefs.symbolBounds||typeof gbPrefs.symbolBounds!=='object')gbPrefs.symbolBounds={};
-      gbPrefs.symbolBounds[cfg.sym]={lower:cfg.lower||null,upper:cfg.upper||null};
-      saveGridLabPrefs(gbPrefs);
-      cfg.candles=await ensureBacktestCandles(cfg.sym,cfg.tf,Math.max(cfg.bars,120));
-      const out=runManualGridBacktest(cfg);
-      if(out.ok){out.gridRiskMode=cfg.gridMode;}
-      const el=body.querySelector('#gbOut');
-      if(!out.ok){el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;renderManualBacktestPreview(body,null);renderGridRiskProfile(body,null);return;}
-      const maxSteps=Math.floor((out.upper-out.lower)/Math.max(out.step,1e-12));
-      el.innerHTML=`
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:8px">
-          <div>Символ: <b style="color:#fff">${out.symbol.replace(/USDT$/,'')}</b></div>
-          <div>TF: <b style="color:#fff">${out.tf}</b></div>
-          <div>PnL: <b class="${out.pnl>=0?'p':'n'}">${out.pnl>=0?'+':''}${fn(out.pnl,2)} USDT</b></div>
-          <div>ROI: <b class="${out.roi>=0?'p':'n'}">${out.roi>=0?'+':''}${fn(out.roi,2)}%</b></div>
-          <div>MaxDD: <b style="color:#f59e0b">${fn(out.maxDd,2)}%</b></div>
-          <div>Сделок(fill): <b style="color:#fff">${out.fills}</b></div>
-          <div>Комиссии: <b style="color:#fff">${fn(out.fees,2)} USDT</b></div>
-          <div>Шаг сетки: <b style="color:#fff">${fmtPrice(out.step)}</b></div>
-          <div>Уровней в диапазоне: <b style="color:#fff">${maxSteps+1}</b></div>
-          <div title="Максимальная серия подряд в одну сторону (buy или sell) в этом тесте">Макс серия 1-сторонних fill: <b style="color:#fff">${out.maxOneSideRun}</b></div>
-        </div>`;
-      renderManualBacktestPreview(body,out);
-      renderGridRiskProfile(body,out);
     };
+    symEl.addEventListener('change',()=>{syncSymBounds();scheduleGridLabSync(body,gbPrefs,{reuseCandles:false});});
+    body.querySelector('#gbTf').addEventListener('change',()=>scheduleGridLabSync(body,gbPrefs,{reuseCandles:false}));
+    scheduleGridLabSync(body,gbPrefs,{immediate:true});
   };
   btnSel.onclick=()=>setTab('selector');
   btnBt.onclick=()=>setTab('backtest');
   const closeModal=()=>{
+    if(body._gridLabUiTimer)clearTimeout(body._gridLabUiTimer);
+    if(body._gbPrepT)clearTimeout(body._gbPrepT);
     const ctx=body._gbChartCtx;
+    if(ctx?._pollTimer){clearInterval(ctx._pollTimer);ctx._pollTimer=null;}
     if(ctx?.gbLabSig)try{ctx.gbLabSig.abort();}catch(e){}
     if(ctx?.ro){try{ctx.ro.disconnect();}catch(e){}}
     if(ctx?.lc){try{ctx.lc.remove();}catch(e){}}

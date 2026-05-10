@@ -469,10 +469,18 @@ html,body{
 }
 .cg-fstar{
   color:#fbbf24;
-  font-size:9px;
+  font-size:14px;
   line-height:1;
+  font-weight:700;
   display:none;
-  margin-left:-1px;
+  margin-left:1px;
+  filter:drop-shadow(0 0 2px rgba(251,191,36,.45));
+}
+/* Избранное в фильтре списка монет — заметнее в активном состоянии */
+.cg-filter-btn.cg-filter-fav.active{
+  transform:scale(1.5) !important;
+  color:#fde68a !important;
+  filter:drop-shadow(0 0 8px rgba(251,191,36,.85));
 }
 
 /* POTENTIAL PANEL */
