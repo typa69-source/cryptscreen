@@ -1154,7 +1154,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       horzLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#1c1c22',labelVisible:false}
     },
     rightPriceScale:{borderColor:'#252530',textColor:'#606070'},
-    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false},
+    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false,fixRightEdge:false},
     handleScroll:{mouseWheel:true,pressedMouseMove:true},
     handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
     localization:{priceFormatter:p=>fmtPrice(p),timeFormatter:t=>{const d=new Date(t*1000);const pad=n=>n.toString().padStart(2,'0');return`${pad(d.getUTCFullYear())}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;}},
@@ -1840,10 +1840,11 @@ async function loadMoreHistory(slot){
         ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
         const tsScale=ch.lc.timeScale();
-        if(vTime&&vTime.from!=null&&vTime.to!=null){try{tsScale.setVisibleRange(vTime);}catch(e){}}
-        else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
+        const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+        try{tsScale.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
+        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
           try{tsScale.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
-        }
+        }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{tsScale.setVisibleRange(vTime);}catch(e){}}
         try{
           const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
@@ -1918,25 +1919,57 @@ function chartLivePriceForSnap(ch){
   return null;
 }
 
+/** Ширина бара в секундах (график-тайм), для снапа правее последней свечи. */
+function inferBarChartSec(ch){
+  if(ch?.candles?.length>=2){
+    const t1=toChartTime(ch.candles[ch.candles.length-2].t);
+    const t2=toChartTime(ch.candles[ch.candles.length-1].t);
+    return Math.max(1,t2-t1);
+  }
+  const tf=S.fsCharts.includes(ch)?ch.tf:S.tf;
+  return Math.max(1,Math.floor(tfMs(tf)/1000));
+}
+
 /**
- * ctrl=false: прилипание по X к ближайшей свече, цена — как у курсора (Y свободно).
- * ctrl=true: то же по X, по Y — ближайшая из O/H/L/C или текущей цены к raw.price.
+ * ctrl=false: X — к ближайшей свече в данных; правее последней — виртуальная сетка баров.
+ * ctrl=true: то же по X; Y — ближайшая O/H/L/C или текущая цена.
  */
 function snapPoint(ch,x,y,ctrl){
   const raw=pixelToPoint(ch,x,y);if(!raw)return null;
   if(!ch.candles?.length||!ch.cs||!ch.lc)return raw;
   const ts=ch.lc.timeScale();
-  let bestC=null,bestDx=Infinity;
-  for(const c of ch.candles){
-    const bx=ts.timeToCoordinate(toChartTime(c.t));
-    if(bx==null)continue;
-    const d=Math.abs(bx-x);
-    if(d<bestDx){bestDx=d;bestC=c;}
+  const barSec=inferBarChartSec(ch);
+  const last=ch.candles[ch.candles.length-1];
+  const tLast=toChartTime(last.t);
+  let tSnapped;
+  if(raw.time>tLast){
+    const k=Math.round((raw.time-tLast)/barSec);
+    tSnapped=tLast+k*barSec;
+  }else{
+    let bestC=null,bestDx=Infinity;
+    for(const c of ch.candles){
+      const bx=ts.timeToCoordinate(toChartTime(c.t));
+      if(bx==null)continue;
+      const d=Math.abs(bx-x);
+      if(d<bestDx){bestDx=d;bestC=c;}
+    }
+    if(!bestC)return raw;
+    tSnapped=toChartTime(bestC.t);
   }
-  if(!bestC)return raw;
-  const tSnapped=toChartTime(bestC.t);
   if(!ctrl)return{time:tSnapped,price:raw.price};
-  const ohlc=[bestC.o,bestC.h,bestC.l,bestC.c];
+  let ohlcCandle=last;
+  if(!(raw.time>tLast)){
+    let bestC=null,bestDx=Infinity;
+    for(const c of ch.candles){
+      const bx=ts.timeToCoordinate(toChartTime(c.t));
+      if(bx==null)continue;
+      const d=Math.abs(bx-x);
+      if(d<bestDx){bestDx=d;bestC=c;}
+    }
+    if(!bestC)return{time:tSnapped,price:raw.price};
+    ohlcCandle=bestC;
+  }
+  const ohlc=[ohlcCandle.o,ohlcCandle.h,ohlcCandle.l,ohlcCandle.c];
   const live=chartLivePriceForSnap(ch);
   const candidates=live!=null&&isFinite(live)?[...ohlc,live]:ohlc;
   let bestP=candidates[0],bestDist=Infinity;
@@ -2248,6 +2281,25 @@ function _rCanvasGridLabImmediate(ch){
       ctx.lineWidth=1.5;
       ctx.setLineDash([5,5]);
       ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(drawW,yy);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+  let anchPr=null;
+  try{
+    const modal=document.getElementById('gridLabModal');
+    const bod=modal?.querySelector('#gridLabBody');
+    const ap=bod?._gbChartCtx?._gbAnchorPreviewPrice;
+    if(ap!=null&&isFinite(+ap))anchPr=+ap;
+  }catch(e){}
+  if(anchPr!=null){
+    const yyA=ch.cs.priceToCoordinate(anchPr);
+    if(yyA!=null&&!isNaN(yyA)){
+      ctx.save();
+      ctx.strokeStyle='rgba(245,158,11,.88)';
+      ctx.lineWidth=2;
+      ctx.setLineDash([4,3]);
+      ctx.beginPath();ctx.moveTo(0,yyA);ctx.lineTo(drawW,yyA);ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
     }
@@ -3501,6 +3553,8 @@ function repaintChartSeries(ch,cacheKey=''){
   }
   ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+  const roR=Math.max(0,Math.min(36,S.chartRightOffset|0));
+  try{ch.lc.timeScale().applyOptions({rightOffset:roR,fixRightEdge:false});}catch(e){}
   if(vTime&&vTime.from!=null&&vTime.to!=null){
     try{ch.lc.timeScale().setVisibleRange(vTime);}catch(e){}
   }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
@@ -5033,18 +5087,19 @@ function buildGroupFilterBar(){
       btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'')+(g===FAVORITE_GROUP_ID?' cg-filter-fav':'');
       if(g===FAVORITE_GROUP_ID){
         btn.style.background='transparent';
-        btn.style.border='none';
-        btn.style.borderRadius='0';
-        btn.style.width='auto';
-        btn.style.minWidth='22px';
-        btn.style.height='auto';
-        btn.style.minHeight='22px';
-        btn.style.padding='0 4px';
+        btn.style.border='2px solid transparent';
+        btn.style.borderRadius='50%';
+        btn.style.width='16px';
+        btn.style.height='16px';
+        btn.style.minWidth='16px';
+        btn.style.minHeight='16px';
+        btn.style.padding='0';
+        btn.style.boxSizing='border-box';
         btn.style.color=FAVORITE_GROUP_COLOR;
         btn.style.display='inline-flex';
         btn.style.alignItems='center';
         btn.style.justifyContent='center';
-        btn.style.fontSize='19px';
+        btn.style.fontSize='11px';
         btn.style.lineHeight='1';
         btn.textContent='★';
       }else{
@@ -5799,10 +5854,11 @@ async function loadMoreFsHistory(idx){
       try{
         fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-        if(vTime&&vTime.from!=null&&vTime.to!=null){try{fts.setVisibleRange(vTime);}catch(e){}}
-        else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
+        const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+        try{fts.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
+        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
           try{fts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
-        }
+        }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{fts.setVisibleRange(vTime);}catch(e){}}
         try{
           const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
@@ -6844,12 +6900,19 @@ function renderGridRiskProfile(body,out,gbPrefs){
   const riskGrid=Array.from({length:(out.levels|0)+1},(_,i)=>out.lower+i*riskStep);
   const ai=gridRiskAnchorIdx(riskGrid,lastC,riskStep,gm,out.anchorPrice);
   const anchorLbl=fmtPrice(riskGrid[ai]??lastC);
+  const anchorPxUi=riskGrid[ai]??lastC;
   const shortRows=rows
     .filter(r=>r.upPrice!=null&&Math.abs(r.upUsdt)>1e-10)
-    .sort((a,b)=>a.step-b.step);
+    .sort((a,b)=>{
+      const da=Math.abs((a.upPrice??0)-anchorPxUi),db=Math.abs((b.upPrice??0)-anchorPxUi);
+      return da-db||(a.step-b.step);
+    });
   const longRows=rows
     .filter(r=>r.downPrice!=null)
-    .sort((a,b)=>a.step-b.step);
+    .sort((a,b)=>{
+      const da=Math.abs((a.downPrice??0)-anchorPxUi),db=Math.abs((b.downPrice??0)-anchorPxUi);
+      return da-db||(a.step-b.step);
+    });
   const mkBars=(list,fieldUsdt,fieldPct,fieldPrice,tone,barOpts)=>{
     const numRev=barOpts?.numRev;
     if(!list.length){
@@ -6912,16 +6975,27 @@ function renderGridRiskProfile(body,out,gbPrefs){
       const startAi=ai;
       let curAi=startAi;
       const hint=zRow.querySelector('.gb-anchor-hint');
+      const gctx=body._gbChartCtx;
+      const setPreview=ix=>{
+        const p=riskGrid[ix];
+        if(gctx&&p!=null&&isFinite(p)){
+          gctx._gbAnchorPreviewPrice=p;
+          if(gctx.gbCh)rCanvas(gctx.gbCh);
+        }
+      };
+      setPreview(curAi);
       const onMove=ev=>{
         const dIdx=Math.round((startY-ev.clientY)/14);
         const ni=Math.max(0,Math.min(riskGrid.length-1,startAi+dIdx));
         if(ni===curAi)return;
         curAi=ni;
-        if(hint)hint.textContent=ni===startAi?'':`→ ${fmtPrice(riskGrid[ni])}`;
+        setPreview(ni);
+        if(hint)hint.textContent=ni===startAi?'':`→ ${fmtPrice(riskGrid[ni])} (#${ni})`;
       };
       const onUp=()=>{
         document.removeEventListener('mousemove',onMove);
         document.removeEventListener('mouseup',onUp);
+        if(gctx){gctx._gbAnchorPreviewPrice=null;if(gctx.gbCh)rCanvas(gctx.gbCh);}
         if(hint)hint.textContent='';
         if(curAi!==startAi){
           if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
@@ -7105,10 +7179,11 @@ async function prependGridLabHistory(body,sym,tf){
     const lastC=+m[m.length-1]?.c||1;
     try{ctx.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastC)}});}catch(e){}
     ctx.cs.setData(m.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-    if(vTime&&vTime.from!=null&&vTime.to!=null){try{ts.setVisibleRange(vTime);}catch(e){}}
-    else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
+    const gro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+    try{ts.applyOptions({rightOffset:gro,fixRightEdge:false});}catch(e){}
+    if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
       try{if(typeof ts.setVisibleLogicalRange==='function')ts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
-    }
+    }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{ts.setVisibleRange(vTime);}catch(e){}}
     try{
       const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
       if(pRange&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pRange);
@@ -7168,7 +7243,7 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
       horzLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#252530',labelVisible:false},
     },
     rightPriceScale:{borderColor:'#252530'},
-    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false},
+    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false,fixRightEdge:false},
     handleScroll:{mouseWheel:true,pressedMouseMove:true},
     handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
   });
@@ -7247,15 +7322,34 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
     if(yT!=null&&yU!=null)return Math.abs(yT-yU)<13;
     return Math.abs(+touchPx-targetPx)/Math.max(Math.abs(+targetPx),1e-12)<0.006;
   };
+  const gbInteractRestore={
+    handleScroll:{mouseWheel:true,pressedMouseMove:true},
+    handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
+  };
   wrap.addEventListener('mousedown',e=>{
     if(e.button!==0)return;
     const pr=hitPrice(e.clientY);
     if(pr==null)return;
     const hi=+out.upper,lo=+out.lower;
     const ctxB=body._gbChartCtx;
-    if(hitNearPrice(pr,hi))ctxB._gbDrag={kind:'high',previewPrice:hi};
-    else if(hitNearPrice(pr,lo))ctxB._gbDrag={kind:'low',previewPrice:lo};
-  },{signal:sig});
+    let drag=null;
+    if(hitNearPrice(pr,hi))drag={kind:'high',previewPrice:hi};
+    else if(hitNearPrice(pr,lo))drag={kind:'low',previewPrice:lo};
+    if(!drag)return;
+    e.preventDefault();e.stopPropagation();
+    ctxB._gbDrag=drag;
+    try{
+      lc.applyOptions({
+        handleScroll:{mouseWheel:true,pressedMouseMove:false},
+        handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
+      });
+    }catch(err){}
+    const onDocUp=()=>{
+      document.removeEventListener('mouseup',onDocUp,true);
+      try{lc.applyOptions(gbInteractRestore);}catch(e){}
+    };
+    document.addEventListener('mouseup',onDocUp,true);
+  },{signal:sig,capture:true});
   wrap.addEventListener('mousemove',e=>{
     const ctxB=body._gbChartCtx;if(!ctxB?.gbCh)return;
     const pr=hitPrice(e.clientY);
@@ -7276,6 +7370,9 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
   },{signal:sig});
   wrap.addEventListener('mouseup',e=>{
     const ctxB=body._gbChartCtx;const dg=ctxB._gbDrag;
+    if(dg&&e.button===0){
+      try{lc.applyOptions(gbInteractRestore);}catch(err){}
+    }
     ctxB._gbDrag=null;if(!dg||e.button!==0)return;
     if(ctxB.gbCh)rCanvas(ctxB.gbCh);
     const symI=body.querySelector('#gbSym');

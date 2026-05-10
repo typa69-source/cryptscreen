@@ -476,11 +476,13 @@ html,body{
   margin-left:1px;
   filter:drop-shadow(0 0 2px rgba(251,191,36,.45));
 }
-/* Избранное в фильтре списка монет — заметнее в активном состоянии */
+/* Избранное: как группы — круг + обводка при выборе, без гигантской звезды */
 .cg-filter-btn.cg-filter-fav.active{
-  transform:scale(1.5) !important;
+  transform:none !important;
   color:#fde68a !important;
-  filter:drop-shadow(0 0 8px rgba(251,191,36,.85));
+  border-color:rgba(253,224,138,.95) !important;
+  box-shadow:0 0 0 1px rgba(251,191,36,.35);
+  filter:none;
 }
 
 /* POTENTIAL PANEL */
