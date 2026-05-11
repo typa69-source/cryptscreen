@@ -268,6 +268,7 @@ export function registerGridBotScreeners(deps) {
     calcATR,
     BACKEND,
     GROUP_COLORS = ['', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'],
+    calcAll = null,
     tagScreenerGroup,
   } = deps;
 
@@ -406,7 +407,20 @@ export function registerGridBotScreeners(deps) {
         vm: { ...s6, tip: GRID_SWING_TIPS.vm },
         rcov: { ...s7, tip: GRID_SWING_TIPS.rcov },
       },
-      raw: { adx, chop, atrp, hurst, maX, vm, rcov, p5, p95, h4ch },
+      raw: {
+        adx,
+        chop,
+        atrp,
+        hurst,
+        maX,
+        vm,
+        rcov,
+        p5,
+        p95,
+        h4ch,
+        plusDI: adxR?.plusDI ?? null,
+        minusDI: adxR?.minusDI ?? null,
+      },
     };
   }
 
@@ -748,6 +762,233 @@ export function registerGridBotScreeners(deps) {
     // If we already have results, show them immediately; update in background.
     if (ui.lastRows?.length) ui.applyFiltersAndRender();
     runSwingScan(ui);
+  }
+
+  function pickGridNLevels(r) {
+    const a = r.gridLo;
+    const b = r.gridHi;
+    if (a == null || b == null || !(b > a) || r.stepAbs == null || !(r.stepAbs > 0)) return null;
+    return Math.max(6, Math.min(32, Math.round((b - a) / r.stepAbs)));
+  }
+
+  function pickWhyLines(r, mode) {
+    const p = [];
+    const adx = r.raw?.adx;
+    const ch = r.ch24;
+    if (r.score >= 9) p.push(`высокий score ${r.score} по Swing-метрикам сетки`);
+    if (adx != null && adx <= 22) p.push(`ADX ${fn(adx, 1)} — слабый тренд, цена чаще возвращается в диапазон`);
+    if (mode === 'neutral' && ch != null && Math.abs(ch) <= 4) p.push(`24ч ≈ flat (${fn(ch, 2)}%) — хороший фон для neutral grid`);
+    if (mode === 'long' && ch != null && ch >= 1.5) p.push(`24ч +${fn(ch, 2)}% и +DI≥−DI — контекст набора лонга снизу`);
+    if (mode === 'short' && ch != null && ch <= -1.5) p.push(`24ч ${fn(ch, 2)}% и −DI≥+DI — контекст шорта с верхних доборов`);
+    if (r.raw?.atrp != null) p.push(`ATR% ${fn(r.raw.atrp, 2)} — шаг 0.5×ATR совпадает с типичным движением`);
+    if (p.length === 0) p.push('сочетание chop/Hurst, пересечений MA20 и оборота (vm)');
+    return p;
+  }
+
+  async function runPickScan(ui) {
+    ui.loading = true;
+    ui.error = '';
+    ui.diag = '';
+    if (ui.renderMeta) ui.renderMeta();
+    try {
+      if (typeof calcAll === 'function') calcAll();
+    } catch (e) {
+      /* ignore */
+    }
+    const base = S.syms.filter(passesVol);
+    const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 140);
+    ui.diag = `universe ${syms.length}/${base.length || 0}`;
+    if (!syms.length) {
+      ui.lastRows = [];
+      ui.pickNeutral = [];
+      ui.pickLong = [];
+      ui.pickShort = [];
+      ui.loading = false;
+      ui.lastRun = Date.now();
+      ui.error = 'Нет символов (объём / список).';
+      if (ui.applyRender) ui.applyRender();
+      return;
+    }
+    try {
+      ui.diag += ' · mcap…';
+      if (ui.renderMeta) ui.renderMeta();
+      const mcapMap = await ensureCgMcapMap(fj, BACKEND);
+      ui.diag = `universe ${syms.length} · mcap ${mcapMap?.size || 0} · d1…`;
+      if (ui.renderMeta) ui.renderMeta();
+      const d1 = await batchKlinesCached(syms, '1d', 100, null, null, 10);
+      ui.diag += ' · 4h…';
+      if (ui.renderMeta) ui.renderMeta();
+      const j4h = await batchKlinesCached(syms, '4h', 14, null, null, 10);
+      ui.diag = `universe ${syms.length} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
+      const rows = [];
+      for (const sym of syms) {
+        const r = computeSwingRow(sym, d1, j4h, mcapMap);
+        if (r) rows.push(r);
+      }
+      rows.sort((a, b) => b.score - a.score);
+      ui.lastRows = rows;
+      const pdi = (r) => +(r.raw?.plusDI ?? 0);
+      const mdi = (r) => +(r.raw?.minusDI ?? 0);
+      ui.pickNeutral = rows.filter((r) => Math.abs(r.ch24 ?? 0) <= 5 && r.score >= 6).slice(0, 40);
+      ui.pickLong = rows
+        .filter((r) => (r.ch24 ?? 0) >= 1.2 && pdi(r) >= mdi(r) * 1.02)
+        .slice(0, 40);
+      ui.pickShort = rows
+        .filter((r) => (r.ch24 ?? 0) <= -1.2 && mdi(r) >= pdi(r) * 1.02)
+        .slice(0, 40);
+      if (!rows.length) {
+        ui.error = 'Нет данных после скана (rate limit / klines).';
+      }
+    } catch (e) {
+      ui.lastRows = [];
+      ui.pickNeutral = [];
+      ui.pickLong = [];
+      ui.pickShort = [];
+      ui.error = `Ошибка: ${e?.message || String(e)}`;
+    } finally {
+      ui.loading = false;
+      ui.lastRun = Date.now();
+      if (ui.applyRender) ui.applyRender();
+    }
+  }
+
+  function openGridPickScreener() {
+    const old = document.getElementById('gridPickModal');
+    if (old) {
+      old.remove();
+      return;
+    }
+    const modal = document.createElement('div');
+    modal.id = 'gridPickModal';
+    modal.style.cssText =
+      'position:fixed;inset:0;z-index:825;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;';
+    const box = document.createElement('div');
+    box.style.cssText =
+      'width:min(1180px,98vw);height:min(90vh,940px);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
+
+    const cacheKey = '__gbs_pick_v1';
+    const cachedUi = typeof window !== 'undefined' ? window[cacheKey] : null;
+
+    const ui = cachedUi || {
+      tab: 'neutral',
+      loading: false,
+      error: '',
+      diag: '',
+      lastRows: [],
+      pickNeutral: [],
+      pickLong: [],
+      pickShort: [],
+      lastRun: 0,
+    };
+    if (typeof window !== 'undefined') window[cacheKey] = ui;
+    ui.pickNeutral ||= [];
+    ui.pickLong ||= [];
+    ui.pickShort ||= [];
+
+    function renderMeta() {
+      const sk = box.querySelector('#gbsPickSk');
+      if (sk) sk.style.display = ui.loading ? '' : 'none';
+      const dg = box.querySelector('#gbsPickDiag');
+      if (dg) dg.textContent = ui.diag || '';
+      const lu = box.querySelector('#gbsPickLu');
+      if (lu && ui.lastRun) lu.textContent = new Date(ui.lastRun).toLocaleTimeString();
+    }
+
+    function rowHtml(r, mode) {
+      const gl =
+        r.gridLo != null && r.gridHi != null ? `${fmtPrice(r.gridLo)} … ${fmtPrice(r.gridHi)}` : '—';
+      const nL = pickGridNLevels(r);
+      const nTxt = nL != null ? String(nL) : '—';
+      const why = pickWhyLines(r, mode).join(' · ');
+      const badge =
+        r.band === 'green' ? '#22c55e' : r.band === 'yellow' ? '#eab308' : '#ef4444';
+      return `<tr data-sym="${r.sym}">
+        <td><b class="gbs-pick-open" style="cursor:pointer;color:#7dd3fc">${r.sym.replace(/USDT$/, '')}</b></td>
+        <td class="${(r.ch24 ?? 0) >= 0 ? 'p' : 'n'}">${r.ch24 != null ? fn(r.ch24, 2) : '—'}%</td>
+        <td><span style="background:${badge};color:#0a0c0b;padding:2px 6px;border-radius:4px;font-weight:700">${r.score}</span></td>
+        <td style="font-size:9px">${gl}</td>
+        <td style="font-size:9px">${nTxt}</td>
+        <td style="font-size:9px;color:var(--text3);line-height:1.35">${why}</td>
+      </tr>`;
+    }
+
+    function applyRender() {
+      renderMeta();
+      const err = box.querySelector('#gbsPickErr');
+      if (err) err.textContent = ui.error || '';
+      const list =
+        ui.tab === 'long' ? ui.pickLong : ui.tab === 'short' ? ui.pickShort : ui.pickNeutral;
+      const tb = box.querySelector('#gbsPickBody');
+      if (!tb) return;
+      if (!list.length) {
+        tb.innerHTML = `<tr><td colspan="6" style="padding:12px;color:var(--text3);font-size:10px">${
+          ui.loading ? 'Загрузка…' : ui.error || 'Нет монет под фильтр вкладки (обнови скан).'
+        }</td></tr>`;
+        return;
+      }
+      tb.innerHTML = list.map((r) => rowHtml(r, ui.tab)).join('');
+      tb.querySelectorAll('.gbs-pick-open').forEach((el) => {
+        el.onclick = () => {
+          modal.remove();
+          openFullscreenBySym(el.closest('tr').dataset.sym);
+        };
+      });
+    }
+
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+        <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Pick — монеты под тип сетки</span>
+        <span id="gbsPickSk" style="font-size:10px;color:var(--text3);display:none">Скан…</span>
+        <span id="gbsPickDiag" style="font-size:9px;color:var(--text3)"></span>
+        <button class="tbtn" id="gbsPickRf">Обновить</button>
+        <button class="tbtn" id="gbsPickX">Закрыть</button>
+      </div>
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;gap:6px;flex-wrap:wrap;font-size:10px">
+        <button class="tbtn gbs-pick-tab" data-t="neutral">Нейтральные</button>
+        <button class="tbtn gbs-pick-tab" data-t="long">Лонг</button>
+        <button class="tbtn gbs-pick-tab" data-t="short">Шорт</button>
+        <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsPickLu">—</span></span>
+      </div>
+      <div style="padding:8px 12px;font-size:9px;color:var(--text3);line-height:1.45;border-bottom:1px solid var(--border)">
+        Те же дневные метрики, что у Grid Swing (ADX, chop, Hurst, ATR%, пересечения MA20, оборот). Границы — p5–p95 закрытий за 30 дней; уровни — шаг 0.5×ATR14, 6–32 линий. Вкладки отбирают по 24ч % и направлению +DI/−DI.
+      </div>
+      <div id="gbsPickErr" style="padding:4px 12px;font-size:10px;color:#f87171;min-height:18px"></div>
+      <div style="flex:1;min-height:0;overflow:auto">
+        <table class="gbs-table" style="width:100%;border-collapse:collapse;font-size:10px">
+          <thead><tr>
+            <th>Тикер</th><th>24ч %</th><th>Score</th><th>Границы</th><th>Уровней</th><th>Почему подходит</th>
+          </tr></thead>
+          <tbody id="gbsPickBody"></tbody>
+        </table>
+      </div>
+    `;
+
+    modal.appendChild(box);
+    document.body.appendChild(modal);
+
+    ui.renderMeta = renderMeta;
+    ui.applyRender = applyRender;
+
+    function setTab(t) {
+      ui.tab = t;
+      box.querySelectorAll('.gbs-pick-tab').forEach((b) => {
+        b.classList.toggle('on', b.dataset.t === t);
+      });
+      applyRender();
+    }
+
+    box.querySelectorAll('.gbs-pick-tab').forEach((b) => {
+      b.onclick = () => setTab(b.dataset.t);
+    });
+    box.querySelector('#gbsPickRf').onclick = () => runPickScan(ui);
+    box.querySelector('#gbsPickX').onclick = () => modal.remove();
+    modal.addEventListener('mousedown', (e) => {
+      if (e.target === modal) modal.remove();
+    });
+
+    setTab(ui.tab || 'neutral');
+    if (ui.lastRows?.length) applyRender();
+    runPickScan(ui);
   }
 
   // ─── Intraday ───────────────────────────────────────────────────────
@@ -1370,5 +1611,6 @@ export function registerGridBotScreeners(deps) {
   if (typeof window !== 'undefined') {
     window.openGridSwingScreener = openGridSwingScreener;
     window.openGridIntradayScreener = openGridIntradayScreener;
+    window.openGridPickScreener = openGridPickScreener;
   }
 }
