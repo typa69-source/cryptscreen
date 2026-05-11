@@ -6821,6 +6821,7 @@ function buildGridRiskRows(cfg){
     return rows;
   }
   const maxN=Math.max(maxDown,maxUp);
+  const tol=Math.max(1e-10,(step||0)*1e-9);
   const rows=[];
   for(let n=1;n<=maxN;n++){
     let downUsdt=0,upUsdt=0;
@@ -6828,20 +6829,25 @@ function buildGridRiskRows(cfg){
     if(n<=maxDown){
       const pxNow=downPrices[n-1];
       downPrice=pxNow;
-      const downEntries=[anchorPx,...downPrices.slice(0,n-1)];
-      for(let i=0;i<downEntries.length;i++){
-        const ent=downEntries[i];
+      // Нейтраль: на #0 позиции нет; первая сделка только на первой линии сетки → при достижении pxNow MTM от предыдущих = 0.
+      for(let i=0;i<n-1;i++){
+        const ent=downPrices[i];
         const qty=perStepNotional/Math.max(ent,1e-12);
         downUsdt+=qty*(pxNow-ent);
       }
     }
     if(n<=maxUp){
       const pxNow=upLevels[n-1];
-      upPrice=pxNow;
-      for(let i=1;i<=n;i++){
-        const ent=upLevels[i-1];
-        const qty=perStepNotional/Math.max(ent,1e-12);
-        upUsdt+=qty*(ent-pxNow);
+      if(Math.abs(pxNow-anchorPx)<=tol){
+        upPrice=null;
+        upUsdt=0;
+      }else{
+        upPrice=pxNow;
+        for(let j=1;j<n-1;j++){
+          const ent=upLevels[j];
+          const qty=perStepNotional/Math.max(ent,1e-12);
+          upUsdt+=qty*(ent-pxNow);
+        }
       }
     }
     rows.push({
@@ -6963,7 +6969,7 @@ function renderGridRiskProfile(body,out,gbPrefs){
   const distUp=r=>Math.abs((r.upPrice??0)-anchorPxUi);
   const distDn=r=>Math.abs((r.downPrice??0)-anchorPxUi);
   const shortRows=rows
-    .filter(r=>r.upPrice!=null&&Math.abs(r.upUsdt)>1e-10)
+    .filter(r=>r.upPrice!=null)
     .sort((a,b)=>distUp(b)-distUp(a)||a.step-b.step);
   const longRows=rows
     .filter(r=>r.downPrice!=null)
@@ -7061,7 +7067,7 @@ function renderGridRiskProfile(body,out,gbPrefs){
         ${bottomBlock}
       </div>
     </div>
-    <div style="font-size:8px;color:var(--text3);margin-top:8px;line-height:1.4">Убыток/прибыль в строке — для момента, когда цена <b>доходит до цены в строке</b> (уровень сетки сработал), а не до соседней линии.</div>`;
+    <div style="font-size:8px;color:var(--text3);margin-top:8px;line-height:1.4">Neutral: на #0 позиции нет; <b>первая</b> строка с каждой стороны — цена только что коснулась первой линии сетки (MTM ≈ 0, комиссии в модели нет). Дальше — накопленный результат по уже набранным ордерам, когда цена на уровне строки.</div>`;
   const zRow=host.querySelector('[data-gb-anchor-drag]');
   if(zRow&&gbPrefs){
     zRow.onmousedown=e=>{
