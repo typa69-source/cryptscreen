@@ -673,15 +673,15 @@ function sparkVolSnapshot(kl,n=30){
   if(vols.length<6)return{spVol:null,spVold:''};
   const first=Math.max(vols[0],1e-9),last=vols[vols.length-1];
   const chg=(last/first-1)*100;
-  const logLo=Math.log(Math.min(...vols.map(v=>Math.max(v,1e-9)))+1);
+  const logLo=Math.log(Math.min(...vols.map(vol=>Math.max(vol,1e-9)))+1);
   const logHi=Math.log(Math.max(...vols)+1);
   const loR=logLo,hiR=logHi<=logLo?logLo+1e-6:logHi;
   const padY=5,padX=1;
   const W=100,H=40;
   const n1=vols.length-1||1;
-  const pts=vols.map((v,i)=>{
+  const pts=vols.map((vol,i)=>{
     const x=padX+(i/n1)*(W-2*padX);
-    const lv=Math.log(Math.max(v,1e-9)+1);
+    const lv=Math.log(Math.max(vol,1e-9)+1);
     const y=padY+(1-(lv-loR)/(hiR-loR))*(H-2*padY);
     return x.toFixed(2)+','+y.toFixed(2);
   });
@@ -944,14 +944,15 @@ function calcAll(){
     const kt=S.kTrend[sym];
     const sparkKl=(kt&&kt.length>=6)?kt:k5;
     const sp=sparkTrendSnapshot(sparkKl,30);
-    const spv=sparkVolSnapshot(sparkKl,30);
+    const volSpark=sparkVolSnapshot(sparkKl,30);
     const vr5v=calcRel(k5,14,'qv');
     const oiE=_oiDelta[sym];
     const bb=calcBbSignals(k5,vr5v);
     const m={
       sym,price:t.p,ch24:t.c24,cday,
       sp5:sp.sp5,sp5d:sp.sp5d,
-      spVol:spv.spVol,spVold:spv.spVold,
+      spVol:volSpark.spVol,spVold:volSpark.spVold,
+      spv:volSpark.spVol,
       rtd,
       r24:calcRange(k5,288),r7d:calcRange(k1h,168),
       na30:calcNATRFlexible(k1m,30),na14:calcNATRFlexible(k5,14),r1m5:calcRangeFlexible(k1m,5),
@@ -2783,7 +2784,7 @@ function calcEMA(candles,period){
   let ema=candles.slice(0,period).reduce((s,c)=>s+c.c,0)/period;
   for(let i=period;i<candles.length;i++){
     ema=candles[i].c*k+ema*(1-k);
-    result.push({t:candles[i].t,v:ema});
+    result.push({t:candles[i].t,val:ema});
   }
   return result;
 }
@@ -2795,6 +2796,7 @@ function calcEMACached(candles,period){
   // Include candle identity to avoid cache collisions between different symbols/TFs.
   const first=candles[0],last=candles[candles.length-1];
   const key=[
+    'e2',
     period,
     candles.length,
     first.t,first.c,
@@ -2838,9 +2840,9 @@ function drawEMAs(ctx,ch,W,H){
     let lastPy=null;
     for(let i=startVal;i<=endVal;i++){
       if(i<0||i>=vals.length)continue;
-      const{t,v}=vals[i];
+      const{t,val:emaVal}=vals[i];
       const px=timeToCoordX(ch,toChartTime(t));
-      const py=ch.cs.priceToCoordinate(v);
+      const py=ch.cs.priceToCoordinate(emaVal);
       if(px==null||py==null){started=false;continue;}
       if(px<-W||px>W*2){started=false;continue;}
       if(!started){ctx.moveTo(px,py);started=true;}
@@ -2884,8 +2886,8 @@ function checkEMACrossovers(ch){
       const va=calcEMACached(ch.candles,a.period);
       const vb=calcEMACached(ch.candles,b.period);
       if(va.length<2||vb.length<2)continue;
-      const a1=va[va.length-1].v,a2=va[va.length-2].v;
-      const b1=vb[vb.length-1].v,b2=vb[vb.length-2].v;
+      const a1=va[va.length-1].val,a2=va[va.length-2].val;
+      const b1=vb[vb.length-1].val,b2=vb[vb.length-2].val;
       const waAbove=a2>b2,isAbove=a1>b1;
       if(waAbove===isAbove)continue; // no cross
       const key=`${sym}_${tf}_${a.period}x${b.period}`;
@@ -4408,7 +4410,7 @@ function sortedRows(){
         sym,price:t.p??null,ch24:t.c24??null,cday:null,rtd:null,r24:null,r7d:null,
         na30:null,na14:null,r1m5:null,tr5:null,tr1h:null,vr5:null,vr1h:null,
         ch7d:null,trd24:t.tr??null,vol24:t.qv??null,corr:null,corr14:null,v15m:null,v60m:null,
-        sp5:null,sp5d:'',spVol:null,spVold:'',fund:null,oi1h:null,oi4h:null,sqzPop:0,bbSqz:0,bbBreak:0,volImpulse:0
+        sp5:null,sp5d:'',spVol:null,spVold:'',spv:null,fund:null,oi1h:null,oi4h:null,sqzPop:0,bbSqz:0,bbBreak:0,volImpulse:0
       });
     }
   }
@@ -4428,7 +4430,8 @@ function sortedRows(){
     if(S.sortAlpha){
       const r=a.sym.localeCompare(b.sym);return S.sortDir==='asc'?r:-r;
     }
-    let va=a[S.sortId],vb=b[S.sortId];
+    const sortKey=S.sortId==='spv'?'spVol':S.sortId;
+    let va=a[sortKey],vb=b[sortKey];
     if(S.sortAbs&&(S.sortId==='ch24'||S.sortId==='ch7d'||S.sortId==='cday'||S.sortId==='sp5'||S.sortId==='spv'||S.sortId==='oi1h'||S.sortId==='oi4h')){
       va=va!=null&&!isNaN(va)?Math.abs(va):va;vb=vb!=null&&!isNaN(vb)?Math.abs(vb):vb;
     }
@@ -6381,7 +6384,7 @@ function calcEmaTouchSignal(sym,period){
   const vals=calcEMA(k5,p);
   if(!vals||!vals.length)return 0;
   const last=k5[k5.length-1];
-  const ema=vals[vals.length-1];
+  const ema=vals[vals.length-1].val;
   if(!last||!isFinite(ema))return 0;
   return(last.l<=ema&&last.h>=ema)?1:0;
 }
