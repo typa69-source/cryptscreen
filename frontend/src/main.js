@@ -609,11 +609,11 @@ function parseKlines(raw){
   // Sanitize to avoid broken candles that cause chart "spikes".
   const out=[];
   for(const k of(raw||[])){
-    const t=+k[0],o=+k[1],h=+k[2],l=+k[3],c=+k[4],v=+k[5],qv=+k[7],tr=+k[8];
+    const t=+k[0],o=+k[1],h=+k[2],l=+k[3],c=+k[4],vol=+k[5],qv=+k[7],tr=+k[8];
     if(!isFinite(t)||!isFinite(o)||!isFinite(h)||!isFinite(l)||!isFinite(c))continue;
     const hh=Math.max(h,o,c);
     const ll=Math.min(l,o,c);
-    out.push({t,o,h:hh,l:ll,c,v:isFinite(v)?v:0,tr:isFinite(tr)?tr:0,qv:isFinite(qv)?qv:0});
+    out.push({t,o,h:hh,l:ll,c,v:isFinite(vol)?vol:0,tr:isFinite(tr)?tr:0,qv:isFinite(qv)?qv:0});
   }
   return out;
 }
@@ -700,8 +700,8 @@ function bollingerOnTail(k5,period=20,mult=2){
   const closes=w.map(x=>+x.c).filter(c=>isFinite(c)&&c>0);
   if(closes.length<period)return null;
   const sma=closes.reduce((a,b)=>a+b,0)/period;
-  let v=0;for(const x of closes)v+=(x-sma)*(x-sma);
-  const sd=Math.sqrt(v/period);
+  let variance=0;for(const x of closes)variance+=(x-sma)*(x-sma);
+  const sd=Math.sqrt(variance/period);
   const upper=sma+mult*sd,lower=sma-mult*sd;
   if(!isFinite(sma)||sma<=0)return null;
   return{sma,upper,lower,width:(upper-lower)/sma,lastC:closes[closes.length-1]};
@@ -1320,6 +1320,12 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     removeDrawingAtCursor(ch);
   });
   container.appendChild(interact);ch.interact=interact;
+
+  // Container-level listeners use abortable signal (cleanup on re-init / chart rebuild)
+  const ab=new AbortController();
+  const sig=ab.signal;
+  ch._ab=ab;
+
   interact.addEventListener('wheel',e=>{
     if(!S.drawMode)return;
     const{x}=getCoords(container,e.clientX,e.clientY);
@@ -1337,7 +1343,6 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   },{passive:false,signal:sig});
 
   // Container-level listeners (always active regardless of draw mode)
-  const ab=new AbortController();const sig=ab.signal;ch._ab=ab;
   // Track LMB press on the chart container to flag pan state immediately
   container.addEventListener('mousedown',e=>{
     if(e.button===0&&!S.drawMode&&!ch.draggingDraw)_onPanStart();
@@ -4593,21 +4598,21 @@ function updateScreenerRow(row,m,cols,inChart){
       if(cell.className!==clsBase)cell.className=clsBase;
       return;
     }
-    const v=m[c.id];
-    const newTxt=fv(v,c.id);
-    const newCls='mc '+fc(v,c.id)+' '+fh(v,c.id);
+    const val=m[c.id];
+    const newTxt=fv(val,c.id);
+    const newCls='mc '+fc(val,c.id)+' '+fh(val,c.id);
     // While some derived metrics are being (re)computed, keep the previous value instead of flashing zeros/dashes.
     // This is especially noticeable for СД*/ОБ* ratios.
     const holdDuringRecalc = (c.id==='tr5'||c.id==='tr1h'||c.id==='vr5'||c.id==='vr1h');
     const holdOiDuring = (_fundOiBusy&&(c.id==='oi1h'||c.id==='oi4h'));
     if(holdDuringRecalc){
-      const vBad = (v==null||!isFinite(v)) || (_metricsSyncBusy && v===0);
+      const vBad = (val==null||!isFinite(val)) || (_metricsSyncBusy && val===0);
       if(vBad && cell.textContent && cell.textContent!=='—'){
         return;
       }
     }
     if(holdOiDuring){
-      const vBad=v==null||!isFinite(v);
+      const vBad=val==null||!isFinite(val);
       if(vBad&&cell.textContent&&cell.textContent!=='—')return;
     }
     if(cell.textContent!==newTxt)cell.textContent=newTxt;
