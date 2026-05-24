@@ -4744,7 +4744,29 @@ function setTf(tf,btnId){
   schedulePersistUserSettings();
 }
 
-function onSearch(q){S.q=q;S.page=0;updateCharts();renderTable();}
+/** Русская раскладка → латиница (поиск тикера как на EN-клавиатуре). */
+function mapRuKeyboardToEn(s){
+  const ru='ёйцукенгшщзхъфывапролджэячсмитьбюЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ';
+  const en='`qwertyuiop[]asdfghjkl;\'zxcvbnm,./~QWERTYUIOP{}ASDFGHJKL:"ZXCVBNM<>?';
+  let out='';
+  for(const ch of String(s||'')){
+    const i=ru.indexOf(ch);
+    out+=i>=0?en[i]:ch;
+  }
+  return out;
+}
+function onSearchInput(inp){
+  if(!inp)return;
+  const raw=inp.value;
+  const mapped=mapRuKeyboardToEn(raw);
+  if(mapped!==raw){
+    const pos=inp.selectionStart;
+    inp.value=mapped;
+    try{inp.setSelectionRange(pos,pos);}catch(e){}
+  }
+  onSearch(mapped);
+}
+function onSearch(q){S.q=mapRuKeyboardToEn(q);S.page=0;updateCharts();renderTable();}
 
 function onVolFilter(val){
   S.minVol=+val*10;
@@ -5383,7 +5405,15 @@ function openGroupManager(g){
     list.appendChild(frag);
   };
   buildList();
-  srch.oninput=()=>buildList(srch.value);
+  srch.oninput=()=>{
+    const mapped=mapRuKeyboardToEn(srch.value);
+    if(mapped!==srch.value){
+      const pos=srch.selectionStart;
+      srch.value=mapped;
+      try{srch.setSelectionRange(pos,pos);}catch(e){}
+    }
+    buildList(mapped);
+  };
   box.appendChild(list);modal.appendChild(box);document.body.appendChild(modal);
   modal.addEventListener('mousedown',e=>{if(e.target===modal)modal.remove();});
   srch.focus();
@@ -6797,10 +6827,97 @@ async function ensureBacktestCandles(sym,tf,bars){
 }
 
 const GRIDLAB_PREFS_KEY='cs_gridlab_prefs_v2';
+const GB_DEP_MIN=0.1;
+function gbDepositClamp(v,fallback=500){
+  const x=+v;
+  if(!isFinite(x))return Math.max(GB_DEP_MIN,+fallback||500);
+  return Math.max(GB_DEP_MIN,x);
+}
+/** % между соседними линиями сетки (от refPrice). */
+function gridAdjacentStepPcts(grid,refPrice){
+  if(!grid||grid.length<2)return{min:null,max:null,avg:null};
+  const ref=+refPrice>0?+refPrice:(+grid[0]+ +grid[grid.length-1])/2;
+  if(!(ref>0))return{min:null,max:null,avg:null};
+  const pcts=[];
+  for(let i=1;i<grid.length;i++){
+    const d=Math.abs(grid[i]-grid[i-1]);
+    if(d>0)pcts.push(d/ref*100);
+  }
+  if(!pcts.length)return{min:null,max:null,avg:null};
+  const sum=pcts.reduce((a,b)=>a+b,0);
+  return{min:Math.min(...pcts),max:Math.max(...pcts),avg:sum/pcts.length};
+}
+function resolveGridLevelsForCfg(cfg,lo,hi,levels){
+  const custom=cfg?.gridLevels;
+  if(Array.isArray(custom)&&custom.length>=2){
+    const grid=custom.map(x=>+x).filter(x=>isFinite(x)&&x>0).sort((a,b)=>a-b);
+    if(grid.length>=2)return{grid,levels:grid.length-1};
+  }
+  const grids=Math.max(2,levels|0);
+  const step=(hi-lo)/grids;
+  const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
+  return{grid,levels:grids};
+}
+/** Сетка вокруг anchor: longR:shortR по числу шагов, шаг ≈ avgStepPct % от anchor. */
+function buildRatioGridLevels(anchor,longRatio,shortRatio,avgStepPct,totalLevels){
+  const ax=+anchor;
+  if(!(ax>0))return null;
+  const lr=Math.max(0.1,+longRatio||1);
+  const sr=Math.max(0.1,+shortRatio||1);
+  const stepPct=Math.max(0.01,Math.min(50,+avgStepPct||0.5));
+  const stepFrac=stepPct/100;
+  const totalLv=Math.max(3,Math.min(60,totalLevels|0));
+  const sumR=lr+sr;
+  const upSteps=Math.max(1,Math.round(totalLv*lr/sumR));
+  const downSteps=Math.max(1,Math.round(totalLv*sr/sumR));
+  const pts=new Set();
+  pts.add(ax);
+  for(let i=1;i<=upSteps;i++)pts.add(ax*(1+stepFrac*i));
+  for(let i=1;i<=downSteps;i++){
+    const p=ax*(1-stepFrac*i);
+    if(p>0)pts.add(p);
+  }
+  const grid=[...pts].sort((a,b)=>a-b);
+  if(grid.length<2)return null;
+  return{gridLevels:grid,lower:grid[0],upper:grid[grid.length-1],levels:grid.length-1,upSteps,downSteps,stepPct};
+}
+function applyGbRatioGrid(body,gbPrefs){
+  const sym=String(body.querySelector('#gbSym')?.value||'').toUpperCase().trim();
+  if(!sym)return;
+  const lr=parseFloat(body.querySelector('#gbRatioLong')?.value||'');
+  const sr=parseFloat(body.querySelector('#gbRatioShort')?.value||'');
+  const sp=parseFloat(body.querySelector('#gbRatioStep')?.value||'');
+  if(!isFinite(lr)||!isFinite(sr)||!isFinite(sp))return;
+  const lvl=Math.max(3,Math.min(60,+body.querySelector('#gbLevels')?.value||12));
+  let anchor=gbPrefs.symbolBounds?.[sym]?.anchorPrice;
+  const merged=body._gbChartCtx?.merged;
+  if(anchor==null||!isFinite(+anchor)){
+    const last=merged?.length?+merged[merged.length-1].c:null;
+    anchor=isFinite(last)?last:null;
+  }
+  if(!(anchor>0))return;
+  const built=buildRatioGridLevels(anchor,lr,sr,sp,lvl);
+  if(!built)return;
+  if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+  gbPrefs.symbolBounds[sym]={
+    ...(gbPrefs.symbolBounds[sym]||{}),
+    lower:built.lower,
+    upper:built.upper,
+    gridLevels:built.gridLevels,
+  };
+  gbPrefs.global.ratioLong=lr;
+  gbPrefs.global.ratioShort=sr;
+  gbPrefs.global.ratioStepPct=sp;
+  saveGridLabPrefs(gbPrefs);
+  body.querySelector('#gbLow').value=String(built.lower);
+  body.querySelector('#gbHigh').value=String(built.upper);
+  body.querySelector('#gbLevels').value=String(built.levels);
+  scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
+}
 function loadGridLabPrefs(){
   try{
     const raw=localStorage.getItem(GRIDLAB_PREFS_KEY);
-    if(!raw)return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral'},symbolBounds:{}};
+    if(!raw)return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral',ratioLong:3,ratioShort:1,ratioStepPct:0.5},symbolBounds:{}};
     const j=JSON.parse(raw);
     return{
       global:{
@@ -6808,13 +6925,16 @@ function loadGridLabPrefs(){
         bars:Math.max(80,Math.min(1200,+(j?.global?.bars||360))),
         levels:Math.max(3,Math.min(60,+(j?.global?.levels||12))),
         leverage:Math.max(1,Math.min(25,+(j?.global?.leverage||3))),
-        deposit:Math.max(1,+(j?.global?.deposit||500)),
+        deposit:gbDepositClamp(j?.global?.deposit,500),
         gridMode:['neutral','long','short'].includes(j?.global?.gridMode)?j.global.gridMode:'neutral',
+        ratioLong:Math.max(0.1,+(j?.global?.ratioLong??3)),
+        ratioShort:Math.max(0.1,+(j?.global?.ratioShort??1)),
+        ratioStepPct:Math.max(0.01,Math.min(50,+(j?.global?.ratioStepPct??0.5))),
       },
       symbolBounds:(j?.symbolBounds&&typeof j.symbolBounds==='object')?j.symbolBounds:{},
     };
   }catch(e){
-    return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral'},symbolBounds:{}};
+    return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral',ratioLong:3,ratioShort:1,ratioStepPct:0.5},symbolBounds:{}};
   }
 }
 function saveGridLabPrefs(prefs){
@@ -6845,12 +6965,13 @@ function buildGridRiskRows(cfg){
   const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
   const grids=Math.max(2,+cfg.levels|0);
   const lev=Math.max(1,+cfg.leverage||1);
-  const dep=Math.max(1,+cfg.deposit||1);
+  const dep=gbDepositClamp(cfg.deposit,1);
   if(!(hi>lo)||!(cur>0))return[];
-  const step=(hi-lo)/grids;
+  const resolved=resolveGridLevelsForCfg(cfg,lo,hi,grids);
+  const grid=resolved.grid;
+  const step=resolved.levels>0?(grid[grid.length-1]-grid[0])/resolved.levels:0;
   if(!(step>0))return[];
-  const perStepNotional=(dep*lev)/grids;
-  const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
+  const perStepNotional=(dep*lev)/Math.max(1,resolved.levels);
   const mode=String(cfg.gridMode||'neutral');
   const anchorIdx=gridRiskAnchorIdx(grid,cur,step,mode,cfg.anchorPrice);
   const anchorPx=grid[anchorIdx];
@@ -6959,12 +7080,13 @@ function buildGridFavorableRows(cfg){
   const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
   const grids=Math.max(2,+cfg.levels|0);
   const lev=Math.max(1,+cfg.leverage||1);
-  const dep=Math.max(1,+cfg.deposit||1);
+  const dep=gbDepositClamp(cfg.deposit,1);
   if(!(hi>lo)||!(cur>0))return[];
-  const step=(hi-lo)/grids;
+  const resolved=resolveGridLevelsForCfg(cfg,lo,hi,grids);
+  const grid=resolved.grid;
+  const step=resolved.levels>0?(grid[grid.length-1]-grid[0])/resolved.levels:0;
   if(!(step>0))return[];
-  const perStepNotional=(dep*lev)/grids;
-  const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
+  const perStepNotional=(dep*lev)/Math.max(1,resolved.levels);
   const mode=String(cfg.gridMode||'neutral');
   const anchorIdx=gridRiskAnchorIdx(grid,cur,step,mode,cfg.anchorPrice);
   const anchorPx=grid[anchorIdx];
@@ -7117,6 +7239,7 @@ function renderGridRiskProfile(body,out,gbPrefs){
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
     gridMode:gm,
     anchorPrice:out.anchorPrice,
+    gridLevels:out.gridLevels,
   });
   if(!rows.length){
     host.innerHTML='<div style="padding:8px;font-size:9px;color:var(--text3)">Недостаточно данных для риск-профиля.</div>';
@@ -7126,7 +7249,9 @@ function renderGridRiskProfile(body,out,gbPrefs){
   const maxLoss=Math.max(...rows.map(r=>Math.max(Math.abs(r.downUsdt),Math.abs(r.upUsdt))),1e-9);
   const lastC=+out.candles?.[out.candles.length-1]?.c;
   const riskStep=(out.upper-out.lower)/Math.max(2,out.levels|0);
-  const riskGrid=Array.from({length:(out.levels|0)+1},(_,i)=>out.lower+i*riskStep);
+  const riskGrid=(out.gridLevels&&out.gridLevels.length>=2)
+    ?out.gridLevels.slice()
+    :Array.from({length:(out.levels|0)+1},(_,i)=>out.lower+i*riskStep);
   const ai=gridRiskAnchorIdx(riskGrid,lastC,riskStep,gm,out.anchorPrice);
   const anchorLbl=fmtPrice(riskGrid[ai]??lastC);
   const anchorPxUi=riskGrid[ai]??lastC;
@@ -7142,6 +7267,7 @@ function renderGridRiskProfile(body,out,gbPrefs){
     lower:out.lower,upper:out.upper,currentPrice:lastC,
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
     gridMode:gm,anchorPrice:out.anchorPrice,
+    gridLevels:out.gridLevels,
   });
   const distFavPx=r=>Math.abs((r.price??0)-anchorPxUi);
   const favSortedAsc=favRows.slice().sort((a,b)=>distFavPx(a)-distFavPx(b)||a.step-b.step);
@@ -7238,11 +7364,13 @@ function renderGridRiskProfile(body,out,gbPrefs){
       e.preventDefault();e.stopPropagation();
       const sym=String(out.symbol||'').toUpperCase().trim();
       if(!sym||!riskGrid.length)return;
+      body._gbSuppressChartSync=true;
       const startY=e.clientY;
       const startAi=ai;
       let curAi=startAi;
       const hint=zRow.querySelector('.gb-anchor-hint');
       const gctx=body._gbChartCtx;
+      if(gctx?.lc&&gctx?.cs)body._gbPendingViewport=captureGbLabViewport(gctx.lc,gctx.cs);
       const setPreview=ix=>{
         const p=riskGrid[ix];
         if(gctx&&p!=null&&isFinite(p)){
@@ -7262,12 +7390,14 @@ function renderGridRiskProfile(body,out,gbPrefs){
       const onUp=()=>{
         document.removeEventListener('mousemove',onMove);
         document.removeEventListener('mouseup',onUp);
+        body._gbSuppressChartSync=false;
         if(gctx){gctx._gbAnchorPreviewPrice=null;if(gctx.gbCh)rCanvas(gctx.gbCh);}
         if(hint)hint.textContent='';
         if(curAi!==startAi){
           if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
           gbPrefs.symbolBounds[sym]={...gbPrefs.symbolBounds[sym],anchorPrice:riskGrid[curAi]};
           saveGridLabPrefs(gbPrefs);
+          if(gctx?.lc&&gctx?.cs)body._gbPendingViewport=captureGbLabViewport(gctx.lc,gctx.cs);
           scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
         }
       };
@@ -7287,11 +7417,15 @@ function compileGridLabState(cfg){
   const lo=cfg.lower>0?cfg.lower:Math.min(...lowSeries);
   const hi=cfg.upper>0?cfg.upper:Math.max(...highSeries);
   if(!(hi>lo))return{ok:false,msg:'Неверный диапазон сетки'};
-  const levels=Math.max(2,Math.min(60,cfg.levels|0));
+  const levelsIn=Math.max(2,Math.min(60,cfg.levels|0));
   const lev=Math.max(1,Math.min(25,cfg.leverage||1));
-  const dep=Math.max(1,cfg.deposit||500);
-  const step=(hi-lo)/levels;
-  const grid=Array.from({length:levels+1},(_,i)=>lo+step*i);
+  const dep=gbDepositClamp(cfg.deposit,500);
+  const resolved=resolveGridLevelsForCfg(cfg,lo,hi,levelsIn);
+  const grid=resolved.grid;
+  const levels=resolved.levels;
+  const step=levels>0?(grid[grid.length-1]-grid[0])/levels:0;
+  const lastC=+candles[candles.length-1]?.c||null;
+  const stepPcts=gridAdjacentStepPcts(grid,lastC);
   let anchorPrice=cfg.anchorPrice;
   if(anchorPrice!=null&&!isFinite(+anchorPrice))anchorPrice=null;
   const gm=String(cfg.gridMode||'neutral');
@@ -7303,6 +7437,7 @@ function compileGridLabState(cfg){
     gridLevels:grid,
     levels,
     step,
+    stepPcts,
     leverage:lev,
     lower:lo,
     upper:hi,
@@ -7416,11 +7551,12 @@ function readGridLabInputs(body,gbPrefs,wantBars,mergedCand){
     lower:isFinite(rawLo)?rawLo:0,
     upper:isFinite(rawHi)?rawHi:0,
     leverage:Math.max(1,Math.min(25,+levI?.value||3)),
-    deposit:Math.max(1,+depI?.value||500),
+    deposit:gbDepositClamp(depI?.value,500),
     gridMode:String(modeI?.value||'neutral'),
     wantBars:Math.max(120,Math.min(1400,wantBars|0)),
     candles:mergedCand||[],
     anchorPrice:anchor,
+    gridLevels:gbPrefs.symbolBounds?.[sym]?.gridLevels||null,
   };
 }
 async function prependGridLabHistory(body,sym,tf){
@@ -7550,6 +7686,7 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
     levels:out.levels,leverage:out.leverage,deposit:out.startEq,
     gridMode:gm,
     anchorPrice:out.anchorPrice,
+    gridLevels:out.gridLevels,
   });
   const stepPf=out.step||0;
   const gridLvPf=out.gridLevels||[];
@@ -7614,6 +7751,7 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
     else if(hitNearPrice(pr,lo))drag={kind:'low',previewPrice:lo};
     if(!drag)return;
     e.preventDefault();e.stopPropagation();
+    body._gbSuppressChartSync=true;
     pushGridLabBoundsUndo(body);
     body._gbPendingViewport=captureGbLabViewport(lc,cs);
     ctxB._gbDrag=drag;
@@ -7636,6 +7774,7 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
     }catch(err){}
     const onDocUp=()=>{
       document.removeEventListener('mouseup',onDocUp,true);
+      body._gbSuppressChartSync=false;
       const c2=body._gbChartCtx;
       if(c2?._gbVpLockUnsub){try{c2._gbVpLockUnsub();}catch(e3){}c2._gbVpLockUnsub=null;}
       if(c2)delete c2._gbDragFrozenVp;
@@ -7668,6 +7807,7 @@ function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
       if(ctxB._gbVpLockUnsub){try{ctxB._gbVpLockUnsub();}catch(err){}ctxB._gbVpLockUnsub=null;}
       delete ctxB._gbDragFrozenVp;
       try{lc.applyOptions(gbInteractRestore);}catch(err){}
+      body._gbSuppressChartSync=false;
     }
     ctxB._gbDrag=null;if(!dg||e.button!==0)return;
     if(ctxB.gbCh)rCanvas(ctxB.gbCh);
@@ -7734,18 +7874,31 @@ async function runGridLabSync(body,gbPrefs,opt={}){
   gbPrefs.global.leverage=cfg.leverage;
   gbPrefs.global.deposit=cfg.deposit;
   gbPrefs.global.gridMode=cfg.gridMode;
+  const rL=parseFloat(body.querySelector('#gbRatioLong')?.value||'');
+  const rS=parseFloat(body.querySelector('#gbRatioShort')?.value||'');
+  const rP=parseFloat(body.querySelector('#gbRatioStep')?.value||'');
+  if(isFinite(rL))gbPrefs.global.ratioLong=rL;
+  if(isFinite(rS))gbPrefs.global.ratioShort=rS;
+  if(isFinite(rP))gbPrefs.global.ratioStepPct=rP;
   if(!gbPrefs.symbolBounds||typeof gbPrefs.symbolBounds!=='object')gbPrefs.symbolBounds={};
   const loP=body.querySelector('#gbLow')?.value;
   const hiP=body.querySelector('#gbHigh')?.value;
   const loNv=parseFloat(loP||'');
   const hiNv=parseFloat(hiP||'');
+  const prevB=gbPrefs.symbolBounds[cfg.sym]||{};
+  const loCh=loP!=null&&String(loP).trim()!==''&&isFinite(loNv)&&prevB.lower!==loNv;
+  const hiCh=hiP!=null&&String(hiP).trim()!==''&&isFinite(hiNv)&&prevB.upper!==hiNv;
+  const lvlCh=prevB.levels!=null&&prevB.levels!==cfg.levels;
   gbPrefs.symbolBounds[cfg.sym]={
-    ...(gbPrefs.symbolBounds[cfg.sym]||{}),
+    ...prevB,
     lower:(loP!=null&&String(loP).trim()!==''&&isFinite(loNv))?loNv:null,
     upper:(hiP!=null&&String(hiP).trim()!==''&&isFinite(hiNv))?hiNv:null,
+    levels:cfg.levels,
   };
+  if(loCh||hiCh||lvlCh)delete gbPrefs.symbolBounds[cfg.sym].gridLevels;
   saveGridLabPrefs(gbPrefs);
   cfg.anchorPrice=gbPrefs.symbolBounds[cfg.sym]?.anchorPrice;
+  cfg.gridLevels=gbPrefs.symbolBounds[cfg.sym]?.gridLevels||null;
   const out=compileGridLabState(cfg);
   out.gridRiskMode=cfg.gridMode;
   const el=body.querySelector('#gbOut');
@@ -7753,7 +7906,11 @@ async function runGridLabSync(body,gbPrefs,opt={}){
     if(el)el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;
     renderManualBacktestPreview(body,null,gbPrefs,{});renderGridRiskProfile(body,null);return;
   }
-  if(el)el.innerHTML=`<span style="color:var(--text3)">${out.symbol.replace(/USDT$/,'')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)} — верх/низ: тянуть на графике · #0: тянуть в панели «Риск-профиль» справа.</span>`;
+  const sp=out.stepPcts||{};
+  const pctTxt=(sp.min!=null&&sp.max!=null)
+    ?` · между сетками: <b style="color:#e2e8f0">${fn(sp.min,2)}%</b> – <b style="color:#e2e8f0">${fn(sp.max,2)}%</b>${sp.avg!=null?` (ср. ${fn(sp.avg,2)}%)`:''}`
+    :'';
+  if(el)el.innerHTML=`<span style="color:var(--text3)">${out.symbol.replace(/USDT$/,'')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)}${pctTxt} — верх/низ: тянуть на графике · #0: тянуть в панели «Риск-профиль».</span>`;
   const keepVp=!!(reuse&&lcRef&&body._gbChartCtx?.merged?.length);
   renderManualBacktestPreview(body,out,gbPrefs,{keepViewport:keepVp});
   const lcA=body._gbChartCtx?.lc,csA=body._gbChartCtx?.cs;
@@ -7767,6 +7924,7 @@ async function runGridLabSync(body,gbPrefs,opt={}){
   renderGridRiskProfile(body,out,gbPrefs);
 }
 function scheduleGridLabSync(body,gbPrefs,opt={}){
+  if(body._gbSuppressChartSync)return;
   if(body._gridLabUiTimer)clearTimeout(body._gridLabUiTimer);
   body._gridLabUiTimer=setTimeout(()=>{void runGridLabSync(body,gbPrefs,opt);},opt.immediate?0:95);
 }
@@ -7847,7 +8005,14 @@ function renderGridLabModal(){
         <label style="font-size:9px;color:var(--text3)">Плечо</label>
         <input id="gbLev" type="number" value="${gbPrefs.global.leverage}" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Депо</label>
-        <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="1" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="0.1" step="0.1" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <span style="font-size:9px;color:var(--text3)">Соотн.</span>
+        <input id="gbRatioLong" type="number" value="${gbPrefs.global.ratioLong}" min="0.1" step="0.1" title="Лонг-часть (напр. 3)" style="width:42px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
+        <span style="font-size:9px;color:var(--text3)">:</span>
+        <input id="gbRatioShort" type="number" value="${gbPrefs.global.ratioShort}" min="0.1" step="0.1" title="Шорт-часть (напр. 1)" style="width:42px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
+        <input id="gbRatioStep" type="number" value="${gbPrefs.global.ratioStepPct}" min="0.01" step="0.01" title="Средний % между сетками" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
+        <span style="font-size:9px;color:var(--text3)">% шаг</span>
+        <button type="button" class="tbtn" id="gbRatioApply" title="Выставить границы и сетку по соотношению">↻ Сетка</button>
         <label style="font-size:9px;color:var(--text3)">Риск-сетки</label>
         <select id="gbGridMode" style="width:132px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
           <option value="neutral"${gbPrefs.global.gridMode==='neutral'?' selected':''}>Neutral</option>
@@ -7875,6 +8040,8 @@ function renderGridLabModal(){
     bindGbInput('#gbLev',true);
     bindGbInput('#gbDep',true);
     bindGbInput('#gbGridMode',true);
+    const ratioApply=body.querySelector('#gbRatioApply');
+    if(ratioApply)ratioApply.onclick=()=>applyGbRatioGrid(body,gbPrefs);
     const symEl=body.querySelector('#gbSym');
     const syncSymBounds=()=>{
       const sym=String(symEl.value||'').toUpperCase().trim();
@@ -7975,6 +8142,7 @@ window.openFullscreen     = openFullscreen;
 window.openFullscreenBySym= openFullscreenBySym;
 window.goHome             = goHome;
 window.onSearch           = onSearch;
+window.onSearchInput      = onSearchInput;
 window.onVolFilter        = onVolFilter;
 window.onTrdFilter        = onTrdFilter;
 window.toggleDensity      = toggleDensity;
