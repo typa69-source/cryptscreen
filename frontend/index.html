@@ -72,7 +72,6 @@
       <span id="hcount"></span>
       <span id="htime"></span>
       <div class="hsep"></div>
-      <button class="hbtn hbtn-fast" id="fastBtn" onclick="toggleFastMode()" type="button" title="Fast: чаще обновлять таблицу и синхрон сетки графиков (нагрузка на CPU выше)">⚡ Fast</button>
       <button class="hbtn" id="chartSyncBtn" onclick="toggleChartAutoSync()" type="button" title="Когда выкл — список обновляется, но мини-графики 3×3 не подменяются при смене топа по сортировке">Графы·авто</button>
       <button class="hbtn on" id="toggleScrBtn" onclick="toggleScreener()">▶ Список</button>
       <button class="hbtn" onclick="toggleAlertLog()" title="История алертов">🔔<span id="alertBadge"></span></button>
@@ -138,6 +137,7 @@
     <button class="tbtn" id="draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия (звук при достижении %)">🔔╱</button>
     <button class="tbtn" id="draw-long" onclick="setDrawMode('long')" title="Лонг: вход → СЛ → ТП 2:1">▲Л</button>
     <button class="tbtn" id="draw-short" onclick="setDrawMode('short')" title="Шорт: вход → СЛ → ТП 2:1">▼Ш</button>
+    <button class="tbtn" id="draw-autotl" onclick="runAutoTrendlinesOnVisibleCharts()" title="Авто-наклонки по пивотам (чувствительность в ⚙)">⟂</button>
     <div class="tsep"></div>
     <button class="tbtn" id="emaBtn" onclick="openEMAEditor('auto')" title="Настройки EMA">EMA</button>
     <button class="tbtn" id="bbBtn" onclick="toggleBbOverlay()" title="Показать/скрыть полосы Боллинджера">BB</button>

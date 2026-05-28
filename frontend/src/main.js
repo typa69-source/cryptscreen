@@ -295,7 +295,7 @@ const S = {
   wsScreener:null, wsCharts:null, wsChartTrades:null,
   sortId:'vol24', sortDir:'desc', sortAlpha:false,
   tf:'5m', q:'', page:0, LC:null, bgDone:false,
-  fastMode:false,
+  fastMode:true,
   drawMode:null, drawIdCounter:0,
   symDrawings:{},      // drawings per symbol, shared between grid & FS
   drawUndo:{},         // sym -> [drawings snapshot...]
@@ -314,7 +314,8 @@ const S = {
   chartHeadOrder:['chg','vol','trd','natr','corr'],
   chartHeadVisible:new Set(['chg','vol','trd','natr']),
   /** Цвет линий рисования по типу (не лонг/шорт) */
-  lineColors:{hray:'#e8a020',tline:'#3b82f6',aray:'#a855f7',atline:'#a855f7'},
+  lineColors:{hray:'#e8a020',tline:'#3b82f6',aray:'#a855f7',atline:'#a855f7',autotl:'#38bdf8'},
+  autoTrend:{pivotBars:3,touchPct:0.22,minTouches:3,maxLines:5,lookback:160,extendBars:24},
   fsSym:null, fsOpen:false, fsWs:null,
   fsLayoutPreset:'three_top_wide',
   fsChartCount:3,
@@ -545,12 +546,31 @@ const _reqQueue = []; let _reqRunning = 0; const _reqMax = 3;
 let _anyChartPanning = false;
 let _panEndTimer = null;
 let _deferredRenderNeeded = false;
+let _panOverlayRaf = null;
+function _panOverlayTick() {
+  if (!_anyChartPanning) {
+    _panOverlayRaf = null;
+    return;
+  }
+  for (const ch of [...S.charts, ...S.fsCharts]) {
+    if (ch?.lc && ch.canvas) try { _rCanvasImmediate(ch); } catch (e) {}
+  }
+  _panOverlayRaf = requestAnimationFrame(_panOverlayTick);
+}
 function _onPanStart() {
   _anyChartPanning = true;
+  if (!_panOverlayRaf) _panOverlayRaf = requestAnimationFrame(_panOverlayTick);
   if (_panEndTimer) clearTimeout(_panEndTimer);
   _panEndTimer = setTimeout(() => {
     _anyChartPanning = false;
     _panEndTimer = null;
+    if (_panOverlayRaf) {
+      cancelAnimationFrame(_panOverlayRaf);
+      _panOverlayRaf = null;
+    }
+    for (const ch of [...S.charts, ...S.fsCharts]) {
+      if (ch?.lc && ch.canvas) try { _rCanvasImmediate(ch); } catch (e) {}
+    }
     if (_deferredRenderNeeded && !document.hidden) {
       _deferredRenderNeeded = false;
       if (typeof requestIdleCallback !== 'undefined') {
@@ -1524,7 +1544,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       if(!pt)return;
       d[ch.draggingDraw.pointKey]=pt;checkAlerts(ch,d);
     }
-    rCanvas(ch);
+    _rCanvasImmediate(ch);
   },{capture:true,signal:sig});
   container.addEventListener('mouseup',e=>{
     if(e.button!==0||!ch.draggingDraw)return;
@@ -1544,13 +1564,18 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   ro.observe(container);
   ch._ro=ro;
 
+  const onVisibleRangePan=()=>{_onPanStart();_rCanvasImmediate(ch);};
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
     if(range&&range.from<HIST_TRIGGER){
       if(isFs)loadMoreFsHistory(fsIdx);else loadMoreHistory(slot);
     }
-    _onPanStart();
-    rCanvas(ch);
+    onVisibleRangePan();
   });
+  try{
+    if(typeof lc.timeScale().subscribeVisibleTimeRangeChange==='function'){
+      lc.timeScale().subscribeVisibleTimeRangeChange(onVisibleRangePan);
+    }
+  }catch(e){}
 
   ch.lc=lc;ch.cs=cs;ch.vs=vs;ch.oiLine=oiLine;ch.bbUpperLine=bbUpperLine;ch.bbLowerLine=bbLowerLine;
   return true;
@@ -1607,6 +1632,8 @@ function collectUserSettings(){
     potentialPresets:Array.isArray(S.potentialPresets)?JSON.parse(JSON.stringify(S.potentialPresets)):[],
     potFilterPreset:S._potFilterPreset||null,
     draw:{brushColor:_brushColor,brushWidth:_brushWidth},
+    autoTrend:{...S.autoTrend},
+    fastMode:true,
   };
 }
 
@@ -2026,7 +2053,19 @@ function snapPoint(ch,x,y,ctrl){
     if(!bestC)return raw;
     tSnapped=toChartTime(bestC.t);
   }
-  if(!ctrl)return{time:tSnapped,price:raw.price};
+  if(!ctrl){
+    let snapC=last;
+    if(!(raw.time>tLast)){
+      let bestC=null,bestDx=Infinity;
+      for(const c of ch.candles){
+        const bx=ts.timeToCoordinate(toChartTime(c.t));
+        if(bx==null)continue;
+        const dist=Math.abs(bx-x);
+        if(dist<bestDx){bestDx=dist;snapC=c;}
+      }
+    }
+    return{time:tSnapped,price:raw.price,tMs:snapC.t,anchor:'c'};
+  }
   let ohlcCandle=last;
   if(!(raw.time>tLast)){
     let bestC=null,bestDx=Infinity;
@@ -2042,30 +2081,181 @@ function snapPoint(ch,x,y,ctrl){
   const ohlc=[ohlcCandle.o,ohlcCandle.h,ohlcCandle.l,ohlcCandle.c];
   const live=chartLivePriceForSnap(ch);
   const candidates=live!=null&&isFinite(live)?[...ohlc,live]:ohlc;
-  let bestP=candidates[0],bestDist=Infinity;
-  for(const p of candidates){
+  const anchors=['o','h','l','c'];
+  if(live!=null&&isFinite(live))anchors.push('live');
+  let bestP=candidates[0],bestDist=Infinity,anchor='c';
+  for(let i=0;i<candidates.length;i++){
+    const p=candidates[i];
     if(p==null||!isFinite(p))continue;
     const d=Math.abs(p-raw.price);
-    if(d<bestDist){bestDist=d;bestP=p;}
+    if(d<bestDist){bestDist=d;bestP=p;anchor=anchors[i]||'c';}
   }
-  return{time:tSnapped,price:bestP};
+  const anchorCandle=ohlcCandle||last;
+  if(anchor==='live')anchor='c';
+  return{time:tSnapped,price:bestP,tMs:anchorCandle.t,anchor};
+}
+
+function _inferOhlcAnchor(candle,price){
+  if(!candle||price==null||!isFinite(price))return 'c';
+  const map={o:candle.o,h:candle.h,l:candle.l,c:candle.c};
+  let best='c',bestD=Infinity;
+  for(const [k,v] of Object.entries(map)){
+    if(v==null||!isFinite(v))continue;
+    const d=Math.abs(v-price);
+    if(d<bestD){bestD=d;best=k;}
+  }
+  return best;
+}
+
+/** Привязка точки рисунка к свече текущего ТФ (фикс луча/линий между ТФ). */
+function resolveDrawPoint(ch,pt){
+  if(!pt||!ch?.candles?.length)return pt;
+  let tMs=pt.tMs;
+  if(tMs==null&&pt.time!=null&&isFinite(pt.time))tMs=(pt.time-TZ_OFFSET_S)*1000;
+  if(tMs==null)return pt;
+  let best=ch.candles[0],bestD=Infinity;
+  for(const c of ch.candles){
+    const d=Math.abs(c.t-tMs);
+    if(d<bestD){bestD=d;best=c;}
+  }
+  const time=toChartTime(best.t);
+  const anchor=pt.anchor||_inferOhlcAnchor(best,pt.price);
+  const byAnchor={o:best.o,h:best.h,l:best.l,c:best.c};
+  let price=byAnchor[anchor];
+  if(price==null||!isFinite(price))price=pt.price;
+  return{time,price,tMs:best.t,anchor};
+}
+
+function _findPivots(candles,lb){
+  const highs=[],lows=[];
+  for(let i=lb;i<candles.length-lb;i++){
+    let isH=true,isL=true;
+    for(let j=1;j<=lb;j++){
+      if(candles[i-j].h>=candles[i].h||candles[i+j].h>candles[i].h)isH=false;
+      if(candles[i-j].l<=candles[i].l||candles[i+j].l<candles[i].l)isL=false;
+    }
+    if(isH)highs.push({i,t:candles[i].t,p:candles[i].h});
+    if(isL)lows.push({i,t:candles[i].t,p:candles[i].l});
+  }
+  return{highs,lows};
+}
+function _trendLineTouches(candles,i0,p0,i1,p1,touchPct,side){
+  const a=Math.min(i0,i1),b=Math.max(i0,i1);
+  if(b-a<4)return 0;
+  let touches=0;
+  for(let i=a;i<=b;i++){
+    const expected=p0+(p1-p0)*(i-i0)/(i1-i0);
+    const tol=Math.max(Math.abs(expected)*touchPct/100,1e-12);
+    const c=candles[i];
+    if(side==='support'){
+      if(Math.abs(c.l-expected)<=tol)touches++;
+    }else if(Math.abs(c.h-expected)<=tol)touches++;
+  }
+  return touches;
+}
+function detectAutoTrendlines(candles,opt){
+  if(!candles||candles.length<20)return [];
+  const o={...S.autoTrend,...opt};
+  const lb=Math.max(2,Math.min(8,o.pivotBars|0));
+  const look=Math.max(40,Math.min(candles.length,o.lookback|0));
+  const slice=candles.slice(-look);
+  const off=candles.length-slice.length;
+  const{highs,lows}=_findPivots(slice,lb);
+  const raw=[];
+  const tryPairs=(pts,side)=>{
+    for(let a=0;a<pts.length;a++){
+      for(let b=a+1;b<pts.length;b++){
+        const i0=pts[a].i+off,i1=pts[b].i+off;
+        const touches=_trendLineTouches(candles,i0,pts[a].p,i1,pts[b].p,o.touchPct,side);
+        if(touches<(o.minTouches|0))continue;
+        const span=i1-i0;
+        const slope=(pts[b].p-pts[a].p)/span;
+        if(side==='support'&&slope<-1e-12)continue;
+        if(side==='resistance'&&slope>1e-12)continue;
+        raw.push({side,i0,i1,p0:pts[a].p,p1:pts[b].p,touches,score:touches*12+span});
+      }
+    }
+  };
+  tryPairs(lows,'support');
+  tryPairs(highs,'resistance');
+  raw.sort((a,b)=>b.score-a.score);
+  const picked=[];
+  for(const ln of raw){
+    if(picked.some(p=>Math.abs(p.i0-ln.i0)<=lb*2&&Math.abs(p.i1-ln.i1)<=lb*3))continue;
+    picked.push(ln);
+    if(picked.length>=(o.maxLines|0))break;
+  }
+  const ext=Math.max(0,o.extendBars|0);
+  const lastI=candles.length-1;
+  return picked.map(ln=>{
+    const iEnd=Math.min(lastI,ln.i1+ext);
+    const iStart=Math.max(0,ln.i0-Math.floor(ext*0.35));
+    const pEnd=ln.p0+(ln.p1-ln.p0)*(iEnd-ln.i0)/(ln.i1-ln.i0);
+    const pStart=ln.p0+(ln.p1-ln.p0)*(iStart-ln.i0)/(ln.i1-ln.i0);
+    return{
+      side:ln.side,
+      p1:{time:toChartTime(candles[iStart].t),price:pStart,tMs:candles[iStart].t},
+      p2:{time:toChartTime(candles[iEnd].t),price:pEnd,tMs:candles[iEnd].t},
+    };
+  });
+}
+function applyAutoTrendlinesToChart(ch,replace=false){
+  if(!ch?.candles?.length)return 0;
+  const sym=getChartSym(ch);
+  const lines=detectAutoTrendlines(ch.candles,S.autoTrend);
+  if(!lines.length)return 0;
+  if(sym)pushDrawUndo(sym);
+  if(replace){
+    ch.drawings=ch.drawings.filter(d=>!d.autoTrend);
+  }
+  const col=S.lineColors.autotl||'#38bdf8';
+  for(const ln of lines){
+    ch.drawings.push({
+      id:++S.drawIdCounter,
+      type:'tline',
+      p1:ln.p1,
+      p2:ln.p2,
+      color:col,
+      autoTrend:true,
+      trendSide:ln.side,
+    });
+  }
+  if(sym)schedulePersistDrawings(sym);
+  rCanvas(ch,{immediate:true});
+  return lines.length;
+}
+function runAutoTrendlinesOnVisibleCharts(){
+  let n=0;
+  const targets=S.fsOpen?[...S.fsCharts.filter(c=>c.lc&&c.candles?.length),...S.charts.filter(c=>c.sym&&c.candles?.length)]
+    :S.charts.filter(c=>c.sym&&c.candles?.length);
+  for(const ch of targets){
+    n+=applyAutoTrendlinesToChart(ch,true);
+  }
+  return n;
+}
+function setAutoTrendSetting(key,val){
+  if(!S.autoTrend)S.autoTrend={};
+  S.autoTrend[key]=val;
+  schedulePersistUserSettings();
 }
 
 // Distance from point to drawing (screen pixels)
 function drawingDist(ch,d,px,py){
   if(!ch.cs||!ch.lc)return Infinity;
   if(d.type==='hray'||d.type==='aray'){
-    const y=ch.cs.priceToCoordinate(d.p1.price);
+    const p1=resolveDrawPoint(ch,d.p1);
+    const y=ch.cs.priceToCoordinate(p1.price);
     if(y===null)return Infinity;
-    const x0=timeToCoordX(ch,d.p1.time)??0;
+    const x0=timeToCoordX(ch,p1.time)??0;
     if(px<x0-4)return Infinity;
     return Math.abs(py-y);
   }
   if(d.type==='tline'||d.type==='atline'){
-    const x1=timeToCoordX(ch,d.p1.time);
-    const y1=ch.cs.priceToCoordinate(d.p1.price);
-    const x2=timeToCoordX(ch,d.p2.time);
-    const y2=ch.cs.priceToCoordinate(d.p2.price);
+    const p1=resolveDrawPoint(ch,d.p1),p2=resolveDrawPoint(ch,d.p2);
+    const x1=timeToCoordX(ch,p1.time);
+    const y1=ch.cs.priceToCoordinate(p1.price);
+    const x2=timeToCoordX(ch,p2.time);
+    const y2=ch.cs.priceToCoordinate(p2.price);
     if(x1===null||y1===null||x2===null||y2===null)return Infinity;
     const dx=x2-x1,dy=y2-y1,len2=dx*dx+dy*dy;
     if(len2===0)return Math.hypot(px-x1,py-y1);
@@ -2315,8 +2505,13 @@ const TIME_AXIS_H=22;
 
 // ── Render canvas ──────────────────────────────────────────────
 // Per-chart RAF guard: only one pending rCanvas per chart at a time
-function rCanvas(ch){
-  if(ch._rCanvasRaf)return; // already scheduled
+function rCanvas(ch,opts){
+  if(_anyChartPanning||opts?.immediate){
+    ch._rCanvasRaf=false;
+    _rCanvasImmediate(ch);
+    return;
+  }
+  if(ch._rCanvasRaf)return;
   ch._rCanvasRaf=true;
   requestAnimationFrame(()=>{
     ch._rCanvasRaf=false;
@@ -2542,8 +2737,9 @@ function updateChartIndTooltip(ch,clientX,clientY,container){
 }
 
 function drawHRay(ctx,ch,d,W,hov){
-  const y=ch.cs.priceToCoordinate(d.p1.price);if(y===null)return;
-  const x0=timeToCoordX(ch,d.p1.time)??0;
+  const p1=resolveDrawPoint(ch,d.p1);
+  const y=ch.cs.priceToCoordinate(p1.price);if(y===null)return;
+  const x0=timeToCoordX(ch,p1.time)??0;
   const col=drawingLineColor(d);
   // Clamp x0 so ray always starts left-of or at current position, draws rightward
   const xs=Math.max(0,x0);
@@ -2552,16 +2748,17 @@ function drawHRay(ctx,ch,d,W,hov){
   ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=hov?2:1;
   ctx.moveTo(xs,y);ctx.lineTo(W,y);ctx.stroke();
   ctx.fillStyle=col;ctx.font='9px JetBrains Mono,monospace';ctx.textAlign='right';
-  ctx.fillText(fmtPrice(d.p1.price),W-3,y-3);ctx.textAlign='left';
+  ctx.fillText(fmtPrice(p1.price),W-3,y-3);ctx.textAlign='left';
   ctx.beginPath();ctx.arc(xs,y,3,0,Math.PI*2);ctx.fill();
   ctx.restore();
 }
 
 function drawTLine(ctx,ch,d,hov){
-  const x1=timeToCoordX(ch,d.p1.time);
-  const y1=ch.cs.priceToCoordinate(d.p1.price);
-  const x2=timeToCoordX(ch,d.p2.time);
-  const y2=ch.cs.priceToCoordinate(d.p2.price);
+  const p1=resolveDrawPoint(ch,d.p1),p2=resolveDrawPoint(ch,d.p2);
+  const x1=timeToCoordX(ch,p1.time);
+  const y1=ch.cs.priceToCoordinate(p1.price);
+  const x2=timeToCoordX(ch,p2.time);
+  const y2=ch.cs.priceToCoordinate(p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
   const col=drawingLineColor(d);
   ctx.save();
@@ -2595,8 +2792,9 @@ function drawRuler(ctx,ch){
 
 // ── Alert Ray ─────────────────────────────────────────────────
 function drawAlertRay(ctx,ch,d,W,hov){
-  const y=ch.cs.priceToCoordinate(d.p1.price);if(y===null)return;
-  const x0=timeToCoordX(ch,d.p1.time)??0;
+  const p1=resolveDrawPoint(ch,d.p1);
+  const y=ch.cs.priceToCoordinate(p1.price);if(y===null)return;
+  const x0=timeToCoordX(ch,p1.time)??0;
   const xs=Math.max(0,x0);
   const col=drawingLineColor(d);
   ctx.save();
@@ -3304,6 +3502,14 @@ function openEMAEditor(mode='auto'){
 window.openEMAEditor=openEMAEditor;
 
 // ── Ruler ──────────────────────────────────────────────────────
+function clearAllRulers(){
+  const tt=document.getElementById('rulerTooltip');
+  if(tt)tt.style.display='none';
+  for(const ch of [...S.charts,...S.fsCharts]){
+    if(ch?.ruler)ch.ruler=null;
+  }
+}
+
 function onRulerStart(ch,e,container){
   if(!ch.lc||!ch.cs)return;
   const{x,y}=getCoords(container,e.clientX,e.clientY);
@@ -3314,7 +3520,7 @@ function onRulerStart(ch,e,container){
   }
   ch.ruler={active:true,p1:pt,p2:pt,mouseX:e.clientX,mouseY:e.clientY};
   ch._rulerIsFsChart=!ch._gridLabChart&&S.fsCharts.includes(ch);
-  rCanvas(ch);
+  _rCanvasImmediate(ch);
 }
 function onRulerMove(ch,e,container){
   if(!ch.ruler?.active)return;
@@ -3327,10 +3533,11 @@ function onRulerMove(ch,e,container){
       if(fc===ch)return;
       if(!fc.lc||!fc.cs)return;
       fc.ruler={active:true,p1:{...ch.ruler.p1},p2:{...ch.ruler.p2},mouseX:e.clientX,mouseY:e.clientY,_mirror:true};
-      requestAnimationFrame(()=>rCanvas(fc));
+      _rCanvasImmediate(fc);
     });
   }
-  requestAnimationFrame(()=>{_rCanvasImmediate(ch);updateRulerTooltip(ch);});
+  _rCanvasImmediate(ch);
+  updateRulerTooltip(ch);
 }
 function onRulerEnd(ch){
   if(!ch.ruler)return;
@@ -3339,7 +3546,7 @@ function onRulerEnd(ch){
     S.fsCharts.forEach(fc=>{
       if(fc===ch||!fc.ruler)return;
       fc.ruler.active=false;
-      rCanvas(fc);
+      _rCanvasImmediate(fc);
     });
   }
   updateRulerTooltip(ch);
@@ -3570,28 +3777,24 @@ async function backfillChartGap(ch,sym,tf,limit=500){
   ch.candles=[...byT.values()].sort((a,b)=>a.t-b.t).slice(-HIST_CACHE_MAX);
 }
 async function backfillVisibleCharts(limit=900){
-  const tasks=[];
   for(const ch of S.charts){
     if(!ch.sym||!ch.cs||!ch.candles.length)continue;
-    tasks.push((async()=>{
-      try{
-        await backfillChartGap(ch,ch.sym,S.tf,limit);
-        if(ch.cs&&ch.lc)repaintChartSeries(ch,`${S.tf}:${ch.sym}`);
-      }catch(e){}
-    })());
+    try{
+      await backfillChartGap(ch,ch.sym,S.tf,limit);
+      if(ch.cs&&ch.lc)repaintChartSeries(ch,`${S.tf}:${ch.sym}`);
+      else if(ch.canvas)_rCanvasImmediate(ch);
+    }catch(e){}
   }
   if(S.fsOpen&&S.fsSym){
-    for(const fch of S.fsCharts){
-      if(!fch.cs||!fch.candles.length)continue;
-      tasks.push((async()=>{
-        try{
-          await backfillChartGap(fch,S.fsSym,fch.tf,limit);
-          if(fch.cs&&fch.lc)repaintChartSeries(fch,`${fch.tf}:${S.fsSym}`);
-        }catch(e){}
-      })());
-    }
+    const fsTasks=S.fsCharts.map(async fch=>{
+      if(!fch.cs||!fch.candles.length)return;
+      try{
+        await backfillChartGap(fch,S.fsSym,fch.tf,limit);
+        if(fch.cs&&fch.lc)repaintChartSeries(fch,`${fch.tf}:${S.fsSym}`);
+      }catch(e){}
+    });
+    await Promise.all(fsTasks);
   }
-  await Promise.all(tasks);
 }
 function closeAllRealtimeSockets(){
   if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
@@ -3603,16 +3806,30 @@ async function handleResumeRecovery(reason='resume'){
   const now=Date.now();
   if(now-_resumeRecoveryAt<3000)return;
   _resumeRecoveryAt=now;
+  const idleMs=_lastHiddenAt>0?now-_lastHiddenAt:0;
   console.log(`Resume recovery: ${reason}`);
   closeAllRealtimeSockets();
   updateHeaderStreamStatus();
-  await backfillVisibleCharts(1000);
+  if(idleMs>120000){
+    for(const ch of S.charts){
+      if(ch.sym)delete S.histCache[`${S.tf}:${ch.sym}`];
+    }
+  }
+  await backfillVisibleCharts(idleMs>60000?1400:1000);
+  try{
+    calcAll();
+    if(!document.hidden)renderTable();
+  }catch(e){}
   try{await refreshMetricKlinesSlice();}catch(e){}
+  for(const ch of S.charts){
+    if(ch.lc&&ch.cs)try{_rCanvasImmediate(ch);}catch(e){}
+  }
   setTimeout(()=>{
     restartChartStreams(0);
     startScreenerWS();
     updateHeaderStreamStatus();
-  },450);
+    if(!document.hidden)renderTable();
+  },idleMs>60000?200:450);
 }
 function repaintChartSeries(ch,cacheKey=''){
   if(!ch?.cs||!ch?.vs||!ch?.candles?.length)return;
@@ -3651,7 +3868,7 @@ function repaintChartSeries(ch,cacheKey=''){
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){_lastHiddenAt=Date.now();updateHeaderStreamStatus();return;}
   const hiddenMs=Date.now()-_lastHiddenAt;
-  if(hiddenMs<2000)return; // ignore ultra-short switches
+  if(hiddenMs<400)return;
   handleResumeRecovery(`visibility ${Math.round(hiddenMs/1000)}s`);
 });
 
@@ -3997,9 +4214,8 @@ function getTickerWorker(){
 // Throttle screener WS updates
 let _wsBatchTimer=null;
 let _metricsRecalcTimer=null;
-const SCREENER_BATCH_MS_NORMAL=250;
 const SCREENER_BATCH_MS_FAST=100;
-let SCREENER_BATCH_MS=SCREENER_BATCH_MS_NORMAL;
+let SCREENER_BATCH_MS=SCREENER_BATCH_MS_FAST;
 const METRICS_RECALC_DEBOUNCE_MS=250;
 let _metricsSyncBusy=false;
 let _metricsSyncCursor=0;
@@ -4718,6 +4934,7 @@ function doSort(id){
 }
 
 function changePage(delta){
+  clearAllRulers();
   const rows=sortedRows();
   const tp=Math.max(1,Math.ceil(rows.length/S.charts.length));
   S.page=Math.max(0,Math.min(tp-1,S.page+delta));
@@ -4725,6 +4942,7 @@ function changePage(delta){
 }
 
 function setTf(tf,btnId){
+  clearAllRulers();
   S.tf=tf;
   S.kTrend={};
   document.querySelectorAll('#toolbar .tbtn').forEach(b=>{
@@ -4855,21 +5073,12 @@ function updateHeaderStreamStatus(){
 }
 
 function syncFastBtnUi(){
-  const btn=document.getElementById('fastBtn');
-  if(!btn)return;
-  btn.classList.toggle('on',S.fastMode);
-  btn.textContent=S.fastMode?('⚡ Fast · ВКЛ'):'⚡ Fast';
-  btn.title=S.fastMode
-    ?(`Fast включён: обновление списка ~${SCREENER_BATCH_MS_FAST}мс, синхрон мини‑графиков чаще. Нажмите снова — выключить.`)
-    :(`Fast выключен (~${SCREENER_BATCH_MS_NORMAL}мс). Включить — отзывчивее UI, выше нагрузка на CPU.`);
+  S.fastMode=true;
+  SCREENER_BATCH_MS=SCREENER_BATCH_MS_FAST;
 }
 
 function toggleFastMode(){
-  S.fastMode=!S.fastMode;
-  SCREENER_BATCH_MS=S.fastMode?SCREENER_BATCH_MS_FAST:SCREENER_BATCH_MS_NORMAL;
   syncFastBtnUi();
-  // Force a quick refresh.
-  if(!document.hidden)renderTable();
 }
 
 function syncChartSyncBtnUi(){
@@ -4939,9 +5148,18 @@ function updateCharts(){
   let changed=false;
   for(let i=0;i<S.charts.length;i++){
     const ns=pageSyms[i]||null;
-    if(S.charts[i].sym!==ns){changed=true;loadChart(i,ns);}
+    if(S.charts[i].sym!==ns)changed=true;
   }
-  if(changed)restartChartStreams(600);
+  if(changed){
+    clearAllRulers();
+    (async()=>{
+      for(let i=0;i<S.charts.length;i++){
+        const ns=pageSyms[i]||null;
+        if(S.charts[i].sym!==ns)await loadChart(i,ns);
+      }
+      restartChartStreams(600);
+    })();
+  }
   updatePagination(rows.length);
   schedulePersistUserSettings();
 }
@@ -5558,6 +5776,18 @@ function renderSettingsGen(body){
       ${tbtnHtml('swOff','Выкл',"setWatermark(false)",!S.wmVisible)}
     </div>
   </div>
+  <div class="smodal-row" style="flex-direction:column;align-items:stretch;gap:8px">
+    <span class="smodal-lbl">Авто-наклонки (⟂ на тулбаре)</span>
+    <div style="font-size:9px;color:var(--text3);line-height:1.45">Пивоты + касания свечей. Поддержка — по минимумам, сопротивление — по максимумам.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px">
+      <label>Пивот (бар) <input type="number" min="2" max="8" value="${S.autoTrend.pivotBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('pivotBars',+this.value)"></label>
+      <label>Касания ≥ <input type="number" min="2" max="8" value="${S.autoTrend.minTouches}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('minTouches',+this.value)"></label>
+      <label>Допуск % <input type="number" min="0.05" max="2" step="0.05" value="${S.autoTrend.touchPct}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('touchPct',+this.value)"></label>
+      <label>Макс. линий <input type="number" min="1" max="10" value="${S.autoTrend.maxLines}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('maxLines',+this.value)"></label>
+      <label>Окно баров <input type="number" min="60" max="400" value="${S.autoTrend.lookback}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('lookback',+this.value)"></label>
+      <label>Продлить <input type="number" min="0" max="80" value="${S.autoTrend.extendBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('extendBars',+this.value)"></label>
+    </div>
+  </div>
   <div class="smodal-row">
     <span class="smodal-lbl">Сортировка изм. по модулю</span>
     <div class="smodal-btns">
@@ -5997,6 +6227,7 @@ async function loadMoreFsHistory(idx){
 
 function openFullscreenBySym(sym){
   if(!sym)return;
+  clearAllRulers();
   S.fsSym=sym;S.fsOpen=true;
   const body=document.getElementById('body');
   const fsBody=document.getElementById('fsBody');
@@ -6038,6 +6269,7 @@ function openFullscreen(slot){
 
 function closeFullscreen(){
   hideChartIndTooltip();
+  clearAllRulers();
   S.fsOpen=false;
   const body=document.getElementById('body');
   const fsBody=document.getElementById('fsBody');
@@ -6150,10 +6382,28 @@ function startFsWs(){
 // ═══════════════════════════════════════════════════════════════
 async function loadKlinesBackground(){
   try{
+    const visible=S.charts.map(c=>c.sym).filter(Boolean);
     const top=Object.entries(S.tk).filter(([s])=>S.syms.includes(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
-    const all=top.slice(0);
+    const all=[...new Set([...visible,...top])];
     const trendTf=S.tf;
     const trendLim=trendKlineFetchLimit(trendTf);
+    if(visible.length){
+      const kVis=await batchKlines(visible,S.tf,Math.max(MIN_CHART_CANDLES,Math.min(HIST_INITIAL,500)),null,null,12);
+      for(const sym of visible){
+        const kl=kVis[sym];
+        if(!kl?.length)continue;
+        S.histCache[`${S.tf}:${sym}`]=kl.slice(-HIST_CACHE_MAX);
+        const slot=S.charts.findIndex(c=>c.sym===sym);
+        if(slot<0)continue;
+        const ch=S.charts[slot];
+        if(ch.sym!==sym||!ch.cs)continue;
+        ch.candles=kl.slice(-HIST_CACHE_MAX);
+        if(ch.candles.length>=MIN_CHART_CANDLES){
+          ch._histBootstrapDone=true;
+          try{paintSlotData(slot);}catch(e){}
+        }
+      }
+    }
     const [k5,k1h,k1m,kTr]=await Promise.all([
       batchKlines(all,'5m',300,null,null,8),
       batchKlines(all,'1h',170,null,null,8),
@@ -6262,6 +6512,16 @@ function hydrateUserSession(){
     if(typeof ps.draw.brushColor==='string'&&ps.draw.brushColor.startsWith('#'))_brushColor=ps.draw.brushColor;
     if(ps.draw.brushWidth!=null&&!isNaN(+ps.draw.brushWidth))_brushWidth=Math.max(1,Math.min(12,+ps.draw.brushWidth));
   }
+  if(ps.autoTrend&&typeof ps.autoTrend==='object'){
+    const at=ps.autoTrend;
+    if(at.pivotBars!=null)S.autoTrend.pivotBars=Math.max(2,Math.min(8,+at.pivotBars));
+    if(at.touchPct!=null)S.autoTrend.touchPct=Math.max(0.05,Math.min(2,+at.touchPct));
+    if(at.minTouches!=null)S.autoTrend.minTouches=Math.max(2,Math.min(8,+at.minTouches));
+    if(at.maxLines!=null)S.autoTrend.maxLines=Math.max(1,Math.min(10,+at.maxLines));
+    if(at.lookback!=null)S.autoTrend.lookback=Math.max(60,Math.min(400,+at.lookback));
+    if(at.extendBars!=null)S.autoTrend.extendBars=Math.max(0,Math.min(80,+at.extendBars));
+  }
+  syncFastBtnUi();
   if(ps.sortId&&typeof ps.sortId==='string'){
     S.sortId=ps.sortId;
     S.sortAlpha=!!ps.sortAlpha;
@@ -8184,6 +8444,8 @@ window.setLineColor         = setLineColor;
 window.toggleEMA            = toggleEMA;
 window.openEMAEditor        = openEMAEditor;
 window.toggleFastMode       = toggleFastMode;
+window.runAutoTrendlinesOnVisibleCharts=runAutoTrendlinesOnVisibleCharts;
+window.setAutoTrendSetting  =setAutoTrendSetting;
 window.toggleChartAutoSync  = toggleChartAutoSync;
 window.setChartAutoSyncOpt  = setChartAutoSyncOpt;
 window.setSessionFxEnabled  = setSessionFxEnabled;
