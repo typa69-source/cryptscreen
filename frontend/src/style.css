@@ -271,6 +271,10 @@ html,body{
 /* Clear-all drawings button in chart header */
 .clear-draw-btn{display:none !important}
 
+/* Reduce paint area during rapid screener updates */
+.sbody{contain:layout paint style;}
+#cgrid{contain:layout paint style;}
+
 .fs-open-btn{background:transparent;border:none;color:var(--text3);cursor:pointer;font-size:11px;padding:1px 2px;border-radius:2px;line-height:1;transition:color .1s;flex-shrink:0;}
 .fs-open-btn:hover{color:var(--text);}
 

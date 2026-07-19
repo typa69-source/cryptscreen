@@ -6,12 +6,16 @@ const router = require('express').Router()
 // GET /api/proxy/coingecko/markets?page=1..5
 const _cgCache = new Map() // page -> { ts, body, status }
 const CG_TTL_MS = 6 * 60 * 60 * 1000
+const CG_MAX_PAGE = 5
 
 router.get('/coingecko/markets', async (req, res) => {
-  const page = Math.max(1, Math.min(10, parseInt(req.query.page || '1', 10) || 1))
-  const url =
-    `https://api.coingecko.com/api/v3/coins/markets` +
-    `?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}`
+  const pageRaw = parseInt(req.query.page || '1', 10)
+  const page = Number.isFinite(pageRaw) ? Math.max(1, Math.min(CG_MAX_PAGE, pageRaw)) : 1
+  const url = new URL('https://api.coingecko.com/api/v3/coins/markets')
+  url.searchParams.set('vs_currency', 'usd')
+  url.searchParams.set('order', 'market_cap_desc')
+  url.searchParams.set('per_page', '250')
+  url.searchParams.set('page', String(page))
 
   try {
     const cached = _cgCache.get(page)
@@ -21,14 +25,16 @@ router.get('/coingecko/markets', async (req, res) => {
       return
     }
 
-    // Node 18+ has global fetch.
-    const r = await fetch(url, {
+    const controller = new AbortController()
+    const t = setTimeout(() => controller.abort(), 15000)
+    const r = await fetch(url.toString(), {
+      signal: controller.signal,
       headers: {
-        // Helps avoid some aggressive bot blocks
-        'accept': 'application/json',
-        'user-agent': 'cryptscreen/1.0 (+render/vercel)',
+        accept: 'application/json',
+        'user-agent': 'cryptscreen/1.0',
       },
     })
+    clearTimeout(t)
     const text = await r.text()
     if (r.ok) {
       _cgCache.set(page, { ts: Date.now(), body: text, status: 200 })
@@ -37,7 +43,6 @@ router.get('/coingecko/markets', async (req, res) => {
       return
     }
 
-    // If CoinGecko is rate limiting (429) or temporarily failing, serve stale cache if available.
     if (cached && cached.status === 200) {
       res.set('x-cache', 'stale')
       res.type('application/json').send(cached.body)
@@ -46,14 +51,14 @@ router.get('/coingecko/markets', async (req, res) => {
 
     return res.status(r.status).send(text)
   } catch (e) {
-    console.error('proxy coingecko error:', e)
+    console.error('proxy coingecko error:', e.message || e)
     const cached = _cgCache.get(page)
     if (cached && cached.status === 200) {
       res.set('x-cache', 'stale-error')
       res.type('application/json').send(cached.body)
       return
     }
-    res.status(502).json({ error: 'Proxy error', message: e?.message || String(e) })
+    res.status(502).json({ error: 'Proxy error' })
   }
 })
 

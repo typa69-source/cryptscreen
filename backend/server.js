@@ -7,14 +7,29 @@ const app = express()
 const PORT = process.env.PORT || 3001
 
 // ─── MIDDLEWARE ──────────────────────────────────────────────────
+const allowedOrigins = new Set([
+  process.env.FRONTEND_URL,
+  'http://localhost:5173',
+  'http://localhost:3000',
+].filter(Boolean))
 app.use(cors({
-  origin: [
-    process.env.FRONTEND_URL || 'http://localhost:5173',
-    /\.vercel\.app$/,           // любой Vercel preview URL
-  ],
-  credentials: true
+  origin: (origin, cb) => {
+    // Allow same-origin / non-browser requests
+    if (!origin) return cb(null, true)
+    if (allowedOrigins.has(origin)) return cb(null, true)
+    if (/\.vercel\.app$/.test(origin)) return cb(null, true)
+    return cb(null, false)
+  },
+  credentials: true,
 }))
+// Harden JSON parser and add basic security headers.
 app.use(express.json({ limit: '2mb' }))
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  next()
+})
 
 // ─── ROUTES ─────────────────────────────────────────────────────
 app.use('/api/auth', require('./routes/auth'))

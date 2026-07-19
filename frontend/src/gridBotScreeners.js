@@ -562,6 +562,10 @@ export function registerGridBotScreeners(deps) {
       if (dg) dg.textContent = ui.diag || '';
     }
 
+    function escapeHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
     function applyFiltersAndRender() {
       let rows = ui.lastRows.slice();
       rows = rows.filter((r) => r.score >= ui.minScore);
@@ -595,44 +599,39 @@ export function registerGridBotScreeners(deps) {
       if (!tb) return;
       if (!rows.length) {
         const msg = ui.error || (ui.loading ? 'Загрузка…' : 'Нет результатов (проверь фильтры).');
-        tb.innerHTML = `<tr><td colspan="8" style="padding:10px 8px;color:var(--text3);font-size:10px">${msg}</td></tr>`;
+        tb.innerHTML = `<tr><td colspan="8" style="padding:10px 8px;color:var(--text3);font-size:10px">${escapeHtml(msg)}</td></tr>`;
         renderMeta();
         return;
       }
-      tb.innerHTML = rows.map((r) => {
-          const badge =
-            r.band === 'green'
-              ? '#22c55e'
-              : r.band === 'yellow'
-                ? '#eab308'
-                : '#ef4444';
-          const bd = r.breakdown;
-          const det = Object.entries(bd)
-            .map(
-              ([k, v]) =>
-                `<span class="gbs-tag" title="${v.tip}">${k}: ${v.label} → +${v.pts}</span>`
-            )
-            .join(' ');
-          const gl =
-            r.gridLo != null && r.gridHi != null
-              ? `${fmtPrice(r.gridLo)} … ${fmtPrice(r.gridHi)}`
-              : '—';
-          const st =
-            r.stepAbs != null ? `${fmtPrice(r.stepAbs)} (${fn(r.stepPct, 2)}%)` : '—';
-          return `<tr data-sym="${r.sym}">
-          <td><b style="cursor:pointer;color:#7dd3fc" class="gbs-open">${r.sym.replace(/USDT$/, '')}</b></td>
-          <td class="${(r.ch24 ?? 0) >= 0 ? 'p' : 'n'}">${r.ch24 != null ? fn(r.ch24, 2) : '—'}%</td>
-          <td>${r.h4ch != null ? fn(r.h4ch, 2) : '—'}%</td>
-          <td><span style="background:${badge};color:#0a0a0b;padding:2px 6px;border-radius:4px;font-weight:700">${r.score}</span></td>
-          <td>${r.raw.adx != null ? fn(r.raw.adx, 1) : '—'}</td>
-          <td>${gl}</td>
-          <td>${st}</td>
-          <td style="font-size:9px;color:var(--text3)">${det}</td>
-        </tr>`;
-        }).join('');
+      const frag = document.createDocumentFragment();
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.dataset.sym = r.sym;
+        const badge = r.band === 'green' ? '#22c55e' : r.band === 'yellow' ? '#eab308' : '#ef4444';
+        const bd = r.breakdown;
+        const det = Object.entries(bd)
+          .map(([k, v]) => `<span class="gbs-tag" title="${escapeHtml(v.tip)}">${escapeHtml(k)}: ${escapeHtml(v.label)} → +${escapeHtml(v.pts)}</span>`)
+          .join(' ');
+        const gl = r.gridLo != null && r.gridHi != null ? `${fmtPrice(r.gridLo)} … ${fmtPrice(r.gridHi)}` : '—';
+        const st = r.stepAbs != null ? `${fmtPrice(r.stepAbs)} (${fn(r.stepPct, 2)}%)` : '—';
+        const ch24Class = (r.ch24 ?? 0) >= 0 ? 'p' : 'n';
+        const ch24Txt = r.ch24 != null ? fn(r.ch24, 2) : '—';
+        const h4Txt = r.h4ch != null ? fn(r.h4ch, 2) : '—';
+        const adxTxt = r.raw.adx != null ? fn(r.raw.adx, 1) : '—';
+        tr.innerHTML = `
+          <td><b style="cursor:pointer;color:#7dd3fc" class="gbs-open">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b></td>
+          <td class="${escapeHtml(ch24Class)}">${escapeHtml(ch24Txt)}%</td>
+          <td>${escapeHtml(h4Txt)}%</td>
+          <td><span style="background:${escapeHtml(badge)};color:#0a0a0b;padding:2px 6px;border-radius:4px;font-weight:700">${escapeHtml(r.score)}</span></td>
+          <td>${escapeHtml(adxTxt)}</td>
+          <td>${escapeHtml(gl)}</td>
+          <td>${escapeHtml(st)}</td>
+          <td style="font-size:9px;color:var(--text3)">${det}</td>`;
+        frag.appendChild(tr);
+      }
+      tb.replaceChildren(frag);
       tb.querySelectorAll('.gbs-open').forEach((el) => {
         el.onclick = () => {
-          // Close modal but keep cached state, so coming back is instant.
           if (ui.timer) clearInterval(ui.timer);
           modal.remove();
           openFullscreenBySym(el.closest('tr').dataset.sym);
@@ -894,6 +893,10 @@ export function registerGridBotScreeners(deps) {
       if (lu && ui.lastRun) lu.textContent = new Date(ui.lastRun).toLocaleTimeString();
     }
 
+    function escapeHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
     function rowHtml(r, mode) {
       const gl =
         r.gridLo != null && r.gridHi != null ? `${fmtPrice(r.gridLo)} … ${fmtPrice(r.gridHi)}` : '—';
@@ -902,13 +905,15 @@ export function registerGridBotScreeners(deps) {
       const why = pickWhyLines(r, mode).join(' · ');
       const badge =
         r.band === 'green' ? '#22c55e' : r.band === 'yellow' ? '#eab308' : '#ef4444';
-      return `<tr data-sym="${r.sym}">
-        <td><b class="gbs-pick-open" style="cursor:pointer;color:#7dd3fc">${r.sym.replace(/USDT$/, '')}</b></td>
-        <td class="${(r.ch24 ?? 0) >= 0 ? 'p' : 'n'}">${r.ch24 != null ? fn(r.ch24, 2) : '—'}%</td>
-        <td><span style="background:${badge};color:#0a0c0b;padding:2px 6px;border-radius:4px;font-weight:700">${r.score}</span></td>
-        <td style="font-size:9px">${gl}</td>
-        <td style="font-size:9px">${nTxt}</td>
-        <td style="font-size:9px;color:var(--text3);line-height:1.35">${why}</td>
+      const ch24Class = (r.ch24 ?? 0) >= 0 ? 'p' : 'n';
+      const ch24Txt = r.ch24 != null ? fn(r.ch24, 2) : '—';
+      return `<tr data-sym="${escapeHtml(r.sym)}">
+        <td><b class="gbs-pick-open" style="cursor:pointer;color:#7dd3fc">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b></td>
+        <td class="${escapeHtml(ch24Class)}">${escapeHtml(ch24Txt)}%</td>
+        <td><span style="background:${escapeHtml(badge)};color:#0a0c0b;padding:2px 6px;border-radius:4px;font-weight:700">${escapeHtml(r.score)}</span></td>
+        <td style="font-size:9px">${escapeHtml(gl)}</td>
+        <td style="font-size:9px">${escapeHtml(nTxt)}</td>
+        <td style="font-size:9px;color:var(--text3);line-height:1.35">${escapeHtml(why)}</td>
       </tr>`;
     }
 
@@ -921,9 +926,9 @@ export function registerGridBotScreeners(deps) {
       const tb = box.querySelector('#gbsPickBody');
       if (!tb) return;
       if (!list.length) {
-        tb.innerHTML = `<tr><td colspan="6" style="padding:12px;color:var(--text3);font-size:10px">${
+        tb.innerHTML = `<tr><td colspan="6" style="padding:12px;color:var(--text3);font-size:10px">${escapeHtml(
           ui.loading ? 'Загрузка…' : ui.error || 'Нет монет под фильтр вкладки (обнови скан).'
-        }</td></tr>`;
+        )}</td></tr>`;
         return;
       }
       tb.innerHTML = list.map((r) => rowHtml(r, ui.tab)).join('');
