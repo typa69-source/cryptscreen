@@ -317,6 +317,9 @@ function applyDefaultChartView(ch){
     ro=Math.max(0,Math.min(36,Math.round(ro*roShrink)));
   }
   try{
+    // Apply view only once per data load to avoid periodic rescaling flicker
+    if(ch._lastAppliedRangeFrom===from&&ch._lastAppliedRangeTo===len-1&&ch._lastAppliedRo===ro)return;
+    ch._lastAppliedRangeFrom=from;ch._lastAppliedRangeTo=len-1;ch._lastAppliedRo=ro;
     ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
     ch.lc.timeScale().setVisibleLogicalRange({from,to:len-1});
     ch.lc.timeScale().applyOptions({rightOffset:ro});
@@ -1579,6 +1582,8 @@ function paintSlotData(slot){
     repaintBbSeries(ch);
     repaintOiSeries(ch);
     syncLivePriceLabel(ch,lp,ch.candles[ch.candles.length-1].o);
+    // Reset range guard on fresh data so applyDefaultChartView actually applies
+    ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
     applyDefaultChartView(ch);
     updateChartHeader(slot,ch.sym);
     rCanvas(ch);
@@ -1664,6 +1669,8 @@ async function loadMoreHistory(slot){
           const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
         }catch(e){}
+        // Reset range guard so applyDefaultChartView can run again when new data settles
+        ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
         repaintBbSeries(ch);
         if(S.showOiOnChart&&ch.sym)void refreshChartOiSeries(ch,S.tf,ch.sym);
         else{ch._oiHist=alignOiToCandles(merged,ch._oiRaw||[]);repaintOiSeries(ch);}
@@ -1819,7 +1826,9 @@ function _inferOhlcAnchor(candle,price){
   return best;
 }
 
-/** Привязка точки рисунка к свече текущего ТФ (фикс луча/линий между ТФ). */
+/** Привязка точки рисунка к свече текущего ТФ (фикс луча/линий между ТФ).
+ *  Только если точка была создана с магнитом (anchor !== 'c' иначе сохраняем price как есть).
+ */
 function resolveDrawPoint(ch,pt){
   if(!pt||!ch?.candles?.length)return pt;
   let tMs=pt.tMs;
@@ -1831,7 +1840,8 @@ function resolveDrawPoint(ch,pt){
     if(d<bestD){bestD=d;best=c;}
   }
   const time=toChartTime(best.t);
-  const anchor=pt.anchor||_inferOhlcAnchor(best,pt.price);
+  const anchor=pt.anchor||'c';
+  // If drawn freehand (anchor='c' and no real OHLC proximity), keep original price to avoid magnet effect
   const byAnchor={o:best.o,h:best.h,l:best.l,c:best.c};
   let price=byAnchor[anchor];
   if(price==null||!isFinite(price))price=pt.price;
@@ -4734,10 +4744,7 @@ function onSearch(q){
   S.q=mapRuKeyboardToEn(q);
   S.page=0;
   renderTable();
-  // Keep mini-charts unchanged if the query resolves to a single coin, so the screener list doesn't collapse to one symbol.
-  const rows=sortedRows();
-  const isExactCoin=(q.length>=2&&rows.length===1&&rows[0].sym.toLowerCase().startsWith(q.trim().toLowerCase()));
-  if(!isExactCoin)updateCharts();
+  updateCharts();
 }
 
 function onVolFilter(val){
