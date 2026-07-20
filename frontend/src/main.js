@@ -1035,7 +1035,7 @@ function fc(v,id){
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return v>15?'y':'w';
   if(id==='na30'||id==='na14')return v>0.5?'y':'w';
   if(id==='corr'||id==='corr14')return v>0.75?'d':v<-0.2?'n':'w';
-  if(['tr5','tr1h','vr5','vr1h'].includes(id))return v>1?'p':v<1?'n':'w';
+  if(['tr5','tr1h','vr5','vr1h'].includes(id))return'w';
   return'w';
 }
 function fh(v,id){
@@ -1048,9 +1048,9 @@ function fh(v,id){
     return'';
   }
   if(!['tr5','tr1h','vr5','vr1h'].includes(id))return'';
-  // Inverted heat: values near 1 are neutral; >1 green (activity spike), <1 red (lull)
+  // Only highlight green growth; base cells stay default/neutral via empty class.
   if(v>=3)return'hv3';if(v>=2)return'hv2';if(v>=1.5)return'hv1';
-  if(v<=0.4)return'hr3';if(v<=0.65)return'hr2';if(v<=0.85)return'hr1';return'';
+  return'';
 }
 
 function escapeHtml(str){
@@ -2274,6 +2274,11 @@ function drawingDist(ch,d,px,py){
     if(y===null)return Infinity;
     const x0=timeToCoordX(ch,p1.time)??0;
     if(px<x0-4)return Infinity;
+    // Include alert band for aray so hover works over the whole visible ray
+    if(d.type==='aray'&&d.alertPct!=null&&d.alertPct>0){
+      const bandH=Math.abs((ch.cs.priceToCoordinate(p1.price*(1-d.alertPct/100))??y)-y);
+      return Math.max(Math.abs(py-y)-bandH,0);
+    }
     return Math.abs(py-y);
   }
   if(d.type==='tline'||d.type==='atline'){
@@ -2851,10 +2856,11 @@ function drawAlertRay(ctx,ch,d,W,hov){
 }
 
 function drawAlertTLine(ctx,ch,d,hov){
-  const x1=timeToCoordX(ch,d.p1.time);
-  const y1=ch.cs.priceToCoordinate(d.p1.price);
-  const x2=timeToCoordX(ch,d.p2.time);
-  const y2=ch.cs.priceToCoordinate(d.p2.price);
+  const p1=resolveDrawPoint(ch,d.p1),p2=resolveDrawPoint(ch,d.p2);
+  const x1=timeToCoordX(ch,p1.time);
+  const y1=ch.cs.priceToCoordinate(p1.price);
+  const x2=timeToCoordX(ch,p2.time);
+  const y2=ch.cs.priceToCoordinate(p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
   const col=drawingLineColor(d);
   ctx.save();
@@ -2863,10 +2869,10 @@ function drawAlertTLine(ctx,ch,d,hov){
   if(d.alertPct!=null&&d.alertPct>0){
     const factor=d.alertPct/100;
     // Upper band points (prices * (1+factor))
-    const y1u=ch.cs.priceToCoordinate(d.p1.price*(1+factor));
-    const y2u=ch.cs.priceToCoordinate(d.p2.price*(1+factor));
-    const y1l=ch.cs.priceToCoordinate(d.p1.price*(1-factor));
-    const y2l=ch.cs.priceToCoordinate(d.p2.price*(1-factor));
+    const y1u=ch.cs.priceToCoordinate(p1.price*(1+factor));
+    const y2u=ch.cs.priceToCoordinate(p2.price*(1+factor));
+    const y1l=ch.cs.priceToCoordinate(p1.price*(1-factor));
+    const y2l=ch.cs.priceToCoordinate(p2.price*(1-factor));
     if(y1u!=null&&y2u!=null&&y1l!=null&&y2l!=null){
       // Filled polygon
       ctx.beginPath();
@@ -3287,6 +3293,14 @@ function showAlertPctInput(ch,drawing,container){
 function onInteractMove(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   ch.hoverX=x;ch.hoverY=y;
+  // Mirror container-level hover detection in draw mode so alert rays highlight correctly.
+  if(!ch.draggingDraw){
+    const now=performance.now();
+    if(now-(ch._lastHoverCheckTs||0)>32){
+      ch.hoveredIdx=findDrawingNear(ch,x,y);
+      ch._lastHoverCheckTs=now;
+    }
+  }
   rCanvas(ch);
 }
 
