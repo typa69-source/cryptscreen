@@ -302,6 +302,7 @@ html,body{
 .srow{display:flex;align-items:stretch;height:26px;border-bottom:1px solid rgba(37,37,48,.6);
   cursor:pointer;transition:background .06s}
 .srow:hover{background:rgba(255,255,255,.022)}
+.srow.search-hidden{opacity:.12;pointer-events:none}
 .srow.inchart{background:rgba(224,48,48,.06)}
 .srow.inchart .rtick{background:rgba(224,48,48,.1)}
 .rtick{width:84px;min-width:84px;flex-shrink:0;display:flex;align-items:center;padding:0 6px;
@@ -360,7 +361,7 @@ html,body{
 }
 .mc.p{color:var(--green)}.mc.n{color:var(--red)}.mc.y{color:var(--yellow);font-weight:600}
 .mc.d{color:var(--text3)}.mc.w{color:var(--text)}
-.hv1{background:rgba(31,168,145,.05)}.hv2{background:rgba(31,168,145,.12)}.hv3{background:rgba(31,168,145,.2)}
+.hv0{background:rgba(31,168,145,.03)}.hv1{background:rgba(31,168,145,.07)}.hv2{background:rgba(31,168,145,.13)}.hv3{background:rgba(31,168,145,.22)}
 .hr1{background:rgba(224,64,64,.05)}.hr2{background:rgba(224,64,64,.12)}.hr3{background:rgba(224,64,64,.2)}
 .srow.infullscreen{background:rgba(224,48,48,.1)!important;outline:1px solid rgba(224,48,48,.35);outline-offset:-1px}
 .srow.infullscreen .rtick{background:rgba(224,48,48,.15)!important}

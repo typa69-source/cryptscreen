@@ -752,8 +752,8 @@ function fh(v,id){
     return'';
   }
   if(!['tr5','tr1h','vr5','vr1h'].includes(id))return'';
-  // Only highlight green growth; base cells stay default/neutral via empty class.
-  if(v>=3)return'hv3';if(v>=2)return'hv2';if(v>=1.5)return'hv1';
+  // Gradient green from >0.7 up to >3; base cells stay default/neutral at <=0.7
+  if(v>=3)return'hv3';if(v>=2)return'hv2';if(v>=1.4)return'hv1';if(v>=0.7)return'hv0';
   return'';
 }
 
@@ -1783,7 +1783,8 @@ function snapPoint(ch,x,y,ctrl){
     tSnapped=toChartTime(bestC.t);
   }
   if(!ctrl){
-    return{time:tSnapped,price:raw.price,tMs:last.t,anchor:'c'};
+    // Allow free placement beyond last candle too, snapping only time to the virtual bar grid
+    return{time:tSnapped,price:raw.price,tMs:(tSnapped-TZ_OFFSET_S)*1000,anchor:'c'};
   }
   let ohlcCandle=last;
   if(!(raw.time>tLast)){
@@ -3666,8 +3667,14 @@ function startChartWS(){
     const slot=S.charts.findIndex(c=>c.sym===symU);if(slot===-1)return;
     const ch=S.charts[slot];if(!ch.cs||!ch._histBootstrapDone)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q,v:+k.v,tr:+k.n};
-    if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
-    else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)appendCandleWithGaps(ch.candles,candle,tfMs(S.tf));
+    const lastC=ch.candles[ch.candles.length-1];
+    if(lastC&&lastC.t===candle.t){
+      // Update existing candle only if close differs meaningfully (avoid jitter from identical re-broadcasts)
+      if(lastC.c!==candle.c||lastC.h!==candle.h||lastC.l!==candle.l||lastC.o!==candle.o||lastC.qv!==candle.qv){
+        ch.candles[ch.candles.length-1]=candle;
+      }
+    }
+    else if(lastC&&candle.t>lastC.t)appendCandleWithGaps(ch.candles,candle,tfMs(S.tf));
     ch._lastRtUpdateTs=Date.now();
     S.histCache[`${S.tf}:${symU}`]=ch.candles.slice(-HIST_CACHE_MAX);
     ch._pendingCandle=candle;
@@ -4486,7 +4493,9 @@ function updateScreenerRow(row,m,cols,inChart){
   const sym=m.sym;
   const grp=getSymGroup(sym);
   const grpCol=GROUP_COLORS[grp]||'';
-  const newCls='srow'+(inChart.has(sym)?' inchart':'')+(S.fsOpen&&S.fsSym===sym?' infullscreen':'');
+  const q=S.q?S.q.toUpperCase():'';
+  const matchesSearch=!q||sym.includes(q);
+  const newCls='srow'+(inChart.has(sym)?' inchart':'')+(S.fsOpen&&S.fsSym===sym?' infullscreen':'')+(matchesSearch?'':' search-hidden');
   if(row.className!==newCls)row.className=newCls;
   row._sym=sym;
   const gdot=row._gdot;
@@ -4639,8 +4648,8 @@ let _lastChartSyncAt=0;
 function maybeSyncChartsToTopRows(rows){
   if(document.hidden||_anyChartPanning)return;
   if(!S.chartAutoSync)return;
-  // Only meaningful when we're showing the screener and not sorting alphabetically.
-  if(!S.screenerVisible||S.sortAlpha)return;
+  // Meaningful whenever the screener is visible (including alphabetical sort)
+  if(!S.screenerVisible)return;
   const now=Date.now();
   const minEvery=S.fastMode?600:1500;
   if(now-_lastChartSyncAt<minEvery)return;
@@ -4690,6 +4699,9 @@ function doSort(id){
   buildScreenerHeader(document.getElementById('shdr'));
   if(document.getElementById('fsShdr'))buildScreenerHeader(document.getElementById('fsShdr'));
   updateCharts();renderTable();
+  // Sync mini-charts to the new order immediately (don't wait for the throttle)
+  _lastChartSyncAt=0;
+  maybeSyncChartsToTopRows(sortedRows());
 }
 
 function changePage(delta){
@@ -4748,11 +4760,7 @@ function onSearch(q){
   S.q=clean;
   S.page=0;
   renderTable();
-  // If the query narrows to a single exact symbol, keep the mini-charts on the current page
-  // so the right-side list doesn't collapse to one row.
-  const rows=sortedRows();
-  const isExactCoin=(clean.length>=2&&rows.length===1&&rows[0].sym.toLowerCase().startsWith(clean.toLowerCase()));
-  if(!isExactCoin)updateCharts();
+  // Search only highlights the row in the right-side screener; it never filters the list.
 }
 
 function onVolFilter(val){
