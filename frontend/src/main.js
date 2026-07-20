@@ -1841,7 +1841,10 @@ function resolveDrawPoint(ch,pt){
   }
   const time=toChartTime(best.t);
   const anchor=pt.anchor||'c';
-  // If drawn freehand (anchor='c' and no real OHLC proximity), keep original price to avoid magnet effect
+  // Freehand points (anchor='c' and not explicitly OHLC-snapped) keep original price
+  if(anchor==='c'){
+    return{time,price:pt.price,tMs:best.t,anchor:'c'};
+  }
   const byAnchor={o:best.o,h:best.h,l:best.l,c:best.c};
   let price=byAnchor[anchor];
   if(price==null||!isFinite(price))price=pt.price;
@@ -4741,10 +4744,15 @@ function onSearchInput(inp){
   onSearch(mapped);
 }
 function onSearch(q){
-  S.q=mapRuKeyboardToEn(q);
+  const clean=mapRuKeyboardToEn(q).trim();
+  S.q=clean;
   S.page=0;
   renderTable();
-  updateCharts();
+  // If the query narrows to a single exact symbol, keep the mini-charts on the current page
+  // so the right-side list doesn't collapse to one row.
+  const rows=sortedRows();
+  const isExactCoin=(clean.length>=2&&rows.length===1&&rows[0].sym.toLowerCase().startsWith(clean.toLowerCase()));
+  if(!isExactCoin)updateCharts();
 }
 
 function onVolFilter(val){
