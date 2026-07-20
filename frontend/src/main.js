@@ -209,11 +209,11 @@ const API_FDATA = 'https://fapi.binance.com/futures/data';
 // Timezone: offset candle times to device local time
 const TZ_OFFSET_S = -(new Date().getTimezoneOffset() * 60); // seconds to add to UTC
 function toChartTime(ms){ return Math.floor(ms/1000) + TZ_OFFSET_S; }
-const HIST_LIMIT = 500;    // свечей при подгрузке истории (листание влево)
+const HIST_LIMIT = 1000;    // свечей при подгрузке истории (листание влево)
 const HIST_INITIAL = 1200; // свечей при первоначальной загрузке графика (чтобы реже ходить в API)
-const HIST_CACHE_MAX = 2000;
+const HIST_CACHE_MAX = 3000;
 const MIN_CHART_CANDLES = 32; // меньше — считаем данные битым и перезапрашиваем
-const HIST_TRIGGER = 15;
+const HIST_TRIGGER = 35;
 const FS_TFS = ['1m','3m','5m','15m','30m','1h','4h','1d','3d','1w'];
 const DRAW_HIT = 8; // px threshold for hover detection
 function hexToRgbA(hex,a){
@@ -639,6 +639,14 @@ function parseKlines(raw){
   }
   return out;
 }
+function mergeKlineChunks(a,b){
+  if(!a||!a.length)return b||[];
+  if(!b||!b.length)return a;
+  const byT=new Map();
+  for(const k of a)byT.set(k.t,k);
+  for(const k of b)if(!byT.has(k.t))byT.set(k.t,k);
+  return Array.from(byT.values()).sort((x,y)=>x.t-y.t);
+}
 async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
   const out={};
   for(let i=0;i<syms.length;i+=bs){
@@ -1027,6 +1035,7 @@ function fc(v,id){
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return v>15?'y':'w';
   if(id==='na30'||id==='na14')return v>0.5?'y':'w';
   if(id==='corr'||id==='corr14')return v>0.75?'d':v<-0.2?'n':'w';
+  if(['tr5','tr1h','vr5','vr1h'].includes(id))return v>1?'p':v<1?'n':'w';
   return'w';
 }
 function fh(v,id){
@@ -1039,7 +1048,9 @@ function fh(v,id){
     return'';
   }
   if(!['tr5','tr1h','vr5','vr1h'].includes(id))return'';
-  if(v>4)return'hv3';if(v>2.5)return'hv2';if(v>1.5)return'hv1';if(v<0.3)return'hr3';if(v<0.5)return'hr2';if(v<0.7)return'hr1';return'';
+  // Inverted heat: values near 1 are neutral; >1 green (activity spike), <1 red (lull)
+  if(v>=3)return'hv3';if(v>=2)return'hv2';if(v>=1.5)return'hv1';
+  if(v<=0.4)return'hr3';if(v<=0.65)return'hr2';if(v<=0.85)return'hr1';return'';
 }
 
 function escapeHtml(str){
@@ -1579,7 +1590,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   ro.observe(container);
   ch._ro=ro;
 
-  const onVisibleRangePan=()=>{_onPanStart();_rCanvasImmediate(ch);};
+  const onVisibleRangePan=()=>{_onPanStart();rCanvas(ch,{immediate:true});};
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
     if(range&&range.from<HIST_TRIGGER){
       if(isFs)loadMoreFsHistory(fsIdx);else loadMoreHistory(slot);
@@ -1824,11 +1835,17 @@ async function loadChart(slot,sym){
   }
   if(Array.isArray(cached)&&cached.length&&cached.length<MIN_CHART_CANDLES)delete S.histCache[cacheKey];
   try{
-    let raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
+    // Prefer parallel fetch of initial + next chunk so big charts fill faster.
+    const tfM=tfMs(S.tf);
+    const [raw1,raw2]=await Promise.all([
+      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`),
+      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${Date.now()-HIST_INITIAL*tfM}`)
+    ]);
     if(ch.sym!==sym)return;
-    ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+    const merged=mergeKlineChunks(parseKlines(raw1),parseKlines(raw2));
+    ch.candles=merged.slice(-HIST_CACHE_MAX);
     if(ch.candles.length<MIN_CHART_CANDLES){
-      raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
       if(ch.sym!==sym)return;
       ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
     }
@@ -2043,8 +2060,8 @@ function inferBarChartSec(ch){
 }
 
 /**
- * ctrl=false: X — к ближайшей свече в данных; правее последней — виртуальная сетка баров.
- * ctrl=true: то же по X; Y — ближайшая O/H/L/C или текущая цена.
+ * ctrl=true: X/Y магнит к свече/OHLC.
+ * ctrl=false: свободное размещение, только виртуальная сетка баров правее последней свечи.
  */
 function snapPoint(ch,x,y,ctrl){
   const raw=pixelToPoint(ch,x,y);if(!raw)return null;
@@ -2058,6 +2075,10 @@ function snapPoint(ch,x,y,ctrl){
     const k=Math.round((raw.time-tLast)/barSec);
     tSnapped=tLast+k*barSec;
   }else{
+    if(!ctrl){
+      // Free placement within data range
+      return{time:raw.time,price:raw.price,tMs:(raw.time-TZ_OFFSET_S)*1000,anchor:'c'};
+    }
     let bestC=null,bestDx=Infinity;
     for(const c of ch.candles){
       const bx=ts.timeToCoordinate(toChartTime(c.t));
@@ -2069,17 +2090,7 @@ function snapPoint(ch,x,y,ctrl){
     tSnapped=toChartTime(bestC.t);
   }
   if(!ctrl){
-    let snapC=last;
-    if(!(raw.time>tLast)){
-      let bestC=null,bestDx=Infinity;
-      for(const c of ch.candles){
-        const bx=ts.timeToCoordinate(toChartTime(c.t));
-        if(bx==null)continue;
-        const dist=Math.abs(bx-x);
-        if(dist<bestDx){bestDx=dist;snapC=c;}
-      }
-    }
-    return{time:tSnapped,price:raw.price,tMs:snapC.t,anchor:'c'};
+    return{time:tSnapped,price:raw.price,tMs:last.t,anchor:'c'};
   }
   let ohlcCandle=last;
   if(!(raw.time>tLast)){
@@ -2274,7 +2285,8 @@ function drawingDist(ch,d,px,py){
     if(x1===null||y1===null||x2===null||y2===null)return Infinity;
     const dx=x2-x1,dy=y2-y1,len2=dx*dx+dy*dy;
     if(len2===0)return Math.hypot(px-x1,py-y1);
-    const t=Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/len2));
+    // For alert trendlines (atline) extend hit-test beyond segment so RMB deletion works reliably
+    const t=d.type==='atline'?((px-x1)*dx+(py-y1)*dy)/len2:Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/len2));
     return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
   }
   if(d.type==='brush'){
@@ -2417,7 +2429,7 @@ function computeDensities(ch){
       tier:c.totalUsd>=mean+std*largeMult?'large':c.totalUsd>=mean+std*medMult?'medium':'small',
     }));
   for(const z of zones){
-    const key=`${sym}:${z.tier}:${z._bucket}`;
+    const key=`${sym}:${z._bucket}`; // bucket-only key so ray start stays tied to first appearance of this price level
     activeKeys.add(key);
     if(!_densityFirstSeen.has(key))_densityFirstSeen.set(key,seenAt);
     z.time=_densityFirstSeen.get(key);
@@ -2494,6 +2506,8 @@ function drawDensities(ctx,ch,W,H){
   for(const z of zones){
     const y=ch.cs.priceToCoordinate(z.price);if(y===null||y<0||y>H-TIME_AXIS_H)continue;
     const x0=Math.max(0,timeToCoordX(ch,z.time)??0);
+    // Do not draw stale ray origins that have scrolled off the visible area
+    if(x0<=0&&z.time<toChartTime(ch.candles[0]?.t||0))continue;
     let col,alpha;
     if(z.tier==='large'){col='#e04040';alpha=0.75;}
     else if(z.tier==='medium'){col='#e8a020';alpha=0.55;}
@@ -3554,10 +3568,10 @@ function onRulerMove(ch,e,container){
       if(fc===ch)return;
       if(!fc.lc||!fc.cs)return;
       fc.ruler={active:true,p1:{...ch.ruler.p1},p2:{...ch.ruler.p2},mouseX:e.clientX,mouseY:e.clientY,_mirror:true};
-      _rCanvasImmediate(fc);
+      rCanvas(fc,{immediate:true});
     });
   }
-  _rCanvasImmediate(ch);
+  rCanvas(ch,{immediate:true});
   updateRulerTooltip(ch);
 }
 function onRulerEnd(ch){
@@ -5016,7 +5030,15 @@ function onSearchInput(inp){
   }
   onSearch(mapped);
 }
-function onSearch(q){S.q=mapRuKeyboardToEn(q);S.page=0;updateCharts();renderTable();}
+function onSearch(q){
+  S.q=mapRuKeyboardToEn(q);
+  S.page=0;
+  renderTable();
+  // Keep mini-charts unchanged if the query resolves to a single coin, so the screener list doesn't collapse to one symbol.
+  const rows=sortedRows();
+  const isExactCoin=(q.length>=2&&rows.length===1&&rows[0].sym.toLowerCase().startsWith(q.trim().toLowerCase()));
+  if(!isExactCoin)updateCharts();
+}
 
 function onVolFilter(val){
   S.minVol=+val*10;
