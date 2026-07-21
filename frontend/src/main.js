@@ -1546,19 +1546,14 @@ async function loadChart(slot,sym){
   }
   if(Array.isArray(cached)&&cached.length&&cached.length<MIN_CHART_CANDLES)delete S.histCache[cacheKey];
   try{
-    // Prefer parallel fetch of initial + next chunk so big charts fill faster.
-    const tfM=tfMs(S.tf);
-    const [raw1,raw2]=await Promise.all([
-      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`),
-      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${Date.now()-HIST_INITIAL*tfM}`)
-    ]);
+    // One fetch per chart — keeps the grid under Binance's per-IP request budget.
+    const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
     if(ch.sym!==sym)return;
-    const merged=mergeKlineChunks(parseKlines(raw1),parseKlines(raw2));
-    ch.candles=merged.slice(-HIST_CACHE_MAX);
+    ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
     if(ch.candles.length<MIN_CHART_CANDLES){
-      const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      const raw2=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
       if(ch.sym!==sym)return;
-      ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+      ch.candles=parseKlines(raw2).slice(-HIST_CACHE_MAX);
     }
     if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[cacheKey]=ch.candles.slice();
     paintSlotData(slot);
@@ -5054,13 +5049,19 @@ function updateCharts(){
     // Redraw the table synchronously so the screener highlights follow the new order right away
     renderTable();
     clearAllRulers();
-    // Fire all data loads in parallel — no sequential await cascade.
-    const tasks=[];
+    // Stagger fetches so we don't burst 9 simultaneous requests at Binance
+    // (each loadChart already calls ONE klines request; the request queue in api.js
+    // also limits concurrency, but staggering avoids 429 rate-limits on first paint).
+    let delay=0;
     for(let i=0;i<S.charts.length;i++){
       const ns=pageSyms[i]||null;
-      if(ns)tasks.push(loadChart(i,ns));
+      if(ns){
+        const idx=i;
+        setTimeout(()=>{ void loadChart(idx,ns); }, delay);
+        delay+=120;
+      }
     }
-    Promise.allSettled(tasks).then(()=>restartChartStreams(600));
+    setTimeout(()=>restartChartStreams(600), delay+200);
   }
   updatePagination(rows.length);
   schedulePersistUserSettings();
