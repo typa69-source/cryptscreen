@@ -3440,10 +3440,11 @@ function renderQuickFindList(){
 }
 function jumpToSymbol(sym,{openFs=false}={}){
   if(!sym)return;
+  // Search across the full screener (not just the current page) — sortedRows()
+  // reflects the active sort so the symbol's true position is found.
   const rows=sortedRows();
   const idx=rows.findIndex(r=>r.sym===sym);
   if(idx<0){
-    // Symbol not in current sort slice — drop the user back to a default page.
     closeQuickFind();
     return;
   }
