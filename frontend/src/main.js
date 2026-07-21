@@ -1498,29 +1498,36 @@ async function loadChart(slot,sym){
     if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
     return;
   }
-  const wasSame=ch.sym===sym&&ch.lc;
+  // ch.lc existing → reuse the lightweight-charts instance, just clear data and refetch.
+  // This makes the grid "snap" to new coins on the same frame instead of cascading one-by-one.
+  const hasChart=!!ch.lc;
   ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
   ch._oiHist=[];ch._oiRaw=[];ch._oiLastFetchTs=0;
   ch.drawings=getSymDrawings(sym); // shared reference
   setText(`cs${slot}`,sym.replace(/USDT$/,''));
   setCoinIcon(`ci${slot}`,sym);
   const cb=document.getElementById(`cb${slot}`);
-  // Only rebuild the lightweight-charts instance on the first load (or when container is empty).
-  // For symbol swaps initiated by sort/filter, keep the chart instance and just refetch data —
-  // this makes the grid "snap" to new coins instantly instead of cascading one-by-one.
-  if(!wasSame){
+  if(!hasChart){
     if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
     initLCChart(slot);
     setSlotLoading(slot,true);
   }else{
-    // Keep existing chart canvas; just show a small loader indicator over the watermark area.
+    // Keep the chart instance alive; clear visible series so the previous symbol vanishes immediately.
     setSlotLoading(slot,true,'Загрузка данных...');
-    if(ch.lc&&ch.cs){
+    if(ch.cs){
       try{ch.cs.setData([]);}catch(e){}
-      try{ch.vs&&ch.vs.setData([]);}catch(e){}
     }
+    if(ch.vs){
+      try{ch.vs.setData([]);}catch(e){}
+    }
+    if(ch.oiLine){try{ch.oiLine.setData([]);}catch(e){}}
+    if(ch.bbUpperLine){try{ch.bbUpperLine.setData([]);}catch(e){}}
+    if(ch.bbLowerLine){try{ch.bbLowerLine.setData([]);}catch(e){}}
     // Invalidate range cache so applyDefaultChartView can re-fit once data lands
     ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
+    // Force immediate redraw so the tile reflects the new symbol/header before data arrives
+    rCanvas(ch);
+    updateChartHeader(slot,sym);
   }
   const wm=document.getElementById(`wm${slot}`);if(wm)wm.textContent=sym.replace(/USDT$/,'');
   const cacheKey=`${S.tf}:${sym}`;
@@ -3492,10 +3499,15 @@ function jumpToSymbol(sym,{openFs=false}={}){
   let idx=rows.findIndex(r=>r.sym===sym);
   if(idx<0){
     if(S.syms.includes(sym)){
-      S.q=sym.replace(/USDT$/i,'');
+      // The quick-find popup already provides the visual selection; do not set S.q
+      // (it would mark every other row in the screener as search-hidden / inactive).
       S.page=0;
       closeQuickFind();
-      updateCharts();renderTable();
+      // Land the symbol on the first mini-chart slot for instant feedback
+      if(S.charts.length>0&&S.charts[0]?.sym!==sym){
+        void loadChart(0,sym);
+      }
+      renderTable();
       if(openFs)openFullscreenBySym(sym);
       return;
     }
@@ -5013,20 +5025,42 @@ function updateCharts(){
   const start=S.page*S.charts.length;
   const pageSyms=rows.slice(start,start+S.charts.length).map(r=>r.sym);
   let changed=false;
-  const currentSyms=S.charts.map(c=>c.sym);
+  // Synchronous snap: update ch.sym, drawings, headers, watermark, then redraw table
+  // so the screener highlights and chart-tile headers reflect the new order immediately.
   for(let i=0;i<S.charts.length;i++){
     const ns=pageSyms[i]||null;
-    if(currentSyms[i]!==ns)changed=true;
+    if(S.charts[i].sym===ns)continue;
+    changed=true;
+    S.charts[i].sym=ns;
+    S.charts[i].drawings=ns?getSymDrawings(ns):[];
+    S.charts[i].candles=[];
+    S.charts[i]._histBootstrapDone=false;
+    S.charts[i]._oiHist=[];S.charts[i]._oiRaw=[];S.charts[i]._oiLastFetchTs=0;
+    S.charts[i]._lastAppliedRangeFrom=null;S.charts[i]._lastAppliedRangeTo=null;S.charts[i]._lastAppliedRo=null;
+    setText(`cs${i}`,ns?ns.replace(/USDT$/,''):'—');
+    if(ns){setCoinIcon(`ci${i}`,ns);}
+    const cb=document.getElementById(`cb${i}`);
+    if(cb)cb.innerHTML=ns
+      ?'<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>'
+      :`<div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
+    const wm=document.getElementById(`wm${i}`);if(wm)wm.textContent=ns?ns.replace(/USDT$/,''):'';
+    if(S.charts[i].lc&&S.charts[i].cs){
+      try{S.charts[i].cs.setData([]);}catch(e){}
+      try{S.charts[i].vs&&S.charts[i].vs.setData([]);}catch(e){}
+    }
+    updateChartHeader(i,ns);
   }
   if(changed){
+    // Redraw the table synchronously so the screener highlights follow the new order right away
+    renderTable();
     clearAllRulers();
-    (async()=>{
-      for(let i=0;i<S.charts.length;i++){
-        const ns=pageSyms[i]||null;
-        if(S.charts[i].sym!==ns)await loadChart(i,ns);
-      }
-      restartChartStreams(600);
-    })();
+    // Fire all data loads in parallel — no sequential await cascade.
+    const tasks=[];
+    for(let i=0;i<S.charts.length;i++){
+      const ns=pageSyms[i]||null;
+      if(ns)tasks.push(loadChart(i,ns));
+    }
+    Promise.allSettled(tasks).then(()=>restartChartStreams(600));
   }
   updatePagination(rows.length);
   schedulePersistUserSettings();
