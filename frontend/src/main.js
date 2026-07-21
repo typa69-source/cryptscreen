@@ -1498,15 +1498,30 @@ async function loadChart(slot,sym){
     if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
     return;
   }
+  const wasSame=ch.sym===sym&&ch.lc;
   ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
   ch._oiHist=[];ch._oiRaw=[];ch._oiLastFetchTs=0;
   ch.drawings=getSymDrawings(sym); // shared reference
   setText(`cs${slot}`,sym.replace(/USDT$/,''));
   setCoinIcon(`ci${slot}`,sym);
   const cb=document.getElementById(`cb${slot}`);
-  if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
-  initLCChart(slot);
-  setSlotLoading(slot,true);
+  // Only rebuild the lightweight-charts instance on the first load (or when container is empty).
+  // For symbol swaps initiated by sort/filter, keep the chart instance and just refetch data —
+  // this makes the grid "snap" to new coins instantly instead of cascading one-by-one.
+  if(!wasSame){
+    if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
+    initLCChart(slot);
+    setSlotLoading(slot,true);
+  }else{
+    // Keep existing chart canvas; just show a small loader indicator over the watermark area.
+    setSlotLoading(slot,true,'Загрузка данных...');
+    if(ch.lc&&ch.cs){
+      try{ch.cs.setData([]);}catch(e){}
+      try{ch.vs&&ch.vs.setData([]);}catch(e){}
+    }
+    // Invalidate range cache so applyDefaultChartView can re-fit once data lands
+    ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
+  }
   const wm=document.getElementById(`wm${slot}`);if(wm)wm.textContent=sym.replace(/USDT$/,'');
   const cacheKey=`${S.tf}:${sym}`;
   const cached=S.histCache[cacheKey];
@@ -2319,26 +2334,17 @@ function _rCanvasImmediate(ch){
   if(ch._gridLabChart)return _rCanvasGridLabImmediate(ch);
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   ch._emaHoverZones=[];
+  // Full redraw invalidates the cached static overlays
+  _invalidateBgCache(ch);
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
   // #3: clip drawing area so we don't overdraw the axes (price/time)
   const drawW=Math.max(1,W-PRICE_AXIS_W);
   const drawH=Math.max(1,H-TIME_AXIS_H);
-  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
-  drawSessionZones(ctx,ch,drawW,drawH);
-  // Densities (behind drawings)
-  if(S.showDensity)drawDensities(ctx,ch,drawW,drawH);
-  ch.drawings.forEach((d,i)=>{
-    const hov=(i===ch.hoveredIdx||ch.draggingDraw?.drawIdx===i);
-    if(d.type==='hray')drawHRay(ctx,ch,d,drawW,hov);
-    else if(d.type==='tline')drawTLine(ctx,ch,d,hov);
-    else if(d.type==='aray')drawAlertRay(ctx,ch,d,drawW,hov);
-    else if(d.type==='atline')drawAlertTLine(ctx,ch,d,hov);
-    else if(d.type==='brush')drawBrushStroke(ctx,ch,d,hov);
-    else if(d.type==='long'||d.type==='short')drawTradeRect(ctx,ch,d,hov);
-  });
+  _paintStaticOverlays(ctx,ch,W,H);
   // Draw live preview of traderect/tline pendingP1
   if(ch.pendingP1&&(S.drawMode==='tline'||S.drawMode==='atline'||S.drawMode==='long'||S.drawMode==='short')){
+    ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
     const x1=timeToCoordX(ch,ch.pendingP1.time);
     const y1=ch.cs.priceToCoordinate(ch.pendingP1.price);
     if(x1!==null&&y1!==null){
@@ -2361,11 +2367,13 @@ function _rCanvasImmediate(ch){
         ctx.beginPath();ctx.fillStyle='#3b82f6';ctx.arc(x1,y1,3,0,Math.PI*2);ctx.fill();ctx.restore();
       }
     }
+    ctx.restore();
   }
-  // EMA overlay (drawn on top of candles, below crosshair)
-  drawEMAs(ctx,ch,drawW,drawH);
-  if(ch.ruler)drawRuler(ctx,ch);
-  ctx.restore(); // end clip
+  if(ch.ruler){
+    ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
+    drawRuler(ctx,ch);
+    ctx.restore();
+  }
   // Custom crosshair: всегда при X к свече; без Ctrl — Y свободно; с Ctrl — Y к O/H/L/C или к цене.
   if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
     drawCustomCrosshair(ctx,ch,drawW,H);
@@ -3282,11 +3290,67 @@ function onRulerMove(ch,e,container){
       if(fc===ch)return;
       if(!fc.lc||!fc.cs)return;
       fc.ruler={active:true,p1:{...ch.ruler.p1},p2:{...ch.ruler.p2},mouseX:e.clientX,mouseY:e.clientY,_mirror:true};
-      rCanvas(fc,{immediate:true});
+      _drawRulerOnly(fc);
     });
   }
-  rCanvas(ch,{immediate:true});
-  updateRulerTooltip(ch);
+  // Cheap path: redraw only the ruler polyline on top of a cached static layer.
+  // Avoids redrawing sessions/densities/drawings/EMAs on every mouse move (was causing ruler lag
+  // on mini charts).
+  _drawRulerOnly(ch);
+  // Throttle heavy tooltip updates (NATR/vol/trades recompute over candles)
+  const now=performance.now();
+  if(!ch._lastRulerTipTs||now-ch._lastRulerTipTs>50){
+    ch._lastRulerTipTs=now;
+    updateRulerTooltip(ch);
+  }
+}
+
+/** Offscreen canvas cache for static overlays (sessions/densities/drawings/EMAs).
+ *  Used by _drawRulerOnly for fast ruler redraws without recomputing the whole overlay. */
+function _ensureBgCache(ch){
+  if(!ch._bgCache)ch._bgCache=document.createElement('canvas');
+  const cache=ch._bgCache;
+  if(cache.width!==ch.canvas.width||cache.height!==ch.canvas.height){
+    cache.width=ch.canvas.width;
+    cache.height=ch.canvas.height;
+  }
+  return cache;
+}
+function _invalidateBgCache(ch){
+  if(ch._bgCache){ch._bgCache.width=0;ch._bgCache.height=0;}
+}
+function _paintStaticOverlays(ctx,ch,W,H){
+  const drawW=Math.max(1,W-PRICE_AXIS_W);
+  const drawH=Math.max(1,H-TIME_AXIS_H);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
+  drawSessionZones(ctx,ch,drawW,drawH);
+  if(S.showDensity)drawDensities(ctx,ch,drawW,drawH);
+  ch.drawings.forEach((d,i)=>{
+    const hov=(i===ch.hoveredIdx||ch.draggingDraw?.drawIdx===i);
+    if(d.type==='hray')drawHRay(ctx,ch,d,drawW,hov);
+    else if(d.type==='tline')drawTLine(ctx,ch,d,hov);
+    else if(d.type==='aray')drawAlertRay(ctx,ch,d,drawW,hov);
+    else if(d.type==='atline')drawAlertTLine(ctx,ch,d,hov);
+    else if(d.type==='brush')drawBrushStroke(ctx,ch,d,hov);
+    else if(d.type==='long'||d.type==='short')drawTradeRect(ctx,ch,d,hov);
+  });
+  drawEMAs(ctx,ch,drawW,drawH);
+  ctx.restore();
+}
+
+/** Clear canvas, redraw cached static overlays (sessions/densities/drawings/EMAs), then ruler.
+ *  Skips pending preview (only active during draw mode) and crosshair (drawn separately). */
+function _drawRulerOnly(ch){
+  const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs)return;
+  const W=canvas.width,H=canvas.height;
+  const ctx=canvas.getContext('2d');
+  ctx.clearRect(0,0,W,H);
+  const cache=_ensureBgCache(ch);
+  const cctx=cache.getContext('2d');
+  cctx.clearRect(0,0,W,H);
+  _paintStaticOverlays(cctx,ch,W,H);
+  ctx.drawImage(cache,0,0);
+  if(ch.ruler?.p1&&ch.ruler?.p2)drawRuler(ctx,ch);
 }
 function onRulerEnd(ch){
   if(!ch.ruler)return;
@@ -4390,7 +4454,9 @@ function sortedRows(){
       });
     }
   }
-  if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
+  // Search is purely visual (search-hidden class in renderScreenerRow). It must never
+  // narrow the row set, otherwise mini-charts and the FS screener would collapse to
+  // a single symbol after typing in the search input.
   const bypassGroup=(sym)=>S.activeGroupFilter>0&&symbolInGroup(sym,S.activeGroupFilter);
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||bypassGroup(r.sym));
   if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||bypassGroup(r.sym));
@@ -4658,9 +4724,33 @@ function maybeSyncChartsToTopRows(rows){
   const start=S.page*S.charts.length;
   const pageSyms=rows.slice(start,start+S.charts.length).map(r=>r.sym);
   let changed=false;
+  // First pass: update ch.sym, headers and screener highlight immediately so the UI reflects
+  // the new sort order right away, even before candles are fetched.
   for(let i=0;i<S.charts.length;i++){
     const ns=pageSyms[i]||null;
-    if(S.charts[i].sym!==ns){changed=true;loadChart(i,ns);}
+    if(S.charts[i].sym!==ns){
+      changed=true;
+      S.charts[i].sym=ns;
+      S.charts[i].drawings=ns?getSymDrawings(ns):[];
+      S.charts[i].candles=[];
+      S.charts[i]._histBootstrapDone=false;
+      S.charts[i]._lastAppliedRangeFrom=null;S.charts[i]._lastAppliedRangeTo=null;S.charts[i]._lastAppliedRo=null;
+      setText(`cs${i}`,ns?ns.replace(/USDT$/,''):'—');
+      const cb=document.getElementById(`cb${i}`);
+      if(cb)cb.innerHTML=ns
+        ?'<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>'
+        :`<div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
+      const wm=document.getElementById(`wm${i}`);if(wm)wm.textContent=ns?ns.replace(/USDT$/,''):'';
+    }
+  }
+  // Refresh table highlights immediately so red dots on chart-tied rows appear without waiting for data
+  if(changed){
+    if(typeof renderTable==='function')renderTable();
+  }
+  // Second pass: fire async data loads in parallel so all charts fetch simultaneously
+  for(let i=0;i<S.charts.length;i++){
+    const ns=pageSyms[i]||null;
+    if(ns)void loadChart(i,ns);
   }
   if(changed)restartChartStreams(300);
 }
