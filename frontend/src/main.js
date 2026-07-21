@@ -2319,17 +2319,26 @@ function _rCanvasImmediate(ch){
   if(ch._gridLabChart)return _rCanvasGridLabImmediate(ch);
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   ch._emaHoverZones=[];
-  // Full redraw invalidates the cached static overlays
-  _invalidateBgCache(ch);
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
   ctx.clearRect(0,0,W,H);
   // #3: clip drawing area so we don't overdraw the axes (price/time)
   const drawW=Math.max(1,W-PRICE_AXIS_W);
   const drawH=Math.max(1,H-TIME_AXIS_H);
-  _paintStaticOverlays(ctx,ch,W,H);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
+  drawSessionZones(ctx,ch,drawW,drawH);
+  // Densities (behind drawings)
+  if(S.showDensity)drawDensities(ctx,ch,drawW,drawH);
+  ch.drawings.forEach((d,i)=>{
+    const hov=(i===ch.hoveredIdx||ch.draggingDraw?.drawIdx===i);
+    if(d.type==='hray')drawHRay(ctx,ch,d,drawW,hov);
+    else if(d.type==='tline')drawTLine(ctx,ch,d,hov);
+    else if(d.type==='aray')drawAlertRay(ctx,ch,d,drawW,hov);
+    else if(d.type==='atline')drawAlertTLine(ctx,ch,d,hov);
+    else if(d.type==='brush')drawBrushStroke(ctx,ch,d,hov);
+    else if(d.type==='long'||d.type==='short')drawTradeRect(ctx,ch,d,hov);
+  });
   // Draw live preview of traderect/tline pendingP1
   if(ch.pendingP1&&(S.drawMode==='tline'||S.drawMode==='atline'||S.drawMode==='long'||S.drawMode==='short')){
-    ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
     const x1=timeToCoordX(ch,ch.pendingP1.time);
     const y1=ch.cs.priceToCoordinate(ch.pendingP1.price);
     if(x1!==null&&y1!==null){
@@ -2352,13 +2361,11 @@ function _rCanvasImmediate(ch){
         ctx.beginPath();ctx.fillStyle='#3b82f6';ctx.arc(x1,y1,3,0,Math.PI*2);ctx.fill();ctx.restore();
       }
     }
-    ctx.restore();
   }
-  if(ch.ruler){
-    ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
-    drawRuler(ctx,ch);
-    ctx.restore();
-  }
+  // EMA overlay (drawn on top of candles, below crosshair)
+  drawEMAs(ctx,ch,drawW,drawH);
+  if(ch.ruler)drawRuler(ctx,ch);
+  ctx.restore(); // end clip
   // Custom crosshair: всегда при X к свече; без Ctrl — Y свободно; с Ctrl — Y к O/H/L/C или к цене.
   if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
     drawCustomCrosshair(ctx,ch,drawW,H);
@@ -3275,14 +3282,11 @@ function onRulerMove(ch,e,container){
       if(fc===ch)return;
       if(!fc.lc||!fc.cs)return;
       fc.ruler={active:true,p1:{...ch.ruler.p1},p2:{...ch.ruler.p2},mouseX:e.clientX,mouseY:e.clientY,_mirror:true};
-      _drawRulerOnly(fc);
+      scheduleRulerRedraw(fc);
     });
   }
-  // Cheap path: redraw only the ruler polyline on top of a cached static layer.
-  // Avoids redrawing sessions/densities/drawings/EMAs on every mouse move (was causing ruler lag
-  // on mini charts).
-  _drawRulerOnly(ch);
-  // Throttle heavy tooltip updates (NATR/vol/trades recompute over candles)
+  scheduleRulerRedraw(ch);
+  // Tooltip (NATR/vol/trades) is heavier — throttle independently
   const now=performance.now();
   if(!ch._lastRulerTipTs||now-ch._lastRulerTipTs>50){
     ch._lastRulerTipTs=now;
@@ -3290,52 +3294,15 @@ function onRulerMove(ch,e,container){
   }
 }
 
-/** Offscreen canvas cache for static overlays (sessions/densities/drawings/EMAs).
- *  Used by _drawRulerOnly for fast ruler redraws without recomputing the whole overlay. */
-function _ensureBgCache(ch){
-  if(!ch._bgCache)ch._bgCache=document.createElement('canvas');
-  const cache=ch._bgCache;
-  if(cache.width!==ch.canvas.width||cache.height!==ch.canvas.height){
-    cache.width=ch.canvas.width;
-    cache.height=ch.canvas.height;
-  }
-  return cache;
-}
-function _invalidateBgCache(ch){
-  if(ch._bgCache){ch._bgCache.width=0;ch._bgCache.height=0;}
-}
-function _paintStaticOverlays(ctx,ch,W,H){
-  const drawW=Math.max(1,W-PRICE_AXIS_W);
-  const drawH=Math.max(1,H-TIME_AXIS_H);
-  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
-  drawSessionZones(ctx,ch,drawW,drawH);
-  if(S.showDensity)drawDensities(ctx,ch,drawW,drawH);
-  ch.drawings.forEach((d,i)=>{
-    const hov=(i===ch.hoveredIdx||ch.draggingDraw?.drawIdx===i);
-    if(d.type==='hray')drawHRay(ctx,ch,d,drawW,hov);
-    else if(d.type==='tline')drawTLine(ctx,ch,d,hov);
-    else if(d.type==='aray')drawAlertRay(ctx,ch,d,drawW,hov);
-    else if(d.type==='atline')drawAlertTLine(ctx,ch,d,hov);
-    else if(d.type==='brush')drawBrushStroke(ctx,ch,d,hov);
-    else if(d.type==='long'||d.type==='short')drawTradeRect(ctx,ch,d,hov);
+// rAF-throttled ruler redraw — caps redraws at the browser's frame rate even
+// when the mouse fires at 120Hz+. Each chart redraws at most once per frame.
+function scheduleRulerRedraw(ch){
+  if(ch._rulerRafPending)return;
+  ch._rulerRafPending=true;
+  requestAnimationFrame(()=>{
+    ch._rulerRafPending=false;
+    _rCanvasImmediate(ch);
   });
-  drawEMAs(ctx,ch,drawW,drawH);
-  ctx.restore();
-}
-
-/** Clear canvas, redraw cached static overlays (sessions/densities/drawings/EMAs), then ruler.
- *  Skips pending preview (only active during draw mode) and crosshair (drawn separately). */
-function _drawRulerOnly(ch){
-  const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs)return;
-  const W=canvas.width,H=canvas.height;
-  const ctx=canvas.getContext('2d');
-  ctx.clearRect(0,0,W,H);
-  const cache=_ensureBgCache(ch);
-  const cctx=cache.getContext('2d');
-  cctx.clearRect(0,0,W,H);
-  _paintStaticOverlays(cctx,ch,W,H);
-  ctx.drawImage(cache,0,0);
-  if(ch.ruler?.p1&&ch.ruler?.p2)drawRuler(ctx,ch);
 }
 function onRulerEnd(ch){
   if(!ch.ruler)return;
@@ -3474,21 +3441,9 @@ function renderQuickFindList(){
 function jumpToSymbol(sym,{openFs=false}={}){
   if(!sym)return;
   const rows=sortedRows();
-  let idx=rows.findIndex(r=>r.sym===sym);
+  const idx=rows.findIndex(r=>r.sym===sym);
   if(idx<0){
-    if(S.syms.includes(sym)){
-      // The quick-find popup already provides the visual selection; do not set S.q
-      // (it would mark every other row in the screener as search-hidden / inactive).
-      S.page=0;
-      closeQuickFind();
-      // Land the symbol on the first mini-chart slot for instant feedback
-      if(S.charts.length>0&&S.charts[0]?.sym!==sym){
-        void loadChart(0,sym);
-      }
-      renderTable();
-      if(openFs)openFullscreenBySym(sym);
-      return;
-    }
+    // Symbol not in current sort slice — drop the user back to a default page.
     closeQuickFind();
     return;
   }
