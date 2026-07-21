@@ -1498,37 +1498,15 @@ async function loadChart(slot,sym){
     if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
     return;
   }
-  // ch.lc existing → reuse the lightweight-charts instance, just clear data and refetch.
-  // This makes the grid "snap" to new coins on the same frame instead of cascading one-by-one.
-  const hasChart=!!ch.lc;
   ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
   ch._oiHist=[];ch._oiRaw=[];ch._oiLastFetchTs=0;
   ch.drawings=getSymDrawings(sym); // shared reference
   setText(`cs${slot}`,sym.replace(/USDT$/,''));
   setCoinIcon(`ci${slot}`,sym);
   const cb=document.getElementById(`cb${slot}`);
-  if(!hasChart){
-    if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
-    initLCChart(slot);
-    setSlotLoading(slot,true);
-  }else{
-    // Keep the chart instance alive; clear visible series so the previous symbol vanishes immediately.
-    setSlotLoading(slot,true,'Загрузка данных...');
-    if(ch.cs){
-      try{ch.cs.setData([]);}catch(e){}
-    }
-    if(ch.vs){
-      try{ch.vs.setData([]);}catch(e){}
-    }
-    if(ch.oiLine){try{ch.oiLine.setData([]);}catch(e){}}
-    if(ch.bbUpperLine){try{ch.bbUpperLine.setData([]);}catch(e){}}
-    if(ch.bbLowerLine){try{ch.bbLowerLine.setData([]);}catch(e){}}
-    // Invalidate range cache so applyDefaultChartView can re-fit once data lands
-    ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
-    // Force immediate redraw so the tile reflects the new symbol/header before data arrives
-    rCanvas(ch);
-    updateChartHeader(slot,sym);
-  }
+  if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
+  initLCChart(slot);
+  setSlotLoading(slot,true);
   const wm=document.getElementById(`wm${slot}`);if(wm)wm.textContent=sym.replace(/USDT$/,'');
   const cacheKey=`${S.tf}:${sym}`;
   const cached=S.histCache[cacheKey];
@@ -1546,14 +1524,19 @@ async function loadChart(slot,sym){
   }
   if(Array.isArray(cached)&&cached.length&&cached.length<MIN_CHART_CANDLES)delete S.histCache[cacheKey];
   try{
-    // One fetch per chart — keeps the grid under Binance's per-IP request budget.
-    const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
+    // Prefer parallel fetch of initial + next chunk so big charts fill faster.
+    const tfM=tfMs(S.tf);
+    const [raw1,raw2]=await Promise.all([
+      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`),
+      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${Date.now()-HIST_INITIAL*tfM}`)
+    ]);
     if(ch.sym!==sym)return;
-    ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+    const merged=mergeKlineChunks(parseKlines(raw1),parseKlines(raw2));
+    ch.candles=merged.slice(-HIST_CACHE_MAX);
     if(ch.candles.length<MIN_CHART_CANDLES){
-      const raw2=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
       if(ch.sym!==sym)return;
-      ch.candles=parseKlines(raw2).slice(-HIST_CACHE_MAX);
+      ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
     }
     if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[cacheKey]=ch.candles.slice();
     paintSlotData(slot);
@@ -4721,8 +4704,8 @@ let _lastChartSyncAt=0;
 function maybeSyncChartsToTopRows(rows){
   if(document.hidden||_anyChartPanning)return;
   if(!S.chartAutoSync)return;
-  // Meaningful whenever the screener is visible (including alphabetical sort)
-  if(!S.screenerVisible)return;
+  // Only meaningful when we're showing the screener and not sorting alphabetically.
+  if(!S.screenerVisible||S.sortAlpha)return;
   const now=Date.now();
   const minEvery=S.fastMode?600:1500;
   if(now-_lastChartSyncAt<minEvery)return;
@@ -4731,33 +4714,9 @@ function maybeSyncChartsToTopRows(rows){
   const start=S.page*S.charts.length;
   const pageSyms=rows.slice(start,start+S.charts.length).map(r=>r.sym);
   let changed=false;
-  // First pass: update ch.sym, headers and screener highlight immediately so the UI reflects
-  // the new sort order right away, even before candles are fetched.
   for(let i=0;i<S.charts.length;i++){
     const ns=pageSyms[i]||null;
-    if(S.charts[i].sym!==ns){
-      changed=true;
-      S.charts[i].sym=ns;
-      S.charts[i].drawings=ns?getSymDrawings(ns):[];
-      S.charts[i].candles=[];
-      S.charts[i]._histBootstrapDone=false;
-      S.charts[i]._lastAppliedRangeFrom=null;S.charts[i]._lastAppliedRangeTo=null;S.charts[i]._lastAppliedRo=null;
-      setText(`cs${i}`,ns?ns.replace(/USDT$/,''):'—');
-      const cb=document.getElementById(`cb${i}`);
-      if(cb)cb.innerHTML=ns
-        ?'<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>'
-        :`<div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
-      const wm=document.getElementById(`wm${i}`);if(wm)wm.textContent=ns?ns.replace(/USDT$/,''):'';
-    }
-  }
-  // Refresh table highlights immediately so red dots on chart-tied rows appear without waiting for data
-  if(changed){
-    if(typeof renderTable==='function')renderTable();
-  }
-  // Second pass: fire async data loads in parallel so all charts fetch simultaneously
-  for(let i=0;i<S.charts.length;i++){
-    const ns=pageSyms[i]||null;
-    if(ns)void loadChart(i,ns);
+    if(S.charts[i].sym!==ns){changed=true;loadChart(i,ns);}
   }
   if(changed)restartChartStreams(300);
 }
@@ -4796,9 +4755,6 @@ function doSort(id){
   buildScreenerHeader(document.getElementById('shdr'));
   if(document.getElementById('fsShdr'))buildScreenerHeader(document.getElementById('fsShdr'));
   updateCharts();renderTable();
-  // Sync mini-charts to the new order immediately (don't wait for the throttle)
-  _lastChartSyncAt=0;
-  maybeSyncChartsToTopRows(sortedRows());
 }
 
 function changePage(delta){
@@ -5020,48 +4976,20 @@ function updateCharts(){
   const start=S.page*S.charts.length;
   const pageSyms=rows.slice(start,start+S.charts.length).map(r=>r.sym);
   let changed=false;
-  // Synchronous snap: update ch.sym, drawings, headers, watermark, then redraw table
-  // so the screener highlights and chart-tile headers reflect the new order immediately.
+  const currentSyms=S.charts.map(c=>c.sym);
   for(let i=0;i<S.charts.length;i++){
     const ns=pageSyms[i]||null;
-    if(S.charts[i].sym===ns)continue;
-    changed=true;
-    S.charts[i].sym=ns;
-    S.charts[i].drawings=ns?getSymDrawings(ns):[];
-    S.charts[i].candles=[];
-    S.charts[i]._histBootstrapDone=false;
-    S.charts[i]._oiHist=[];S.charts[i]._oiRaw=[];S.charts[i]._oiLastFetchTs=0;
-    S.charts[i]._lastAppliedRangeFrom=null;S.charts[i]._lastAppliedRangeTo=null;S.charts[i]._lastAppliedRo=null;
-    setText(`cs${i}`,ns?ns.replace(/USDT$/,''):'—');
-    if(ns){setCoinIcon(`ci${i}`,ns);}
-    const cb=document.getElementById(`cb${i}`);
-    if(cb)cb.innerHTML=ns
-      ?'<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>'
-      :`<div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
-    const wm=document.getElementById(`wm${i}`);if(wm)wm.textContent=ns?ns.replace(/USDT$/,''):'';
-    if(S.charts[i].lc&&S.charts[i].cs){
-      try{S.charts[i].cs.setData([]);}catch(e){}
-      try{S.charts[i].vs&&S.charts[i].vs.setData([]);}catch(e){}
-    }
-    updateChartHeader(i,ns);
+    if(currentSyms[i]!==ns)changed=true;
   }
   if(changed){
-    // Redraw the table synchronously so the screener highlights follow the new order right away
-    renderTable();
     clearAllRulers();
-    // Stagger fetches so we don't burst 9 simultaneous requests at Binance
-    // (each loadChart already calls ONE klines request; the request queue in api.js
-    // also limits concurrency, but staggering avoids 429 rate-limits on first paint).
-    let delay=0;
-    for(let i=0;i<S.charts.length;i++){
-      const ns=pageSyms[i]||null;
-      if(ns){
-        const idx=i;
-        setTimeout(()=>{ void loadChart(idx,ns); }, delay);
-        delay+=120;
+    (async()=>{
+      for(let i=0;i<S.charts.length;i++){
+        const ns=pageSyms[i]||null;
+        if(S.charts[i].sym!==ns)await loadChart(i,ns);
       }
-    }
-    setTimeout(()=>restartChartStreams(600), delay+200);
+      restartChartStreams(600);
+    })();
   }
   updatePagination(rows.length);
   schedulePersistUserSettings();
