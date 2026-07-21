@@ -3440,17 +3440,44 @@ function renderQuickFindList(){
 }
 function jumpToSymbol(sym,{openFs=false}={}){
   if(!sym)return;
-  // Search across the full screener (not just the current page) — sortedRows()
-  // reflects the active sort so the symbol's true position is found.
+  // Try to find the symbol in the filtered/sorted list first (so the screener
+  // can land on the right page). If filters (volume/trades/group/preset) hide
+  // the symbol, fall back to opening it directly without touching the screener —
+  // the user explicitly chose it from the quick-find popup.
   const rows=sortedRows();
-  const idx=rows.findIndex(r=>r.sym===sym);
+  let idx=rows.findIndex(r=>r.sym===sym);
   if(idx<0){
-    closeQuickFind();
-    return;
+    // Look up the symbol in the raw screener so we can still navigate to its page
+    const raw=(S.mx[sym])?[S.mx[sym]]:S.syms.filter(s=>s===sym).map(s=>({sym:s}));
+    if(raw.length){
+      const allSyms=Object.values(S.mx);
+      if(allSyms.length){
+        // Recompute the row set with the SAME sort but WITHOUT filters/group/preset
+        // so we get the symbol's position under the active sort.
+        const sorted=[...allSyms];
+        const sortId=S.sortId,sortDir=S.sortDir,sortAlpha=S.sortAlpha,sortAbs=S.sortAbs;
+        sorted.sort((a,b)=>{
+          if(sortAlpha)return sortDir==='asc'?a.sym.localeCompare(b.sym):b.sym.localeCompare(a.sym);
+          const sortKey=sortId==='spv'?'spVol':sortId;
+          let va=a[sortKey],vb=b[sortKey];
+          if(sortAbs&&(sortId==='ch24'||sortId==='ch7d'||sortId==='cday'||sortId==='sp5'||sortId==='spv'||sortId==='oi1h'||sortId==='oi4h')){
+            va=va!=null&&!isNaN(va)?Math.abs(va):va;vb=vb!=null&&!isNaN(vb)?Math.abs(vb):vb;
+          }
+          if(va==null||isNaN(va))return 1;if(vb==null||isNaN(vb))return-1;
+          return sortDir==='desc'?vb-va:va-vb;
+        });
+        idx=sorted.findIndex(r=>r.sym===sym);
+      }
+    }
   }
-  S.page=Math.floor(idx/S.charts.length);
+  if(idx>=0)S.page=Math.floor(idx/S.charts.length);
   closeQuickFind();
-  updateCharts();renderTable();
+  if(idx>=0){
+    updateCharts();renderTable();
+  }else{
+    // Symbol not in screener at all — still honour the openFs request
+    renderTable();
+  }
   if(openFs)openFullscreenBySym(sym);
 }
 
