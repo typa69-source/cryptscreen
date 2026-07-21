@@ -4856,16 +4856,11 @@ function updateHeaderStreamStatus(){
     _setHeaderLiveDot('err');
     return;
   }
+  // Skip the "Подключение потока…" indicator — it was always showing on first paint
+  // and adding visual noise without telling the user anything actionable.
   const wantChart=S.charts.some(c=>c.sym);
   const scrConn=!!S.wsScreener;
   const chartConn=wantChart&&!!S.wsCharts;
-  const scrPending=scrConn&&!_lastScreenerWsMsgAt;
-  const chartPending=wantChart&&(!S.wsCharts||!_lastChartWsMsgAt);
-  if(scrPending||chartPending){
-    hs.textContent='Подключение потока…';
-    _setHeaderLiveDot('warn');
-    return;
-  }
   let worst=0;
   let any=false;
   if(scrConn&&_lastScreenerWsMsgAt){any=true;worst=Math.max(worst,now-_lastScreenerWsMsgAt);}

@@ -3,7 +3,17 @@
  * Registered from main.js with shared Binance helpers and app state S.
  */
 
-function gbsFmt(v, d = 2) {
+import {
+  baseSymbol,
+  escapeHtml,
+  pruneLocalStoragePrefix,
+  createKlineCache,
+  createMcapProvider,
+  selectUniverse,
+  passesMinVol,
+} from './grid-shared.js';
+
+export function gbsFmt(v, d = 2) {
   if (v == null || (typeof v === 'number' && !isFinite(v))) return 'N/A';
   return Number(v).toFixed(d);
 }
@@ -27,17 +37,17 @@ const GRID_INTRADAY_TIPS = {
   spr: 'Прокси спреда через (H−L)/Close последней 15m. Широкие бары — выше издержки/шум для сетки.',
 };
 
-function bandFromScore(score) {
+export function bandFromScore(score) {
   if (score >= 11) return 'green';
   if (score >= 7) return 'yellow';
   return 'red';
 }
 
-function trueRangeBar(h, l, prevC) {
+export function trueRangeBar(h, l, prevC) {
   return Math.max(h - l, Math.abs(h - prevC), Math.abs(l - prevC));
 }
 
-function wilderRmaSeries(arr, period) {
+export function wilderRmaSeries(arr, period) {
   if (!arr || arr.length < period) return null;
   const out = [];
   let s = 0;
@@ -94,7 +104,7 @@ function calcADXWilder(kl, period = 14) {
   return { adx, plusDI, minusDI };
 }
 
-function calcChoppiness(kl, n = 14) {
+export function calcChoppiness(kl, n = 14) {
   if (!kl || kl.length < n + 1) return null;
   const slice = kl.slice(-(n + 1));
   let sumTR = 0;
@@ -108,7 +118,7 @@ function calcChoppiness(kl, n = 14) {
   return (100 * Math.log10(ratio)) / Math.log10(n);
 }
 
-function hurstExponentRS(closes) {
+export function hurstExponentRS(closes) {
   const x = closes.filter((c) => isFinite(c) && c > 0);
   if (x.length < 60) return null;
   const lens = [10, 12, 15, 20, 25, 30, 40].filter((L) => L * 3 <= x.length);
@@ -149,7 +159,7 @@ function hurstExponentRS(closes) {
   return num / den;
 }
 
-function countMa20Crossings30(last30) {
+export function countMa20Crossings30(last30) {
   if (!last30 || last30.length < 30) return null;
   const c = last30.map((k) => +k.c);
   let x = 0;
@@ -165,7 +175,7 @@ function countMa20Crossings30(last30) {
   return x;
 }
 
-function percentileCloses(closes, p) {
+export function percentileCloses(closes, p) {
   const s = closes.filter((x) => isFinite(x)).slice().sort((a, b) => a - b);
   if (!s.length) return null;
   const idx = (s.length - 1) * (p / 100);
@@ -224,38 +234,6 @@ function scoreSwingRcov(rc) {
   return { pts: 0, label: gbsFmt(rc, 2) + '%' };
 }
 
-let _cgMcapMap = null;
-let _cgMcapAt = 0;
-
-async function ensureCgMcapMap(fj, backendBase) {
-  if (_cgMcapMap && Date.now() - _cgMcapAt < 3600000) return _cgMcapMap;
-  const map = new Map();
-  for (let page = 1; page <= 3; page++) {
-    try {
-      const url = backendBase
-        ? `${backendBase.replace(/\/$/, '')}/api/proxy/coingecko/markets?page=${page}`
-        : `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}`;
-      const rows = await fj(url, 20000, 1);
-      if (!Array.isArray(rows)) break;
-      for (const row of rows) {
-        const sym = String(row.symbol || '').toUpperCase();
-        if (sym && row.market_cap && !map.has(sym)) map.set(sym, row.market_cap);
-      }
-      await new Promise((r) => setTimeout(r, 1100));
-    } catch {
-      // Market cap is an optional enhancement. If it fails, continue with what we have.
-      break;
-    }
-  }
-  _cgMcapMap = map;
-  _cgMcapAt = Date.now();
-  return map;
-}
-
-function baseSymbol(sym) {
-  return sym.replace(/USDT$/i, '').toUpperCase();
-}
-
 export function registerGridBotScreeners(deps) {
   const {
     S,
@@ -273,68 +251,18 @@ export function registerGridBotScreeners(deps) {
   } = deps;
 
   // ─── Lightweight caches (avoid re-fetch on reopen) ─────────────
-  const KLINE_CACHE_TTL_MS = 2 * 60 * 1000;
-  const _klineCache = new Map(); // key -> { ts, bySym: Map(sym -> klines[]) }
-
-  function _klineKey(iv, lim) {
-    return `${iv}:${lim}`;
-  }
-
-  async function batchKlinesCached(syms, iv, lim, pFrom, pTo, bs = 10) {
-    const key = _klineKey(iv, lim);
-    const now = Date.now();
-    const cached = _klineCache.get(key);
-    const bySym = cached && now - cached.ts < KLINE_CACHE_TTL_MS ? cached.bySym : new Map();
-
-    const missing = [];
-    for (const s of syms) if (!bySym.has(s)) missing.push(s);
-
-    if (missing.length) {
-      const fresh = await batchKlines(missing, iv, lim, pFrom, pTo, bs);
-      for (const [sym, kl] of Object.entries(fresh || {})) bySym.set(sym, kl);
-      _klineCache.set(key, { ts: now, bySym });
-    }
-
-    const out = {};
-    for (const s of syms) if (bySym.has(s)) out[s] = bySym.get(s);
-    return out;
-  }
+  const klineCache = createKlineCache(batchKlines, 2 * 60 * 1000);
+  const getMcapMap = createMcapProvider(fj, BACKEND);
 
   function vol24For(sym) {
     return S.mx[sym]?.vol24 ?? S.tk[sym]?.qv ?? null;
   }
 
-  function selectUniverse(allSyms, maxN) {
-    const max = Math.max(20, Math.min(400, maxN | 0));
-    const withVol = allSyms
-      .map((sym) => ({ sym, v: vol24For(sym) }))
-      .filter((x) => x.v != null && isFinite(x.v) && x.v > 0)
-      .sort((a, b) => b.v - a.v)
-      .slice(0, max)
-      .map((x) => x.sym);
-    if (withVol.length >= 20) return withVol;
-    // Fallback: if volumes not ready yet, just cap raw list.
-    return allSyms.slice(0, max);
+  function selectU(allSyms, maxN){
+    return selectUniverse(allSyms, vol24For, maxN);
   }
-
-  function passesVol(sym) {
-    const v = vol24For(sym);
-    if ((S.minVol | 0) <= 0) return true;
-    return v != null && v >= S.minVol * 1e6;
-  }
-
-  function pruneLocalStoragePrefix(prefix, maxKeep) {
-    const keys = Object.keys(localStorage)
-      .filter((k) => k.startsWith(prefix))
-      .sort()
-      .reverse();
-    for (let i = maxKeep; i < keys.length; i++) {
-      try {
-        localStorage.removeItem(keys[i]);
-      } catch {
-        /* ignore */
-      }
-    }
+  function passesVol(sym){
+    return passesMinVol(sym, vol24For, S.minVol);
   }
 
   function computeSwingRow(sym, d1, j4h, mcapMap) {
@@ -431,7 +359,7 @@ export function registerGridBotScreeners(deps) {
     if (ui.renderMeta) ui.renderMeta();
     const base = S.syms.filter(passesVol);
     // Important: without a volume filter S.syms is huge → Binance rate limits → empty results.
-    const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 140);
+    const syms = selectU(base, (S.minVol | 0) > 0 ? 260 : 140);
     ui.diag = `universe ${syms.length}/${base.length || 0}`;
     if (!syms.length) {
       ui.lastRows = [];
@@ -444,15 +372,15 @@ export function registerGridBotScreeners(deps) {
     try {
       ui.diag = ui.diag ? ui.diag + ' · mcap…' : 'mcap…';
       if (ui.renderMeta) ui.renderMeta();
-      const mcapMap = await ensureCgMcapMap(fj, BACKEND);
+      const mcapMap = await getMcapMap();
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1…`;
       if (ui.renderMeta) ui.renderMeta();
-      const d1 = await batchKlinesCached(syms, '1d', 100, null, null, 10);
+      const d1 = await klineCache.batchCached(syms, '1d', 100, null, null, 10);
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h…`;
       if (ui.renderMeta) ui.renderMeta();
-      const j4h = await batchKlinesCached(syms, '4h', 14, null, null, 10);
+      const j4h = await klineCache.batchCached(syms, '4h', 14, null, null, 10);
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
       const rows = [];
@@ -757,6 +685,10 @@ export function registerGridBotScreeners(deps) {
 
     ui.renderMeta = renderMeta;
     ui.applyFiltersAndRender = applyFiltersAndRender;
+    // Cancel any stale interval before starting a new one. Without this, reopening
+    // the modal after a previous open → close cycle leaks timers (cachedUi keeps
+    // the same ui object across openings, so the old interval is never cleared).
+    if (ui.timer) { clearInterval(ui.timer); ui.timer = null; }
     ui.timer = setInterval(() => runSwingScan(ui), 300000);
     // If we already have results, show them immediately; update in background.
     if (ui.lastRows?.length) ui.applyFiltersAndRender();
@@ -795,7 +727,7 @@ export function registerGridBotScreeners(deps) {
       /* ignore */
     }
     const base = S.syms.filter(passesVol);
-    const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 140);
+    const syms = selectU(base, (S.minVol | 0) > 0 ? 260 : 140);
     ui.diag = `universe ${syms.length}/${base.length || 0}`;
     if (!syms.length) {
       ui.lastRows = [];
@@ -811,13 +743,13 @@ export function registerGridBotScreeners(deps) {
     try {
       ui.diag += ' · mcap…';
       if (ui.renderMeta) ui.renderMeta();
-      const mcapMap = await ensureCgMcapMap(fj, BACKEND);
+      const mcapMap = await getMcapMap();
       ui.diag = `universe ${syms.length} · mcap ${mcapMap?.size || 0} · d1…`;
       if (ui.renderMeta) ui.renderMeta();
-      const d1 = await batchKlinesCached(syms, '1d', 100, null, null, 10);
+      const d1 = await klineCache.batchCached(syms, '1d', 100, null, null, 10);
       ui.diag += ' · 4h…';
       if (ui.renderMeta) ui.renderMeta();
-      const j4h = await batchKlinesCached(syms, '4h', 14, null, null, 10);
+      const j4h = await klineCache.batchCached(syms, '4h', 14, null, null, 10);
       ui.diag = `universe ${syms.length} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
       const rows = [];
       for (const sym of syms) {
@@ -1213,7 +1145,7 @@ export function registerGridBotScreeners(deps) {
     const sk = root.querySelector('#gbsIntBusy');
     if (sk) sk.style.display = '';
     const base = S.syms.filter(passesVol);
-    const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 160);
+    const syms = selectU(base, (S.minVol | 0) > 0 ? 260 : 160);
     ui.diag = `universe ${syms.length}/${base.length || 0}`;
     if (!syms.length) {
       ui.ready = [];
@@ -1221,14 +1153,14 @@ export function registerGridBotScreeners(deps) {
       ui.error = 'Нет символов для скана (проверь фильтр объёма / загрузку списка).';
     } else {
       try {
-        const d1 = await batchKlinesCached(syms, '1d', 16, null, null, 10);
-        const h1 = await batchKlinesCached(syms, '1h', 48, null, null, 10);
+        const d1 = await klineCache.batchCached(syms, '1d', 16, null, null, 10);
+        const h1 = await klineCache.batchCached(syms, '1h', 48, null, null, 10);
         ui.diag = `universe ${syms.length}/${base.length || 0} · d1 ${Object.keys(d1 || {}).length} · 1h ${Object.keys(h1 || {}).length}`;
         const st1Map = {};
         for (const sym of syms) st1Map[sym] = computeStage1(sym, null, h1, d1);
         const passSyms = syms.filter((s) => st1Map[s].pass);
         let m15 = {};
-        if (passSyms.length) m15 = await batchKlinesCached(passSyms, '15m', 200, null, null, 10);
+        if (passSyms.length) m15 = await klineCache.batchCached(passSyms, '15m', 200, null, null, 10);
         ui.diag += ` · s1 ${passSyms.length} · 15m ${Object.keys(m15 || {}).length}`;
         if (!passSyms.length) {
           ui.ready = [];
@@ -1601,6 +1533,10 @@ export function registerGridBotScreeners(deps) {
     };
 
     ui.applyFiltersAndRender = applyFiltersAndRender;
+    // Cancel any stale intervals before starting new ones — ui may be a cached
+    // object from a previous modal open (see window[cacheKey] in openGridIntradayScreener).
+    if (ui.timer)   { clearInterval(ui.timer);   ui.timer = null; }
+    if (ui.cdTimer) { clearInterval(ui.cdTimer); ui.cdTimer = null; }
     ui.timer = setInterval(() => runIntradayScan(ui), 30000);
     ui.cdTimer = setInterval(() => {
       ui.cdLeft = Math.max(0, ui.cdLeft - 1);

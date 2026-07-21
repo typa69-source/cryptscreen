@@ -1,10 +1,12 @@
 {
   "name": "cryptscreen-frontend",
   "version": "1.0.0",
+  "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test test/"
   },
   "devDependencies": {
     "vite": "^5.2.0",
