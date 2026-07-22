@@ -582,7 +582,7 @@ export function registerGridSmartScreener(deps) {
     const modal = document.createElement('div');
     modal.id = 'gridSmartModal';
     modal.style.cssText =
-      'position:fixed;inset:0;z-index:823;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;';
+      'position:fixed;inset:0;z-index:818;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;';
 
     const box = document.createElement('div');
     box.style.cssText =

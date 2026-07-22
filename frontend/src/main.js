@@ -8171,6 +8171,8 @@ function openGridLabFromRow(row, source, closeSelf){
     upper: payload.upper,
   };
   if(payload.levels != null) prefs.symbolBounds[payload.sym].gridLevels = payload.levels;
+  // Also push levels into global — that's where the form input reads them from.
+  if(payload.levels != null) prefs.global = { ...(prefs.global || {}), levels: payload.levels };
   // Apply direction from Smart screener → gridMode (LONG/SHORT/NEUTRAL).
   if(payload.direction === 'LONG' || payload.direction === 'SHORT' || payload.direction === 'NEUTRAL'){
     prefs.global = { ...(prefs.global || {}), gridMode: payload.direction.toLowerCase() };
