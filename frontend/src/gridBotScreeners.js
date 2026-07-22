@@ -582,7 +582,7 @@ export function registerGridBotScreeners(deps) {
         const h4Txt = r.h4ch != null ? fn(r.h4ch, 2) : '—';
         const adxTxt = r.raw.adx != null ? fn(r.raw.adx, 1) : '—';
         tr.innerHTML = `
-          <td><b style="cursor:pointer;color:#7dd3fc" class="gbs-open">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="margin-left:4px;cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px">📊</button></td>
+          <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b style="cursor:pointer;color:#7dd3fc" class="gbs-open">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">📊</button></div></td>
           <td class="${escapeHtml(ch24Class)}">${escapeHtml(ch24Txt)}%</td>
           <td>${escapeHtml(h4Txt)}%</td>
           <td><span style="background:${escapeHtml(badge)};color:#0a0a0b;padding:2px 6px;border-radius:4px;font-weight:700">${escapeHtml(r.score)}</span></td>
@@ -605,7 +605,11 @@ export function registerGridBotScreeners(deps) {
           e.stopPropagation();
           const tr = el.closest('tr');
           const r = rows.find((x) => x.sym === tr.dataset.sym);
-          if (r && typeof openGridLabFromRow === 'function') openGridLabFromRow(r, 'swing');
+          if (r && typeof openGridLabFromRow === 'function') {
+            // Stop the refresh loop first, then close this screener so only Grid Lab remains.
+            if (ui.timer) { clearInterval(ui.timer); ui.timer = null; }
+            openGridLabFromRow(r, 'swing', () => modal.remove());
+          }
         };
       });
       renderMeta();
@@ -883,7 +887,7 @@ export function registerGridBotScreeners(deps) {
       const ch24Class = (r.ch24 ?? 0) >= 0 ? 'p' : 'n';
       const ch24Txt = r.ch24 != null ? fn(r.ch24, 2) : '—';
       return `<tr data-sym="${escapeHtml(r.sym)}">
-        <td><b class="gbs-pick-open" style="cursor:pointer;color:#7dd3fc">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="margin-left:4px;cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px">📊</button></td>
+        <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b class="gbs-pick-open" style="cursor:pointer;color:#7dd3fc">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">📊</button></div></td>
         <td class="${escapeHtml(ch24Class)}">${escapeHtml(ch24Txt)}%</td>
         <td><span style="background:${escapeHtml(badge)};color:#0a0c0b;padding:2px 6px;border-radius:4px;font-weight:700">${escapeHtml(r.score)}</span></td>
         <td style="font-size:9px">${escapeHtml(gl)}</td>
@@ -918,7 +922,9 @@ export function registerGridBotScreeners(deps) {
           e.stopPropagation();
           const tr = el.closest('tr');
           const r = list.find((x) => x.sym === tr.dataset.sym);
-          if (r && typeof openGridLabFromRow === 'function') openGridLabFromRow(r, 'pick');
+          if (r && typeof openGridLabFromRow === 'function') {
+            openGridLabFromRow(r, 'pick', () => modal.remove());
+          }
         };
       });
     }
@@ -1410,7 +1416,7 @@ export function registerGridBotScreeners(deps) {
                 ? `${fmtPrice(g.gLo)} … ${fmtPrice(g.gHi)} · шаг ${fmtPrice(g.stepAbs)} (${fn(g.stepPct, 2)}%) · ~${g.nLev} ур.`
                 : '—';
             return `<tr data-sym="${r.sym}">
-            <td><b class="gbs-open" style="cursor:pointer;color:#7dd3fc">${r.sym.replace(/USDT$/, '')}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="margin-left:4px;cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px">📊</button></td>
+            <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b class="gbs-open" style="cursor:pointer;color:#7dd3fc">${r.sym.replace(/USDT$/, '')}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">📊</button></div></td>
             <td class="${(r.ch24 ?? 0) >= 0 ? 'p' : 'n'}">${r.ch24 != null ? fn(r.ch24, 2) : '—'}%</td>
             <td>${r.st1.volRatio != null ? fn(r.st1.volRatio, 2) + '×' : '—'}</td>
             <td><span style="background:#166534;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px">S1✓</span></td>
@@ -1436,7 +1442,11 @@ export function registerGridBotScreeners(deps) {
             e.stopPropagation();
             const tr = el.closest('tr');
             const r = rows.find((x) => x.sym === tr.dataset.sym);
-            if (r && typeof openGridLabFromRow === 'function') openGridLabFromRow(r, 'intra');
+            if (r && typeof openGridLabFromRow === 'function') {
+              if (ui.timer) { clearInterval(ui.timer); ui.timer = null; }
+              if (ui.cdTimer) { clearInterval(ui.cdTimer); ui.cdTimer = null; }
+              openGridLabFromRow(r, 'intra', () => modal.remove());
+            }
           };
         });
         }

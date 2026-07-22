@@ -8003,7 +8003,7 @@ function scheduleGridLabSync(body,gbPrefs,opt={}){
   body._gridLabUiTimer=setTimeout(()=>{void runGridLabSync(body,gbPrefs,opt);},opt.immediate?0:95);
 }
 
-function renderGridLabModal(){
+function renderGridLabModal(defSymOpt){
   const old=document.getElementById('gridLabModal');if(old)old.remove();
   const modal=document.createElement('div');
   modal.id='gridLabModal';
@@ -8056,7 +8056,7 @@ function renderGridLabModal(){
         </div>`;
       return;
     }
-    const defSym=(S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
+    const defSym = defSymOpt || (S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
     const sb=(gbPrefs.symbolBounds&&gbPrefs.symbolBounds[defSym])||{};
     body.innerHTML=`
       <div style="display:flex;flex-direction:column;gap:8px;min-height:min(72vh,720px)">
@@ -8156,7 +8156,7 @@ function toggleGridLab(){
  * Open Grid Lab with a pre-filled payload from a screener row.
  * Does NOT close the calling screener modal — Grid Lab opens on top (z 820 vs 825).
  */
-function openGridLabFromRow(row, source){
+function openGridLabFromRow(row, source, closeSelf){
   const payload = buildGridLabPayload(row, source);
   if(!payload || !payload.sym) return;
   const prefs = loadGridLabPrefs();
@@ -8173,12 +8173,17 @@ function openGridLabFromRow(row, source){
   // Also push the suggested TF into globals so the modal opens on the right timeframe.
   if(payload.tf) prefs.global = { ...(prefs.global || {}), tf: payload.tf };
   saveGridLabPrefs(prefs);
+  // Close the calling screener modal (so we don't have two stacked modals).
+  if(typeof closeSelf === 'function'){
+    try { closeSelf(); } catch(e) { /* ignore */ }
+  }
   // If Grid Lab is already open, just refresh its inputs (cheap sync) instead of stacking.
   const existingModal = document.getElementById('gridLabModal');
   if(existingModal){
     existingModal.remove();
   }
-  renderGridLabModal();
+  // Pass payload.sym so the form opens on the right symbol and pulls the suggested bounds.
+  renderGridLabModal(payload.sym);
 }
 
 function setBrushColor(col,el){
