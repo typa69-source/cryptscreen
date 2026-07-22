@@ -1,5 +1,6 @@
 import './style.css'
 import { registerGridBotScreeners, buildGridLabPayload } from './gridBotScreeners.js'
+import { registerGridSmartScreener } from './gridSmart.js'
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
@@ -8227,6 +8228,21 @@ registerGridBotScreeners({
   calcATR,
   GROUP_COLORS,
   calcAll,
+  tagScreenerGroup: (sym, g) => {
+    if (sym && g > 0) setSymGroup(sym, g);
+  },
+});
+
+registerGridSmartScreener({
+  S,
+  BACKEND,
+  fj,
+  batchKlines,
+  fn,
+  fmtPrice,
+  openFullscreenBySym,
+  openGridLabFromRow,
+  GROUP_COLORS,
   tagScreenerGroup: (sym, g) => {
     if (sym && g > 0) setSymGroup(sym, g);
   },

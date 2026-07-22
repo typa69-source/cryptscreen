@@ -25,14 +25,29 @@ import {
  */
 export function buildGridLabPayload(row, source){
   if(!row || !row.sym) return null;
-  // Swing & Pick store bounds directly on the row; Intraday nests them in `row.grid`.
-  const lo = (source === 'intra') ? row?.grid?.gLo : row?.gridLo;
-  const hi = (source === 'intra') ? row?.grid?.gHi : row?.gridHi;
-  const stepAbs = (source === 'intra') ? row?.grid?.stepAbs : row?.stepAbs;
-  const stepPct = (source === 'intra') ? row?.grid?.stepPct : row?.stepPct;
-  const levels  = (source === 'intra') ? row?.grid?.nLev : null;
-  // Default TF by screener: Swing = 15m, Intraday/Pick = 5m.
-  const tf = (source === 'swing') ? '15m' : '5m';
+  let lo, hi, stepAbs, stepPct, levels;
+  if (source === 'intra') {
+    lo = row?.grid?.gLo;
+    hi = row?.grid?.gHi;
+    stepAbs = row?.grid?.stepAbs;
+    stepPct = row?.grid?.stepPct;
+    levels = row?.grid?.nLev;
+  } else if (source === 'smart') {
+    lo = row?.gridBounds?.lower;
+    hi = row?.gridBounds?.upper;
+    stepAbs = row?.gridBounds?.step;
+    stepPct = null;
+    levels = row?.gridBounds?.levels;
+  } else {
+    // Swing & Pick store bounds directly on the row.
+    lo = row?.gridLo;
+    hi = row?.gridHi;
+    stepAbs = row?.stepAbs;
+    stepPct = row?.stepPct;
+    levels = null;
+  }
+  // Default TF by screener: Swing/Smart = 15m, Intraday/Pick = 5m.
+  const tf = (source === 'swing' || source === 'smart') ? '15m' : '5m';
   return {
     sym: row.sym,
     tf,
