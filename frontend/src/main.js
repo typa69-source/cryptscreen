@@ -8171,10 +8171,15 @@ function openGridLabFromRow(row, source, closeSelf){
     upper: payload.upper,
   };
   if(payload.levels != null) prefs.symbolBounds[payload.sym].gridLevels = payload.levels;
+  // Apply direction from Smart screener → gridMode (LONG/SHORT/NEUTRAL).
+  if(payload.direction === 'LONG' || payload.direction === 'SHORT' || payload.direction === 'NEUTRAL'){
+    prefs.global = { ...(prefs.global || {}), gridMode: payload.direction.toLowerCase() };
+  }
   // Also push the suggested TF into globals so the modal opens on the right timeframe.
   if(payload.tf) prefs.global = { ...(prefs.global || {}), tf: payload.tf };
   saveGridLabPrefs(prefs);
-  // Close the calling screener modal (so we don't have two stacked modals).
+  // Close the calling screener modal ONLY if requested (Swing/Intra/Pick close themselves,
+  // Smart stays open so the user can compare several rows back-to-back).
   if(typeof closeSelf === 'function'){
     try { closeSelf(); } catch(e) { /* ignore */ }
   }

@@ -115,3 +115,57 @@ test('buildGridLabPayload: source defaults bounds-source when ambiguous', () => 
   assert.equal(buildGridLabPayload(row, 'swing').levels, null);
   assert.equal(buildGridLabPayload(row, 'intra').levels, 12);
 });
+
+// ── Smart source: bounds in row.gridBounds, direction carried through ──
+test('buildGridLabPayload: smart row → reads from gridBounds, includes direction', () => {
+  const smartRow = {
+    sym: 'BTCUSDT',
+    score: 12,
+    gridBounds: { lower: 60000, upper: 70000, step: 250, levels: 18 },
+    direction: 'LONG',
+  };
+  const p = buildGridLabPayload(smartRow, 'smart');
+  assert.equal(p.sym, 'BTCUSDT');
+  assert.equal(p.tf, '15m');
+  assert.equal(p.lower, 60000);
+  assert.equal(p.upper, 70000);
+  assert.equal(p.stepAbs, 250);
+  assert.equal(p.levels, 18);
+  assert.equal(p.direction, 'LONG');
+  assert.equal(p.source, 'smart');
+});
+
+test('buildGridLabPayload: smart SHORT direction', () => {
+  const p = buildGridLabPayload({
+    sym: 'XRPUSDT',
+    score: 10,
+    gridBounds: { lower: 0.4, upper: 0.6, step: 0.005, levels: 16 },
+    direction: 'SHORT',
+  }, 'smart');
+  assert.equal(p.direction, 'SHORT');
+});
+
+test('buildGridLabPayload: smart NEUTRAL direction', () => {
+  const p = buildGridLabPayload({
+    sym: 'ETHUSDT',
+    score: 9,
+    gridBounds: { lower: 3000, upper: 3500, step: 10, levels: 20 },
+    direction: 'NEUTRAL',
+  }, 'smart');
+  assert.equal(p.direction, 'NEUTRAL');
+});
+
+test('buildGridLabPayload: smart without direction → null', () => {
+  const p = buildGridLabPayload({
+    sym: 'ADAUSDT',
+    score: 8,
+    gridBounds: { lower: 0.3, upper: 0.4, step: 0.001, levels: 12 },
+  }, 'smart');
+  assert.equal(p.direction, null);
+});
+
+test('buildGridLabPayload: non-smart sources ignore direction', () => {
+  const row = { sym: 'BTCUSDT', score: 5, gridLo: 1, gridHi: 2, direction: 'LONG' };
+  assert.equal(buildGridLabPayload(row, 'swing').direction, null);
+  assert.equal(buildGridLabPayload(row, 'pick').direction, null);
+});

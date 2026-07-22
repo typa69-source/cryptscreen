@@ -15,6 +15,7 @@ import {
   scoreSmart,
   classifyDirection,
   ouGridBounds,
+  optimalLevelsForHalfLife,
   computeSmartRow,
 } from '../src/gridSmart.js';
 
@@ -336,12 +337,54 @@ test('ouGridBounds: μ centred between lower and upper', () => {
   assert.ok(mid > 0);
 });
 
-test('ouGridBounds: levels ∈ [8, 30]', () => {
+test('ouGridBounds: levels ∈ [8, 24]', () => {
   const closes = mrSeries(-0.04, 250, 100);
   const kl = klinesFromCloses(closes);
   const gb = ouGridBounds(closes, kl);
   assert.ok(gb != null);
-  assert.ok(gb.levels >= 8 && gb.levels <= 30);
+  assert.ok(gb.levels >= 8 && gb.levels <= 24);
+});
+
+test('ouGridBounds: short half-life → more levels', () => {
+  // AR(1) with phi=0.85 → half-life ≈ ln(2)/−ln(0.85) ≈ 4.3 bars
+  const closesShort = mrSeries(0.85, 250, 100);
+  const kl = klinesFromCloses(closesShort);
+  const gb = ouGridBounds(closesShort, kl);
+  assert.ok(gb != null);
+  assert.ok(gb.levels >= 16, `short HL should give many levels, got ${gb.levels}`);
+});
+
+test('ouGridBounds: optimalLevelsForHalfLife — boundary values', () => {
+  // Empirical boundaries
+  assert.equal(optimalLevelsForHalfLife(5), 24);     // HL ≤ 10 → 24
+  assert.equal(optimalLevelsForHalfLife(10), 24);
+  assert.equal(optimalLevelsForHalfLife(100), 8);    // HL ≥ 100 → 8
+  assert.equal(optimalLevelsForHalfLife(200), 8);
+  assert.equal(optimalLevelsForHalfLife(55), 16);    // HL=55 → mid range (24 - 45*16/90 = 16)
+  // Null/garbage
+  assert.equal(optimalLevelsForHalfLife(0), 12);
+  assert.equal(optimalLevelsForHalfLife(NaN), 12);
+  assert.equal(optimalLevelsForHalfLife(-5), 12);
+});
+
+test('ouGridBounds: optimalLevelsForHalfLife is monotonic', () => {
+  // As HL increases, levels should decrease (or stay equal)
+  let prev = Infinity;
+  for (let hl = 5; hl <= 200; hl += 10) {
+    const n = optimalLevelsForHalfLife(hl);
+    assert.ok(n <= prev, `expected non-increasing at HL=${hl}: ${n} > ${prev}`);
+    prev = n;
+  }
+});
+
+test('ouGridBounds: null half-life (trending) → 12 levels fallback', () => {
+  // For pure trend (no HL), bounds still returned with levels=12
+  const closes = trendSeries(300);
+  const kl = klinesFromCloses(closes);
+  const gb = ouGridBounds(closes, kl);
+  assert.ok(gb != null);
+  // Should fall back to 12 since hl is null
+  assert.equal(gb.levels, 12);
 });
 
 test('ouGridBounds: too few bars → null', () => {

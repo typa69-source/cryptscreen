@@ -325,18 +325,21 @@ export function scoreSmart(klines, mcapMap, sym, vol24For) {
   } else {
     mrComponents.hurst = { pts: 0, label: 'N/A' };
   }
+  mrComponents.hurst.tip = 'Hurst ∈ [0.30, 0.50] → цена возвращается к средней (mean-reverting). <0.30 — слишком шумно, >0.50 — тренд.';
   if (vr != null) {
     if (vr < 0.7) { mr += 2; mrComponents.vr = { pts: 2, label: vr.toFixed(3) }; }
     else { mrComponents.vr = { pts: 0, label: vr.toFixed(3) }; }
   } else {
     mrComponents.vr = { pts: 0, label: 'N/A' };
   }
+  mrComponents.vr.tip = 'Variance Ratio (Lo-MacKinlay): VR<1 — возвращается, VR>1 — тренд. Идеал <0.7.';
   if (hl != null) {
     if (hl >= 10 && hl <= 50) { mr += 1; mrComponents.halfLife = { pts: 1, label: hl.toFixed(1) + ' bars' }; }
     else { mrComponents.halfLife = { pts: 0, label: hl.toFixed(1) + ' bars' }; }
   } else {
     mrComponents.halfLife = { pts: 0, label: 'N/A (trending)' };
   }
+  mrComponents.halfLife.tip = 'OU half-life — за сколько бар цена возвращается к средней наполовину. Идеал 10–50 бар. >200 — слишком медленно для сетки.';
 
   // ── Grid fitness (max 5) ───────────────────────────────────
   let fit = 0;
@@ -348,6 +351,7 @@ export function scoreSmart(klines, mcapMap, sym, vol24For) {
   } else {
     fitComponents.gkVol = { pts: 0, label: 'N/A' };
   }
+  fitComponents.gkVol.tip = 'Garman-Klass волатильность (% от цены за бар). Идеал 1–5%: тише — мало заработок, громче — сетку выбивает.';
   const vol24 = vol24For(sym);
   const mcap = mcapMap ? mcapMap.get(baseSymbol(sym)) : undefined;
   if (vol24 != null && mcap != null && mcap > 0) {
@@ -357,6 +361,7 @@ export function scoreSmart(klines, mcapMap, sym, vol24For) {
   } else {
     fitComponents.volMcap = { pts: 0, label: 'N/A' };
   }
+  fitComponents.volMcap.tip = 'Объём 24ч / капитализация: оборот относительно размера. >0.05 — высокий оборот, сетка ликвидна.';
   // Spread proxy: (H-L)/C on the last bar
   const last = klines[klines.length - 1];
   if (last && +last.c > 0 && +last.h >= +last.l) {
@@ -366,6 +371,7 @@ export function scoreSmart(klines, mcapMap, sym, vol24For) {
   } else {
     fitComponents.spread = { pts: 0, label: 'N/A' };
   }
+  fitComponents.spread.tip = '(H−L)/C последнего бара — прокси спреда/внутрибарного шума. <2% — сетка попадает в спред без потерь.';
 
   // ── Directional confidence (max 3) ─────────────────────────
   let dir = 0;
@@ -378,12 +384,14 @@ export function scoreSmart(klines, mcapMap, sym, vol24For) {
   } else {
     dirComponents.adfSlope = { pts: 0, label: `ADF γ=${adf?.gamma?.toFixed(3) ?? 'N/A'}, slope=${slope?.toFixed(2) ?? 'N/A'}` };
   }
+  dirComponents.adfSlope.tip = 'ADF (стационарность) и slope (наклон) согласны по знаку → направление подтверждено двумя независимыми тестами.';
   if (hurst != null && hurst > 0.55 && slopeSign !== 0) {
     dir += 1;
     dirComponents.hurstTrend = { pts: 1, label: `H=${hurst.toFixed(3)}>0.55, slope≠0` };
   } else {
     dirComponents.hurstTrend = { pts: 0, label: hurst != null ? `H=${hurst.toFixed(3)}` : 'N/A' };
   }
+  dirComponents.hurstTrend.tip = 'Hurst > 0.55 + ненулевой slope → есть трендовая составляющая, направление подкреплено инерцией.';
 
   const total = mr + fit + dir;
   const band = total >= 10 ? 'green' : total >= 7 ? 'yellow' : 'red';
@@ -437,33 +445,57 @@ export function classifyDirection(row, universeScores) {
 }
 
 /** OU-derived grid bounds. Returns null if half-life can't be computed
- *  (trending series → user should use Pick/Swing for those). */
+ *  (trending series → user should use Pick/Swing for those).
+ *
+ *  Levels: adaptive count based on half-life.
+ *    - Short HL (< 20 bars): fast mean-reversion → many levels (24) for fine grid.
+ *    - Long HL (> 100 bars): slow reversion → few levels (8) so each step survives.
+ *    - Linear interpolation in between, clamped to [8, 24].
+ *
+ *  Step size: target = GK_vol · √(T / N), so the grid accumulates a full σ_T move
+ *  over the half-life, with N intervals catching the move progressively. */
 export function ouGridBounds(closes, klines) {
   if (!closes || closes.length < 30) return null;
   const x = closes.filter((c) => isFinite(c) && c > 0);
   if (x.length < 30) return null;
   const gk = garmanKlassVol(klines);
   if (gk == null) return null;
-  const hl = ouHalfLife(x);
+  const hlRaw = ouHalfLife(x);
   // For trending series (no HL) we still produce a fallback using σ_T over a fixed
   // 50-bar window — this lets the screener return SOMETHING rather than null.
-  const T = hl != null ? Math.max(5, Math.min(200, hl)) : 50;
-  const logReturns = [];
-  for (let i = 1; i < x.length; i++) logReturns.push(Math.log(x[i] / x[i - 1]));
-  const meanLog = logReturns.reduce((a, b) => a + b, 0) / logReturns.length;
-  // μ = exp(Σ ln(r_t)) — geometric mean price level
-  const mu = Math.exp(meanLog * x.length); // = x[0] · exp(meanLog · n) ; simpler: take exp of mean of log prices
-  // Cleaner: μ = exp(mean(log(x)))
+  const hlUsed = hlRaw != null ? Math.max(5, Math.min(200, hlRaw)) : 50;
+
+  // Adaptive level count: short HL → many levels, long HL → few.
+  const levels = hlRaw == null
+    ? 12                                // trending fallback
+    : optimalLevelsForHalfLife(hlRaw);
+
+  // μ = geometric mean of closes (= exp(mean(log(closes))))
   const logPrices = x.map((v) => Math.log(v));
-  const mu2 = Math.exp(logPrices.reduce((a, b) => a + b, 0) / logPrices.length);
-  const sigmaT = gk * Math.sqrt(T);
-  const lower = Math.exp(Math.log(mu2) - 1.5 * sigmaT);
-  const upper = Math.exp(Math.log(mu2) + 1.5 * sigmaT);
-  const step = gk * 0.5;
-  const span = upper - lower;
-  const rawLevels = step > 0 ? span / step : 0;
-  const levels = Math.max(8, Math.min(30, Math.round(rawLevels)));
-  return { lower, upper, step, levels, sigmaT, hl: hl };
+  const logMu = logPrices.reduce((a, b) => a + b, 0) / logPrices.length;
+
+  // Span: ±1.5 σ_T (covers ~87% of expected distribution over one half-life)
+  const sigmaT = gk * Math.sqrt(hlUsed);
+  const lower = Math.exp(logMu - 1.5 * sigmaT);
+  const upper = Math.exp(logMu + 1.5 * sigmaT);
+
+  // Step: half-bar vol, but scaled so N steps roughly span the range.
+  // Target spacing = σ_T / N (one sigma-unit per step across the half-life).
+  const step = (upper - lower) / Math.max(1, levels);
+
+  return { lower, upper, step, levels, sigmaT, hl: hlRaw };
+}
+
+/** Optimal grid level count based on half-life.
+ *  Empirical: HL 20 → 24 levels; HL 100 → 8 levels; linear in between.
+ *  HL < 10 → 24 (very fast reversion); HL > 200 → 8 (very slow). */
+export function optimalLevelsForHalfLife(hl) {
+  if (hl <= 0 || !isFinite(hl)) return 12;
+  if (hl <= 10) return 24;
+  if (hl >= 100) return 8;
+  // Linear interpolation: 24 - (hl - 10) * (24 - 8) / (100 - 10)
+  const n = 24 - (hl - 10) * 16 / 90;
+  return Math.max(8, Math.min(24, Math.round(n)));
 }
 
 /** Compute the full row for one symbol. `kl` is the working-TF klines,
@@ -644,7 +676,7 @@ export function registerGridSmartScreener(deps) {
         const bd = Object.entries(r.breakdown || {})
           .map(([group, comps]) =>
             Object.entries(comps)
-              .map(([k, v]) => `<span class="gbs-tag" title="${escHtml(k)}">${escHtml(k)}: ${escHtml(v.label)} → +${escHtml(v.pts)}</span>`)
+              .map(([k, v]) => `<span class="gbs-tag" title="${escHtml(v.tip || k)}" style="cursor:help;border-bottom:1px dotted #a78bfa">${escHtml(k)}: ${escHtml(v.label)} → +${escHtml(v.pts)}</span>`)
               .join(' ')
           )
           .join(' ');
@@ -694,35 +726,35 @@ export function registerGridSmartScreener(deps) {
         <button class="tbtn" id="gbsSmartX">Закрыть</button>
       </div>
       <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:10px">
-        <label>TF
+        <label title="Рабочий таймфрейм: все метрики (half-life, GK, ADF, slope) считаются по нему. Контекстный TF подтягивается автоматически для колонки ‘Конфлюэнс’." style="cursor:help;border-bottom:1px dotted var(--text3)">TF
           <select id="gbsSmartTf" style="margin-left:4px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
             ${SUPPORTED_TFS.map(t => `<option value="${t}"${ui.tf === t ? ' selected' : ''}>${t}</option>`).join('')}
           </select>
         </label>
-        <label>Мин. score <input type="range" id="gbsSmartMinSc" min="0" max="13" value="${ui.minScore}" style="width:100px;vertical-align:middle"></label>
+        <label title="Минимальный итоговый score (0–13). Банд: ≥10 зелёный, ≥7 жёлтый, <7 красный." style="cursor:help;border-bottom:1px dotted var(--text3)">Мин. score <input type="range" id="gbsSmartMinSc" min="0" max="13" value="${ui.minScore}" style="width:100px;vertical-align:middle"></label>
         <span id="gbsSmartMinScV">${ui.minScore}</span>
-        <label><input type="checkbox" id="gbsSmartLong"${ui.showLong ? ' checked' : ''}> LONG</label>
-        <label><input type="checkbox" id="gbsSmartShort"${ui.showShort ? ' checked' : ''}> SHORT</label>
-        <label><input type="checkbox" id="gbsSmartNeutral"${ui.showNeutral ? ' checked' : ''}> NEUTRAL</label>
-        <label><input type="checkbox" id="gbsSmartLowConf"${ui.showLowConf ? ' checked' : ''}> Low conf (&lt;60%)</label>
-        <label><input type="checkbox" id="gbsSmartConf"${ui.showConfluence ? ' checked' : ''}> Конфлюэнс</label>
+        <label title="Показывать только ряды с направлением LONG (slope вверх + ADF/slope согласованы)" style="cursor:help"><input type="checkbox" id="gbsSmartLong"${ui.showLong ? ' checked' : ''}> LONG</label>
+        <label title="Показывать только ряды с направлением SHORT (slope вниз + ADF/slope согласованы)" style="cursor:help"><input type="checkbox" id="gbsSmartShort"${ui.showShort ? ' checked' : ''}> SHORT</label>
+        <label title="Показывать ряды без выраженного направления (adaptive threshold не пробит) — для нейтральных сеток" style="cursor:help"><input type="checkbox" id="gbsSmartNeutral"${ui.showNeutral ? ' checked' : ''}> NEUTRAL</label>
+        <label title="Если включено — добавляет ряды с confidence &lt; 60% (слабое согласие тестов, использовать с осторожностью)" style="cursor:help;border-bottom:1px dotted #f59e0b"><input type="checkbox" id="gbsSmartLowConf"${ui.showLowConf ? ' checked' : ''}> Low conf (&lt;60%)</label>
+        <label title="Показывать колонку ‘Конфлюэнс’: сравнение наклона рабочего TF (напр. 15m) со старшим TF (напр. 1h). ✓ — оба согласны по направлению, ⚠ — расходятся, — — данных нет" style="cursor:help;border-bottom:1px dotted #a78bfa"><input type="checkbox" id="gbsSmartConf"${ui.showConfluence ? ' checked' : ''}> Конфлюэнс</label>
         <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsSmartLu">—</span></span>
       </div>
       <div style="padding:4px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text3);line-height:1.4">
-        Score: mean-reversion (0–5) + grid fitness (0–5) + directional confidence (0–3). Направление адаптивное: порог = медиана |dirScore| по выборке. Границы: μ ± 1.5σ_T, где σ_T = GK·√(half-life).
+        Score: mean-reversion (0–5) + grid fitness (0–5) + directional confidence (0–3). Направление адаптивное: порог = медиана |dirScore| по выборке. Границы: μ ± 1.5σ_T, где σ_T = GK·√(half-life). Уровни: 8–24, больше — при коротком half-life.
       </div>
       <div style="flex:1;min-height:0;overflow:auto">
         <table class="gbs-table" style="width:100%;border-collapse:collapse;font-size:10px">
           <thead><tr>
-            <th class="gbs-th" data-k="sym">Тикер</th>
-            <th class="gbs-th" data-k="score">Score</th>
-            <th class="gbs-th" data-k="dir">Dir</th>
-            <th class="gbs-th" data-k="conf">Конф</th>
-            <th class="gbs-th" data-k="mr" title="Mean-reversion quality: Hurst+VR+OU half-life">MR</th>
-            <th class="gbs-th" data-k="fit" title="Grid fitness: GK vol, vol/mcap, spread">fit</th>
-            <th class="gbs-th" data-k="gkh" title="GK vol / price, in %">ΔH/L</th>
-            <th title="Конфлюэнс со старшим TF">${ui.showConfluence ? 'старш.' : '—'}</th>
-            <th title="Наведи на теги — пояснения">Метрики</th>
+            <th class="gbs-th" data-k="sym" title="Символ Binance. Клик — открыть график; 📊 — открыть в Grid Lab с предложенными границами">Тикер</th>
+            <th class="gbs-th" data-k="score" title="Итоговый score 0–13: 5 — mean-reversion, 5 — grid fitness, 3 — directional confidence. ≥10 зелёный, ≥7 жёлтый, <7 красный">Score</th>
+            <th class="gbs-th" data-k="dir" title="Направление сетки: LONG (slope вверх), SHORT (slope вниз), NEUTRAL (без направления). Порог адаптивный по выборке">Dir</th>
+            <th class="gbs-th" data-k="conf" title="Уверенность направления: насколько единогласны тесты ADF + slope + Hurst + VWAP. 0–100%">Конф</th>
+            <th class="gbs-th" data-k="mr" title="Mean-reversion quality: Hurst ∈ [0.30,0.50], VR <0.7, OU half-life ∈ [10,50]. Чем выше — тем надёжнее возврат к средней">MR</th>
+            <th class="gbs-th" data-k="fit" title="Grid fitness: GK vol 1–5%, vol/mcap >0.05, спред <2%. Чем выше — тем пригоднее для сетки">fit</th>
+            <th class="gbs-th" data-k="gkh" title="GK vol / price за один бар, в %. Используется для оценки плотности сетки">ΔH/L</th>
+            <th title="Конфлюэнс со старшим TF: ✓ — наклон согласен по знаку, ⚠ — против, — — данных нет">${ui.showConfluence ? 'старш.' : '—'}</th>
+            <th title="Наведи на фиолетовые теги — там человеческим языком объясняется каждая метрика">Метрики</th>
           </tr></thead>
           <tbody id="gbsSmartBody"></tbody>
         </table>

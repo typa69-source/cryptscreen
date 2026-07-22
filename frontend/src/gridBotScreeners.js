@@ -25,19 +25,21 @@ import {
  */
 export function buildGridLabPayload(row, source){
   if(!row || !row.sym) return null;
-  let lo, hi, stepAbs, stepPct, levels;
+  let lo, hi, stepAbs, stepPct, levels, direction;
   if (source === 'intra') {
     lo = row?.grid?.gLo;
     hi = row?.grid?.gHi;
     stepAbs = row?.grid?.stepAbs;
     stepPct = row?.grid?.stepPct;
     levels = row?.grid?.nLev;
+    direction = null; // Intraday doesn't classify
   } else if (source === 'smart') {
     lo = row?.gridBounds?.lower;
     hi = row?.gridBounds?.upper;
     stepAbs = row?.gridBounds?.step;
     stepPct = null;
     levels = row?.gridBounds?.levels;
+    direction = row?.direction || null; // LONG/SHORT/NEUTRAL from classifier
   } else {
     // Swing & Pick store bounds directly on the row.
     lo = row?.gridLo;
@@ -45,6 +47,7 @@ export function buildGridLabPayload(row, source){
     stepAbs = row?.stepAbs;
     stepPct = row?.stepPct;
     levels = null;
+    direction = null;
   }
   // Default TF by screener: Swing/Smart = 15m, Intraday/Pick = 5m.
   const tf = (source === 'swing' || source === 'smart') ? '15m' : '5m';
@@ -56,6 +59,7 @@ export function buildGridLabPayload(row, source){
     stepAbs: isFinite(stepAbs) ? stepAbs : null,
     stepPct: isFinite(stepPct) ? stepPct : null,
     levels: isFinite(levels) ? levels : null,
+    direction,
     source,
     score: typeof row.score === 'number' ? row.score : null,
   };
