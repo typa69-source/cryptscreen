@@ -1,5 +1,5 @@
 import './style.css'
-import { registerGridBotScreeners } from './gridBotScreeners.js'
+import { registerGridBotScreeners, buildGridLabPayload } from './gridBotScreeners.js'
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
@@ -8152,6 +8152,35 @@ function toggleGridLab(){
   renderGridLabModal();
 }
 
+/**
+ * Open Grid Lab with a pre-filled payload from a screener row.
+ * Does NOT close the calling screener modal — Grid Lab opens on top (z 820 vs 825).
+ */
+function openGridLabFromRow(row, source){
+  const payload = buildGridLabPayload(row, source);
+  if(!payload || !payload.sym) return;
+  const prefs = loadGridLabPrefs();
+  // Apply suggested lower/upper and grid levels from screener.
+  // Existing user overrides win if present (but caller may have set them intentionally).
+  if(!prefs.symbolBounds || typeof prefs.symbolBounds !== 'object') prefs.symbolBounds = {};
+  const existing = prefs.symbolBounds[payload.sym] || {};
+  prefs.symbolBounds[payload.sym] = {
+    ...existing,
+    lower: payload.lower,
+    upper: payload.upper,
+  };
+  if(payload.levels != null) prefs.symbolBounds[payload.sym].gridLevels = payload.levels;
+  // Also push the suggested TF into globals so the modal opens on the right timeframe.
+  if(payload.tf) prefs.global = { ...(prefs.global || {}), tf: payload.tf };
+  saveGridLabPrefs(prefs);
+  // If Grid Lab is already open, just refresh its inputs (cheap sync) instead of stacking.
+  const existingModal = document.getElementById('gridLabModal');
+  if(existingModal){
+    existingModal.remove();
+  }
+  renderGridLabModal();
+}
+
 function setBrushColor(col,el){
   _brushColor=col;
   document.querySelectorAll('.brush-color').forEach(d=>d.classList.remove('active'));
@@ -8188,6 +8217,7 @@ registerGridBotScreeners({
   fn,
   fmtPrice,
   openFullscreenBySym,
+  openGridLabFromRow,
   bollingerOnTail,
   calcATR,
   GROUP_COLORS,
