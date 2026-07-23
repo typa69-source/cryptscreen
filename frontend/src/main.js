@@ -108,7 +108,7 @@ function buildAuthUI() {
     tab.addEventListener('click', () => {
       mode = tab.dataset.tab
       el.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('on', t === tab))
-      document.getElementById('authSubmit').textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГРСТРРРОВАТЬСЯ'
+      document.getElementById('authSubmit').textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГИСТРИРОВАТЬСЯ'
       document.getElementById('authPassConfirmField').style.display = mode === 'register' ? '' : 'none'
       document.getElementById('authErr').textContent = ''
       document.getElementById('authOk').textContent = ''
@@ -136,7 +136,7 @@ function buildAuthUI() {
         body: JSON.stringify({ email, password })
       })
       const data = await res.json()
-      if (!res.ok) { errEl.textContent = data.error || 'Ошибка'; btn.disabled = false; btn.textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГРСТРРРОВАТЬСЯ'; return }
+      if (!res.ok) { errEl.textContent = data.error || 'Ошибка'; btn.disabled = false; btn.textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГИСТРИРОВАТЬСЯ'; return }
       if (mode === 'register') {
         okEl.textContent = 'Аккаунт создан! ВходимвЂ¦'
         // auto-login after register
@@ -151,7 +151,7 @@ function buildAuthUI() {
       }
     } catch (e) {
       errEl.textContent = 'Нет соединения с сервером'
-      btn.disabled = false; btn.textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГРСТРРРОВАТЬСЯ'
+      btn.disabled = false; btn.textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГИСТРИРОВАТЬСЯ'
     }
   })
 
@@ -764,7 +764,7 @@ function fv(v,id){
   if(id==='oi1h'||id==='oi4h')return(v==null||!isFinite(v))?'•':(v>0?'+':'')+fn(v,2)+'%';
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return fn(v,1);
   if(id==='na30'||id==='na14')return fn(v,2);
-  if(id==='tr5'||id==='tr1h'||id==='vr5'||id==='vr1h')return fn(v,1)+'Г—';
+  if(id==='tr5'||id==='tr1h'||id==='vr5'||id==='vr1h')return fn(v,1)+'×';
   if(id==='trd24')return fk(v);
   if(id==='vol24'||id==='v15m'||id==='v60m')return fk(v);
   if(id==='corr'||id==='corr14')return fn(v,2);
@@ -3249,7 +3249,7 @@ function openEMAEditor(mode='auto'){
           if(!pair){pair={a,b,enabled:false};S.emaAlertPairs.push(pair);}
           const pbtn=document.createElement('button');
           pbtn.className='tbtn'+(pair.enabled?' on':'');
-          pbtn.textContent=`EMA${a}Г—EMA${b}`;
+          pbtn.textContent=`EMA${a}×EMA${b}`;
           pbtn.onclick=()=>{pair.enabled=!pair.enabled;render();};
           pairsEl.appendChild(pbtn);
         }
@@ -3386,8 +3386,8 @@ function updateRulerTooltip(ch){
         const avgTr=pre.reduce((s,c)=>s+(c.tr||0),0)/pre.length;
         const rangeAvgVol=vol/rangeCl.length;
         const rangeAvgTr=sumTr/rangeCl.length;
-        if(avgVol>0)vrTxt=fn(rangeAvgVol/avgVol,2)+'Г—';
-        if(avgTr>0)trTxt=fn(rangeAvgTr/avgTr,2)+'Г—';
+        if(avgVol>0)vrTxt=fn(rangeAvgVol/avgVol,2)+'×';
+        if(avgTr>0)trTxt=fn(rangeAvgTr/avgTr,2)+'×';
       }
     }
   }
@@ -3419,7 +3419,7 @@ function updateRulerTooltip(ch){
 }
 
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-//  БЫСТРЫЙ ПОРСК МОНЕТЫ (печать с клавиатуры)
+//  БЫСТРЫЙ ПОИСК МОНЕТЫ (печать с клавиатуры)
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 function ensureQuickFindUI(){
   if(document.getElementById('quickFindModal'))return;
@@ -4420,7 +4420,7 @@ function buildScreenerHeader(hdrEl){
   hdrEl.innerHTML='';
   const tickCol=document.createElement('div');
   tickCol.className='tick-col';tickCol.title='Сортировать по тикеру';
-  tickCol.innerHTML='<span class="tick-lbl">ТРКЕР '+(S.sortAlpha?(S.sortDir==='asc'?'в–І':'в–ј'):'')+' </span>';
+  tickCol.innerHTML='<span class="tick-lbl">ТИКЕР '+(S.sortAlpha?(S.sortDir==='asc'?'в–І':'в–ј'):'')+' </span>';
   tickCol.onclick=()=>doSort('sym');
   hdrEl.appendChild(tickCol);
   const ms=document.createElement('div');ms.className='mscroll';
@@ -4537,7 +4537,7 @@ function buildScreenerRow(m,cols){
   const fstar=document.createElement('span');
   fstar.className='cg-fstar';
   fstar.textContent='в…';
-  fstar.title='Рзбранное';
+  fstar.title='Избранное';
   rt.appendChild(fstar);
   const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=sym.replace(/USDT$/,'');
   nameSpan.title='Нажмите для копирования';nameSpan.style.cursor='pointer';
@@ -4717,7 +4717,7 @@ function renderTable(){
   }
   updatePagination(rows.length);
   // Keep mini-charts in sync with live-sorted rows.
-  // Without this, when sorting by a live-updating metric (e.g. РЗМ24ч),
+  // Without this, when sorting by a live-updating metric (e.g. ИЗМ24ч),
   // the table changes but the 3×3 grid can stay on stale symbols.
   maybeSyncChartsToTopRows(rows);
 }
@@ -4810,7 +4810,7 @@ function setTf(tf,btnId){
 
 /** Русская раскладка → латиница (поиск тикера как на EN-клавиатуре). */
 function mapRuKeyboardToEn(s){
-  const ru='ёйцукенгшщзхъфывапролджэячсмитьбюЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМРТЬБЮ';
+  const ru='ёйцукенгшщзхъфывапролджэячсмитьбюЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ';
   const en='`qwertyuiop[]asdfghjkl;\'zxcvbnm,./~QWERTYUIOP{}ASDFGHJKL:"ZXCVBNM<>?';
   let out='';
   for(const ch of String(s||'')){
@@ -5123,7 +5123,7 @@ function renderSettingsAlerts(body){
     </div>
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:12px">
-    <span class="smodal-lbl" style="color:var(--text2)">Рстория алертов</span>
+    <span class="smodal-lbl" style="color:var(--text2)">История алертов</span>
     <button class="tbtn" onclick="toggleAlertLog();closeSettings()">рџ”” Открыть лог</button>
   </div>
   <div class="smodal-row" style="border-bottom:none">
@@ -5286,7 +5286,7 @@ function buildGroupFilterBar(){
         btn.style.background=GROUP_COLORS[g];
         btn.textContent='';
       }
-      btn.title=`${g===FAVORITE_GROUP_ID?'Рзбранное':`Группа ${g}`} (${cnt} монет). ЛКМ • фильтр · ПКМ • очистить группу`;
+      btn.title=`${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`} (${cnt} монет). ЛКМ • фильтр · ПКМ • очистить группу`;
       btn.onclick=()=>{
         const next=S.activeGroupFilter===g?0:g;
         S.activeGroupFilter=next;
@@ -5376,7 +5376,7 @@ function showQuickGroupChanger(sym,anchorEl){
     box-shadow:0 4px 16px rgba(0,0,0,.6)`;
   // Label
   const lbl=document.createElement('div');lbl.style.cssText='font-size:9px;color:var(--text3);padding-bottom:2px;border-bottom:1px solid var(--border);';
-  lbl.textContent='Цветовая группа + Рзбранное:';pick.appendChild(lbl);
+  lbl.textContent='Цветовая группа + Избранное:';pick.appendChild(lbl);
   // Color row
   const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;';
   // "none" option
@@ -5398,7 +5398,7 @@ function showQuickGroupChanger(sym,anchorEl){
   const fav=document.createElement('div');
   fav.className='cg-dot cg-fav-dot';
   fav.textContent='в…';
-  fav.title='Рзбранное · нажмите чтобы добавить/убрать';
+  fav.title='Избранное · нажмите чтобы добавить/убрать';
   if(favOn)fav.style.outline='2px solid #fff';
   fav.onclick=()=>{setSymFavorite(sym,!favOn);pick.remove();syncAllGroupDots(sym);};
   row.appendChild(fav);
@@ -5434,7 +5434,7 @@ function openGroupManager(g){
   const hdr=document.createElement('div');
   hdr.style.cssText='display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);gap:8px;flex-shrink:0';
   hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'в…':''}</span>
-    <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'Рзбранное':`Группа ${g}`}</span>
+    <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`}</span>
     <span style="font-size:9px;color:var(--text3)">Нажмите монету чтобы добавить/убрать</span>
     <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">вњ•</button>`;
   box.appendChild(hdr);
@@ -5583,7 +5583,7 @@ function renderSettingsGen(body){
   );
   body.innerHTML=`
   <div class="smodal-row">
-    <span class="smodal-lbl">Мини-графики: вертикаль Г— горизонталь</span>
+    <span class="smodal-lbl">Мини-графики: вертикаль × горизонталь</span>
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;max-width:290px;flex:1">
       <div style="display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-end">
         <span style="font-size:9px;color:var(--text3);min-width:54px">Вертикаль</span>
@@ -5595,7 +5595,7 @@ function renderSettingsGen(body){
         <input type="range" min="1" max="7" step="1" value="${S.gridCols}" oninput="setGridCols(this.value)" style="flex:1;max-width:170px">
         <span style="font-size:10px;color:var(--text3);min-width:20px;text-align:right">${S.gridCols}</span>
       </div>
-      <div style="font-size:9px;color:var(--text3)">Ртог: ${S.gridRows} Г— ${S.gridCols} = ${S.gridSize} графиков</div>
+      <div style="font-size:9px;color:var(--text3)">Итог: ${S.gridRows} × ${S.gridCols} = ${S.gridSize} графиков</div>
     </div>
   </div>
   <div class="smodal-row">
@@ -5720,7 +5720,7 @@ function toggleSessionBand(which){
 }
 
 function renderSettingsChartHead(body){
-  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Рндикаторы»). Перетащите порядок, вњ“ • показать/скрыть.</div>';
+  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Индикаторы»). Перетащите порядок, вњ“ • показать/скрыть.</div>';
   const list=document.createElement('div');list.className='ind-list';list.id='chartHeadList';
   S.chartHeadOrder.forEach(id=>{
     const def=CHART_HEAD_DEFS.find(d=>d.id===id);if(!def)return;
@@ -5943,7 +5943,7 @@ function buildFsChartLayout(){
   };
   if(S.fsLayoutPreset==='two_horizontal'){
     area.className='fs-layout-2h';
-    area.append(makeCell(0,'ВЕРХ'),makeCell(1,'НРЗ'));
+    area.append(makeCell(0,'ВЕРХ'),makeCell(1,'НИЗ'));
     return;
   }
   if(S.fsLayoutPreset==='two_vertical'){
@@ -5953,7 +5953,7 @@ function buildFsChartLayout(){
   }
   if(S.fsLayoutPreset==='four_grid'){
     area.className='fs-layout-4';
-    area.append(makeCell(0,'ЛЕВЫЙ ВЕРХ'),makeCell(1,'ПРАВЫЙ ВЕРХ'),makeCell(2,'ЛЕВЫЙ НРЗ'),makeCell(3,'ПРАВЫЙ НРЗ'));
+    area.append(makeCell(0,'ЛЕВЫЙ ВЕРХ'),makeCell(1,'ПРАВЫЙ ВЕРХ'),makeCell(2,'ЛЕВЫЙ НИЗ'),makeCell(3,'ПРАВЫЙ НИЗ'));
     return;
   }
   area.className='fs-layout-3';
@@ -6491,9 +6491,9 @@ async function main() {
 //  POTENTIAL MONITOR • multi-preset tabbed system
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 const POT_FIELDS=[
-  {id:'ch24',   label:'РЗМ 24ч %',  unit:'%',  step:0.5},
-  {id:'ch7d',   label:'РЗМ 7д %',   unit:'%',  step:0.5},
-  {id:'cday',   label:'РЗМ день %', unit:'%',  step:0.5},
+  {id:'ch24',   label:'ИЗМ 24ч %',  unit:'%',  step:0.5},
+  {id:'ch7d',   label:'ИЗМ 7д %',   unit:'%',  step:0.5},
+  {id:'cday',   label:'ИЗМ день %', unit:'%',  step:0.5},
   {id:'bbSqz',  label:'BB Squeeze', unit:'',   step:1},
   {id:'bbBreak',label:'BB Breakout',unit:'',   step:1},
   {id:'volImpulse',label:'Volume impulse',unit:'',step:1},
@@ -6508,9 +6508,9 @@ const POT_FIELDS=[
   {id:'vol24',  label:'Объём 24ч',  unit:'M$', step:10},
 ];
 const POT_FIELD_DESC={
-  ch24:'Рзменение цены за 24 часа в процентах.',
-  ch7d:'Рзменение цены за 7 дней в процентах.',
-  cday:'Рзменение цены с начала текущего дня в процентах.',
+  ch24:'Изменение цены за 24 часа в процентах.',
+  ch7d:'Изменение цены за 7 дней в процентах.',
+  cday:'Изменение цены с начала текущего дня в процентах.',
   bbSqz:'Полосы Боллинджера сжались относительно прошлого бара (узкий диапазон).',
   bbBreak:'Цена вышла за верхнюю/нижнюю полосу Боллинджера на последней свече.',
   volImpulse:'Есть всплеск объёма: ОБ* 5м >= 1.25 относительно последних 14 свечей.',
@@ -6675,8 +6675,8 @@ function openPotPresetEditor(presetId){
         <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('potPresetModal').remove()">вњ•</button>
       </div>
       <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <label style="font-size:9px;color:var(--text3);display:block;margin-bottom:4px">НАЗВАНРЕ</label>
-        <input id="potPresetName" value="${existing?.name||''}" placeholder="Например: Рмпульс роста"
+        <label style="font-size:9px;color:var(--text3);display:block;margin-bottom:4px">НАЗВАНИЕ</label>
+        <input id="potPresetName" value="${existing?.name||''}" placeholder="Например: Импульс роста"
           style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:5px 8px;outline:none">
       </div>
       <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:space-between">
@@ -6704,7 +6704,7 @@ function openPotPresetEditor(presetId){
         <select style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:3px 4px">
           ${POT_FIELDS.map(x=>`<option value="${x.id}"${x.id===c.field?' selected':''}>${x.label}</option>`).join('')}
         </select>
-        <label title="Ргнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','ch7d','cday','bbBreak'].includes(c.field)?'':'visibility:hidden'}">
+        <label title="Игнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','ch7d','cday','bbBreak'].includes(c.field)?'':'visibility:hidden'}">
           |x|
           <input type="checkbox" ${c.abs?'checked':''}>
         </label>

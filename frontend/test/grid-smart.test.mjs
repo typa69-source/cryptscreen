@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import {
   ouHalfLife,
   garmanKlassVol,
+  adaptiveLevelCap,
   varianceRatio,
   adfTest,
   linregSlope,
@@ -17,6 +18,11 @@ import {
   ouGridBounds,
   optimalLevelsForHalfLife,
   computeSmartRow,
+  confluenceScore,
+  classifyScanError,
+  severityClass,
+  severityTtl,
+  toastFromError,
   filterSmartRows,
   sortSmartRows,
   smartBandColor,
@@ -343,12 +349,15 @@ test('ouGridBounds: μ centred between lower and upper', () => {
   assert.ok(mid > 0);
 });
 
-test('ouGridBounds: levels ∈ [8, 24]', () => {
+test('ouGridBounds: levels ∈ [8, adaptive_cap]', () => {
   const closes = mrSeries(-0.04, 250, 100);
   const kl = klinesFromCloses(closes);
   const gb = ouGridBounds(closes, kl);
   assert.ok(gb != null);
-  assert.ok(gb.levels >= 8 && gb.levels <= 24);
+  // Adaptive cap is at least 24 for nBars≥60 (mrSeries gives 250 closes).
+  // So levels ∈ [8, 32] when the HL is short and lookback is long.
+  assert.ok(gb.levels >= 8, `expected ≥8, got ${gb.levels}`);
+  assert.ok(gb.levels <= 32, `expected ≤32, got ${gb.levels}`);
 });
 
 test('ouGridBounds: short half-life → more levels', () => {
@@ -395,6 +404,68 @@ test('ouGridBounds: optimalLevelsForHalfLife is monotonic', () => {
   }
 });
 
+// ─── Adaptive level cap (Step 2) ───────────────────────────────────
+
+test('adaptiveLevelCap: legacy default 24 when nBars omitted', () => {
+  assert.equal(adaptiveLevelCap(undefined), 24);
+  assert.equal(adaptiveLevelCap(null), 24);
+  assert.equal(adaptiveLevelCap(NaN), 24);
+});
+
+test('adaptiveLevelCap: bands by nBars', () => {
+  assert.equal(adaptiveLevelCap(30), 20);   // <60 → 20
+  assert.equal(adaptiveLevelCap(59), 20);
+  assert.equal(adaptiveLevelCap(60), 24);   // 60–119 → 24
+  assert.equal(adaptiveLevelCap(119), 24);
+  assert.equal(adaptiveLevelCap(120), 28);  // 120–199 → 28
+  assert.equal(adaptiveLevelCap(199), 28);
+  assert.equal(adaptiveLevelCap(200), 32);  // ≥200 → 32
+  assert.equal(adaptiveLevelCap(1000), 32);
+});
+
+test('adaptiveLevelCap: always integer', () => {
+  for (const n of [0, 30, 60, 90, 119, 120, 150, 199, 200, 500]) {
+    const v = adaptiveLevelCap(n);
+    assert.ok(Number.isInteger(v), `expected integer for ${n}, got ${v}`);
+  }
+});
+
+test('optimalLevelsForHalfLife(hl, nBars): wider cap with long lookback', () => {
+  // Same HL, more data → more levels allowed.
+  const hl = 50;
+  const sparse = optimalLevelsForHalfLife(hl, 30);    // cap=20
+  const medium = optimalLevelsForHalfLife(hl, 90);    // cap=24
+  const long_ = optimalLevelsForHalfLife(hl, 150);    // cap=28
+  const veryLong = optimalLevelsForHalfLife(hl, 300); // cap=32
+  assert.ok(medium > sparse, `${medium} should exceed ${sparse}`);
+  assert.ok(long_ > medium, `${long_} should exceed ${medium}`);
+  assert.ok(veryLong > long_, `${veryLong} should exceed ${long_}`);
+});
+
+test('optimalLevelsForHalfLife(hl, nBars): legacy default when nBars omitted', () => {
+  // Without nBars the function should behave identically to before.
+  assert.equal(optimalLevelsForHalfLife(5), 24);
+  assert.equal(optimalLevelsForHalfLife(100), 8);
+  assert.equal(optimalLevelsForHalfLife(55), 16);
+});
+
+test('optimalLevelsForHalfLife(hl, nBars): bounds held at [8, cap]', () => {
+  for (const nBars of [30, 60, 200, 500]) {
+    const cap = adaptiveLevelCap(nBars);
+    for (let hl = 1; hl <= 250; hl += 7) {
+      const v = optimalLevelsForHalfLife(hl, nBars);
+      assert.ok(v >= 8 && v <= cap, `hl=${hl} nBars=${nBars} got ${v}, expected [8,${cap}]`);
+    }
+  }
+});
+
+test('optimalLevelsForHalfLife(hl, nBars): null HL is independent of nBars', () => {
+  // Trending fallback is always 12 regardless of lookback size.
+  assert.equal(optimalLevelsForHalfLife(null, 30), 12);
+  assert.equal(optimalLevelsForHalfLife(null, 500), 12);
+  assert.equal(optimalLevelsForHalfLife(NaN, 500), 12);
+});
+
 test('ouGridBounds: null half-life (trending) → 12 levels fallback', () => {
   // For pure trend (no HL), bounds still returned with levels=12
   const closes = trendSeries(300);
@@ -424,7 +495,7 @@ test('computeSmartRow: full row with all required fields', () => {
   assert.ok(['green', 'yellow', 'red'].includes(r.band));
   assert.ok(r.gridBounds != null);
   assert.ok(r.gridBounds.lower < r.gridBounds.upper);
-  assert.ok(r.gridBounds.levels >= 8 && r.gridBounds.levels <= 30);
+  assert.ok(r.gridBounds.levels >= 8 && r.gridBounds.levels <= 32);
 });
 
 test('computeSmartRow: with context TF computes confluence', () => {
@@ -442,6 +513,183 @@ test('computeSmartRow: insufficient bars → null', () => {
   const tiny = klinesFromCloses([100, 101, 102, 101, 100]);
   const r = computeSmartRow('XUSDT', tiny, null, new Map(), () => 0);
   assert.equal(r, null);
+});
+
+// ─── Extended confluence score ────────────────────────────────────
+
+test('confluenceScore: returns null when context TF missing', () => {
+  const closes = mrSeries(-0.03, 250, 100);
+  const kl = klinesFromCloses(closes);
+  const sc = scoreSmart(kl, new Map(), 'BTCUSDT', () => 5e8);
+  assert.ok(sc != null);
+  assert.equal(confluenceScore({ ...sc, raw: { ...sc.raw, closes } }, null), null);
+  assert.equal(confluenceScore({ ...sc, raw: { ...sc.raw, closes } }, []), null);
+});
+
+test('confluenceScore: returns null when context has too few bars', () => {
+  const closes = mrSeries(-0.03, 250, 100);
+  const kl = klinesFromCloses(closes);
+  const sc = scoreSmart(kl, new Map(), 'BTCUSDT', () => 5e8);
+  const tiny = klinesFromCloses(mrSeries(-0.03, 20, 50));
+  assert.equal(confluenceScore({ ...sc, raw: { ...sc.raw, closes } }, tiny), null);
+});
+
+test('confluenceScore: agreement ∈ [0, 1]', () => {
+  const closesW = mrSeries(-0.03, 250, 100);
+  const closesC = mrSeries(-0.04, 200, 80);
+  const klW = klinesFromCloses(closesW);
+  const klC = klinesFromCloses(closesC);
+  const sc = scoreSmart(klW, new Map(), 'BTCUSDT', () => 5e8);
+  const detail = confluenceScore({ ...sc, raw: { ...sc.raw, closes: closesW } }, klC);
+  assert.ok(detail != null);
+  assert.ok(detail.agreement >= 0 && detail.agreement <= 1);
+  assert.ok(Array.isArray(detail.checks));
+});
+
+test('confluenceScore: returns at least one check when context available', () => {
+  const closesW = mrSeries(-0.03, 250, 100);
+  const closesC = mrSeries(-0.04, 200, 80);
+  const klW = klinesFromCloses(closesW);
+  const klC = klinesFromCloses(closesC);
+  const sc = scoreSmart(klW, new Map(), 'BTCUSDT', () => 5e8);
+  const detail = confluenceScore({ ...sc, raw: { ...sc.raw, closes: closesW } }, klC);
+  assert.ok(detail.checks.length >= 1);
+  // Each check has name, agree, label, weight
+  for (const c of detail.checks) {
+    assert.ok(typeof c.name === 'string');
+    assert.equal(typeof c.agree, 'boolean');
+    assert.ok(typeof c.label === 'string');
+    assert.ok(c.weight > 0 && c.weight <= 1);
+  }
+});
+
+test('confluenceScore: identical working+context → high agreement', () => {
+  // Use the same series — should produce maximum agreement on shared checks.
+  const closes = mrSeries(-0.04, 300, 100);
+  const kl = klinesFromCloses(closes);
+  const sc = scoreSmart(kl, new Map(), 'BTCUSDT', () => 5e8);
+  const detail = confluenceScore({ ...sc, raw: { ...sc.raw, closes } }, kl);
+  assert.ok(detail != null);
+  // agreement should be high (>= 0.5) since slope/adf/regime are computed
+  // from the same data and will trivially agree.
+  assert.ok(detail.agreement >= 0.5, `expected ≥0.5, got ${detail.agreement}`);
+});
+
+test('confluenceScore: opposing working vs context → lower agreement', () => {
+  // Working = mean-reverting (HL fit succeeds), context = trending.
+  const closesW = mrSeries(-0.03, 300, 100);
+  const closesC = trendSeries(300);
+  const klW = klinesFromCloses(closesW);
+  const klC = klinesFromCloses(closesC);
+  const sc = scoreSmart(klW, new Map(), 'BTCUSDT', () => 5e8);
+  const detail = confluenceScore({ ...sc, raw: { ...sc.raw, closes: closesW } }, klC);
+  assert.ok(detail != null);
+  // Regime check should disagree (MR vs trending).
+  const regime = detail.checks.find((c) => c.name === 'regime');
+  if (regime) {
+    assert.equal(regime.agree, false);
+  }
+});
+
+test('confluenceScore: weights sum to ≤1 (renormalised by available checks)', () => {
+  const closes = mrSeries(-0.04, 300, 100);
+  const kl = klinesFromCloses(closes);
+  const sc = scoreSmart(kl, new Map(), 'BTCUSDT', () => 5e8);
+  const detail = confluenceScore({ ...sc, raw: { ...sc.raw, closes } }, kl);
+  assert.ok(detail != null);
+  // After renormalisation, weighted-sum-of-agree / sum-of-weights should be in [0,1].
+  assert.ok(detail.agreement >= 0 && detail.agreement <= 1);
+});
+
+test('confluenceScore: null workRow is handled gracefully', () => {
+  const closes = mrSeries(-0.04, 100, 50);
+  const kl = klinesFromCloses(closes);
+  assert.equal(confluenceScore(null, kl), null);
+});
+
+test('confluenceScore: result is integrated into computeSmartRow.confluenceDetail', () => {
+  const closesW = mrSeries(-0.03, 300, 100);
+  const closesC = mrSeries(-0.04, 200, 80);
+  const klW = klinesFromCloses(closesW);
+  const klC = klinesFromCloses(closesC);
+  const r = computeSmartRow('BTCUSDT', klW, klC, new Map(), () => 5e8);
+  assert.ok(r != null);
+  assert.ok('confluenceDetail' in r);
+  assert.ok(r.confluenceDetail != null);
+  assert.ok(Array.isArray(r.confluenceDetail.checks));
+});
+
+// ─── Toast helpers (Step 3) ───────────────────────────────────────
+
+test('classifyScanError: rate-limit keywords map to rate-limit severity', () => {
+  assert.equal(classifyScanError('rate limit 1000/1000'), 'rate-limit');
+  assert.equal(classifyScanError('HTTP 429 Too Many Requests'), 'rate-limit');
+  assert.equal(classifyScanError('IP banned 418'), 'rate-limit');
+  assert.equal(classifyScanError('Too many requests, retry after 60s'), 'rate-limit');
+});
+
+test('classifyScanError: network/parse keywords map to fatal severity', () => {
+  assert.equal(classifyScanError('NetworkError when fetching'), 'fatal');
+  assert.equal(classifyScanError('JSON parse error'), 'fatal');
+  assert.equal(classifyScanError('Request timeout'), 'fatal');
+  assert.equal(classifyScanError('Request aborted'), 'fatal');
+  assert.equal(classifyScanError('CORS preflight failed'), 'fatal');
+});
+
+test('classifyScanError: empty/unknown messages map to warn severity', () => {
+  assert.equal(classifyScanError(''), 'warn');
+  assert.equal(classifyScanError(null), 'warn');
+  assert.equal(classifyScanError(undefined), 'warn');
+  assert.equal(classifyScanError('Universe пустой: нет символов'), 'warn');
+  assert.equal(classifyScanError('Список пуст после скана'), 'warn');
+});
+
+test('classifyScanError: rate-limit wins over generic network keyword', () => {
+  // Some messages mention both; we want rate-limit to win because it carries
+  // specific actionable advice (wait 30–60s).
+  assert.equal(classifyScanError('network reset, rate limit 429'), 'rate-limit');
+});
+
+test('severityClass: maps severity to CSS class', () => {
+  assert.equal(severityClass('fatal'), 'gbs-toast--fatal');
+  assert.equal(severityClass('rate-limit'), 'gbs-toast--rate');
+  assert.equal(severityClass('warn'), 'gbs-toast--warn');
+  assert.equal(severityClass('unknown'), 'gbs-toast--warn');
+});
+
+test('severityTtl: rate-limit toasts live longer so users can read them', () => {
+  assert.ok(severityTtl('rate-limit') > severityTtl('warn'),
+    'rate-limit should outlast warn');
+  assert.ok(severityTtl('fatal') >= severityTtl('warn'),
+    'fatal should outlast warn');
+  // Sensible bounds: warn >= 2000ms, rate-limit <= 10000ms
+  assert.ok(severityTtl('warn') >= 2000 && severityTtl('warn') <= 5000);
+  assert.ok(severityTtl('rate-limit') >= 4000 && severityTtl('rate-limit') <= 10000);
+});
+
+test('toastFromError: returns severity, text, hint', () => {
+  const r = toastFromError('rate limit 429');
+  assert.equal(r.severity, 'rate-limit');
+  assert.equal(r.text, 'rate limit 429');
+  assert.ok(r.hint && /подождите|wait/i.test(r.hint));
+});
+
+test('toastFromError: empty universe triggers warn hint', () => {
+  const r = toastFromError('Universe пустой: ещё не загрузились объёмы');
+  assert.equal(r.severity, 'warn');
+  assert.ok(r.hint && /фильтр|filter/i.test(r.hint));
+});
+
+test('toastFromError: network error triggers fatal hint', () => {
+  const r = toastFromError('NetworkError when fetching');
+  assert.equal(r.severity, 'fatal');
+  assert.ok(r.hint && /сет|api/i.test(r.hint));
+});
+
+test('toastFromError: null/undefined handled gracefully', () => {
+  const r = toastFromError(null);
+  assert.equal(r.severity, 'warn');
+  assert.equal(typeof r.text, 'string');
 });
 
 // ═══════════════════════════════════════════════════════════════

@@ -432,6 +432,8 @@ export function ouGridBounds(closes, klines) {
   // Adaptive level count: short HL → many levels, long HL → few.
   // The cap scales up with lookback size so denser grids are allowed when
   // we have a long enough history for the HL estimate to be reliable.
+  // We pass `x.length` (closes count) as the lookback so the cap widens
+  // naturally when the input history is long.
   const levels = hlRaw == null
     ? 12                                // trending fallback
     : optimalLevelsForHalfLife(hlRaw, x.length);
@@ -455,23 +457,27 @@ export function ouGridBounds(closes, klines) {
 /** Max level count for a given lookback size.
  *  We can fit more grid levels when we have a longer history — the HL
  *  estimate is more stable, so a finer grid is justified. Caps:
- *    nBars < 60       → 20 (sparse data; coarser grid)
- *    60 ≤ nBars < 120 → 24 (default)
- *    120 ≤ nBars < 200 → 28 (enough history for finer grid)
- *    nBars ≥ 200      → 32 (long lookback; precise HL allows dense grid)
+ *    nBars missing/non-finite → 24 (legacy default)
+ *    nBars < 60               → 20 (sparse data; coarser grid)
+ *    60 ≤ nBars < 120         → 24 (default)
+ *    120 ≤ nBars < 200        → 28 (enough history for finer grid)
+ *    nBars ≥ 200              → 32 (long lookback; precise HL allows dense grid)
  *  Minimum cap is always 8. */
 export function adaptiveLevelCap(nBars) {
-  if (!isFinite(nBars) || nBars < 60) return 20;
+  if (nBars == null || !isFinite(nBars)) return 24;
+  if (nBars < 60) return 20;
   if (nBars < 120) return 24;
   if (nBars < 200) return 28;
   return 32;
 }
 
-/** Optimal grid level count based on half-life and lookback size.
- *  Empirical: HL 20 → 24 levels; HL 100 → 8 levels; linear in between.
- *  HL < 10 → maxLevels (very fast reversion); HL > 200 → 8 (very slow).
+/** Optimal grid level count based on half-life and (optional) lookback size.
+ *  Empirical: HL 20 → cap levels; HL 100 → 8 levels; linear in between.
+ *  HL < 10 → cap (very fast reversion); HL > 200 → 8 (very slow).
  *  null/NaN/non-positive → 12 (safe middle default for trending series).
- *  `nBars` (optional) widens the upper cap when more data is available. */
+ *  `nBars` (optional) widens the upper cap when more data is available —
+ *  see adaptiveLevelCap for the exact bands. When omitted the legacy cap of
+ *  24 is used so existing callers keep their old behaviour. */
 export function optimalLevelsForHalfLife(hl, nBars) {
   const cap = adaptiveLevelCap(nBars);
   if (hl == null || !isFinite(hl) || hl <= 0) return 12;
@@ -480,6 +486,186 @@ export function optimalLevelsForHalfLife(hl, nBars) {
   // Linear interpolation: cap - (hl - 10) * (cap - 8) / (100 - 10)
   const n = cap - (hl - 10) * (cap - 8) / 90;
   return Math.max(8, Math.min(cap, Math.round(n)));
+}
+
+/** Compute extended confluence indicators between working and context TF.
+ *  Returns one numeric `agreement` in [0, 1] and an array of named
+ *  agreement checks (each {name, agree: bool, label, weight}).
+ *
+ *  Checks:
+ *    - slope_sign      sign(working slope) == sign(context slope)
+ *    - adf_sign        sign(working ADF γ) == sign(context ADF γ)
+ *    - regime          working Hurst and context Hurst in the same regime
+ *                      (both trending >0.55, both MR <0.50, or both neutral)
+ *    - vwap_bias       sign(working VWAP bias) == sign(working slope)
+ *                      (price stretched above/below VWAP matches direction)
+ *
+ *  Weights: slope 0.4, adf 0.3, regime 0.2, vwap 0.1.
+ *  Returns `null` when context TF is missing or has too few bars. */
+export function confluenceScore(workRow, klCtx) {
+  if (!workRow || !klCtx || klCtx.length < 30) return null;
+  const closesCtx = klCtx.map((k) => +k.c).filter((c) => isFinite(c) && c > 0);
+  if (closesCtx.length < 30) return null;
+  const slopeCtx = linregSlope(closesCtx, 30);
+  const adfCtx = adfTest(closesCtx);
+  const hurstCtx = hurstExponentRS(closesCtx);
+  const checks = [];
+  // 1. Slope sign agreement (heaviest weight).
+  const sw = workRow.raw?.slope;
+  if (slopeCtx != null && sw != null) {
+    const agree = Math.sign(slopeCtx) === Math.sign(sw) && sw !== 0;
+    checks.push({
+      name: 'slope_sign',
+      agree,
+      label: `наклон: ${agree ? 'согласен' : 'расходится'}`,
+      weight: 0.4,
+    });
+  }
+  // 2. ADF γ sign agreement.
+  const adfWork = workRow.raw?.adf;
+  if (adfWork?.gamma != null && adfCtx?.gamma != null) {
+    const agree = Math.sign(adfWork.gamma) === Math.sign(adfCtx.gamma);
+    checks.push({
+      name: 'adf_sign',
+      agree,
+      label: `ADF: ${agree ? 'согласен' : 'расходится'}`,
+      weight: 0.3,
+    });
+  }
+  // 3. Hurst regime.
+  const hw = workRow.raw?.hurst;
+  if (hurstCtx != null && hw != null) {
+    const regW = hw > 0.55 ? 'trend' : hw < 0.5 ? 'mr' : 'neutral';
+    const regC = hurstCtx > 0.55 ? 'trend' : hurstCtx < 0.5 ? 'mr' : 'neutral';
+    const agree = regW === regC;
+    checks.push({
+      name: 'regime',
+      agree,
+      label: `режим: ${regW} ↔ ${regC}`,
+      weight: 0.2,
+    });
+  }
+  // 4. VWAP bias (working) — internal-only, no context TF needed.
+  // We re-compute on working klines via vwapBias already exposed through scoreSmart;
+  // but to avoid re-running, use a cheaper proxy: sign of (last close − mean).
+  // This is internally consistent because we only need the *direction* not magnitude.
+  const workCloses = workRow.raw?.closes;
+  if (workCloses && workCloses.length >= 20) {
+    const tail = workCloses.slice(-20);
+    const vwap = tail.reduce((a, b) => a + b, 0) / tail.length;
+    const last = workCloses[workCloses.length - 1];
+    const biasSign = Math.sign(last - vwap);
+    const slopeSign = sw != null ? Math.sign(sw) : 0;
+    if (biasSign !== 0 && slopeSign !== 0) {
+      const agree = biasSign === slopeSign;
+      checks.push({
+        name: 'vwap_bias',
+        agree,
+        label: `VWAP: ${agree ? 'согласен' : 'расходится'}`,
+        weight: 0.1,
+      });
+    }
+  }
+  if (!checks.length) return null;
+  const totalWeight = checks.reduce((a, c) => a + c.weight, 0);
+  const agreement = checks.reduce((a, c) => a + (c.agree ? c.weight : 0), 0) / totalWeight;
+  return { agreement, checks };
+}
+
+/** Classify a scan error message into a toast severity.
+ *  Pure: returns one of 'fatal' | 'rate-limit' | 'warn'.
+ *  - 'fatal'     : something we can't recover from (network, JSON, unknown)
+ *  - 'rate-limit': Binance rate limit / 418 / 429 — caller may want to retry
+ *  - 'warn'      : empty universe, no results — recoverable by changing inputs */
+export function classifyScanError(message) {
+  if (message == null) return 'warn';
+  const m = String(message);
+  if (/rate\s*limit|429|418|too\s*many\s*requests|retried|retry/i.test(m)) {
+    return 'rate-limit';
+  }
+  if (/network|fetch|timeout|aborted|cors|json|parse/i.test(m)) {
+    return 'fatal';
+  }
+  // empty universe / no results — purely informational
+  return 'warn';
+}
+
+/** Map severity to a CSS class name for the toast bubble. */
+export function severityClass(severity) {
+  return severity === 'fatal'
+    ? 'gbs-toast--fatal'
+    : severity === 'rate-limit'
+      ? 'gbs-toast--rate'
+      : 'gbs-toast--warn';
+}
+
+/** Default TTL per severity in ms. Rate-limit toasts stay longer so the
+ *  user can read the "wait Xs" hint. */
+export function severityTtl(severity) {
+  return severity === 'rate-limit' ? 6000 : severity === 'fatal' ? 4500 : 3500;
+}
+
+/** Build a toast message from an error. Pure: returns { text, hint }.
+ *  `hint` is an optional secondary line (e.g. "подождите 60с"). */
+export function toastFromError(message) {
+  const sev = classifyScanError(message);
+  const text = String(message || 'Неизвестная ошибка');
+  let hint = null;
+  if (sev === 'rate-limit') {
+    hint = 'Подождите 30–60с и попробуйте снова';
+  } else if (sev === 'fatal') {
+    hint = 'Проверьте сеть / API ключ';
+  } else if (/пустой|empty|нет символов|no symbols/i.test(text)) {
+    hint = 'Проверьте фильтр объёма';
+  }
+  return { severity: sev, text, hint };
+}
+
+/** Show a non-blocking toast on the Smart screener modal.
+ *  - `host` is the modal root element (where the toast container lives)
+ *  - `message` is the raw error string (will be classified)
+ *  - `opts.actionLabel` + `opts.onAction` add an inline action button
+ *  Returns a dismiss function. */
+export function showSmartToast(host, message, opts = {}) {
+  if (!host) return () => {};
+  const { severity, text, hint } = toastFromError(message);
+  const ttl = severityTtl(severity);
+  const cls = severityClass(severity);
+
+  // Reuse a single container so multiple toasts stack.
+  let stack = host.querySelector(':scope > .gbs-toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.className = 'gbs-toast-stack';
+    stack.style.cssText = 'position:absolute;right:14px;bottom:14px;display:flex;flex-direction:column;gap:6px;z-index:20;pointer-events:none';
+    host.appendChild(stack);
+  }
+  const el = document.createElement('div');
+  el.className = `gbs-toast ${cls}`;
+  el.style.cssText = 'pointer-events:auto;background:var(--bg4);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:7px 11px;font-size:10px;min-width:220px;max-width:340px;box-shadow:0 2px 12px rgba(0,0,0,.45);opacity:0;transition:opacity .25s';
+  el.innerHTML = `
+    <div style="font-weight:600">${escapeHtml(text)}</div>
+    ${hint ? `<div style="font-size:9px;color:var(--text3);margin-top:3px">${escapeHtml(hint)}</div>` : ''}
+    ${opts.actionLabel && typeof opts.onAction === 'function'
+      ? `<button class="tbtn" style="margin-top:5px;font-size:9px">${escapeHtml(opts.actionLabel)}</button>`
+      : ''}
+  `;
+  stack.appendChild(el);
+  // fade in
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  const actionBtn = el.querySelector('button');
+  if (actionBtn && typeof opts.onAction === 'function') {
+    actionBtn.onclick = () => { try { opts.onAction(); } catch (e) {} dismiss(); };
+  }
+  let dismissed = false;
+  function dismiss() {
+    if (dismissed) return;
+    dismissed = true;
+    el.style.opacity = '0';
+    setTimeout(() => { try { el.remove(); } catch (e) {} }, 280);
+  }
+  el._to = setTimeout(dismiss, ttl);
+  return dismiss;
 }
 
 /** Compute the full row for one symbol. `kl` is the working-TF klines,
@@ -493,6 +679,7 @@ export function computeSmartRow(sym, kl, klCtx, mcapMap, vol24For) {
   if (!gb) return null;
   // Confluence: compare slope signs between working and context TF
   let confluence = null; // null | 'agree' | 'disagree' | 'na'
+  let confluenceDetail = null;
   if (klCtx && klCtx.length >= 30) {
     const closesCtx = klCtx.map((k) => +k.c).filter((c) => isFinite(c));
     const slopeCtx = linregSlope(closesCtx, 30);
@@ -503,6 +690,11 @@ export function computeSmartRow(sym, kl, klCtx, mcapMap, vol24For) {
     } else {
       confluence = 'na';
     }
+    // Extended confluence score (4 weighted checks).
+    confluenceDetail = confluenceScore(
+      { ...sc, raw: { ...sc.raw, closes } },
+      klCtx
+    );
   } else {
     confluence = 'na';
   }
@@ -517,6 +709,7 @@ export function computeSmartRow(sym, kl, klCtx, mcapMap, vol24For) {
     raw: sc.raw,
     gridBounds: gb,
     confluence,
+    confluenceDetail,
   };
 }
 
@@ -763,12 +956,25 @@ export function registerGridSmartScreener(deps) {
         const badgeCls = `gbs-badge gbs-badge--${r.band === 'green' ? 'green' : r.band === 'yellow' ? 'yellow' : 'red'}`;
         const dirCls = `gbs-badge gbs-badge--${r.direction === 'LONG' ? 'long' : r.direction === 'SHORT' ? 'short' : 'neutral'}`;
         const conf = r.confluence;
-        const confMark = conf == null ? '—' : conf === 'agree' ? 'вњ“' : conf === 'disagree' ? '·' : '—';
-        const confTitle = conf == null
-          ? 'нет данных старшего TF'
-          : conf === 'agree' ? 'старший TF согласен по направлению'
-          : conf === 'disagree' ? 'старший TF против рабочего'
-          : 'недостаточно данных';
+        const confMark = conf == null ? '—' : conf === 'agree' ? '✓' : conf === 'disagree' ? '·' : '—';
+        let confTitle;
+        if (conf == null) {
+          confTitle = 'нет данных старшего TF';
+        } else if (conf === 'na') {
+          confTitle = 'недостаточно данных';
+        } else {
+          // Use confluenceDetail (extended score) for richer tooltip.
+          const det = r.confluenceDetail;
+          if (det && Array.isArray(det.checks) && det.checks.length) {
+            const pct = Math.round((det.agreement || 0) * 100);
+            const lines = det.checks.map((c) => `${c.agree ? '✓' : '✗'} ${c.label}`).join('\n');
+            confTitle = `Согласие со старшим TF: ${pct}%\n${lines}`;
+          } else {
+            confTitle = conf === 'agree'
+              ? 'старший TF согласен по направлению'
+              : 'старший TF против рабочего';
+          }
+        }
         const bd = Object.entries(r.breakdown || {})
           .map(([group, comps]) =>
             Object.entries(comps)
@@ -823,7 +1029,7 @@ export function registerGridSmartScreener(deps) {
         <button class="tbtn" id="gbsSmartX">Закрыть</button>
       </div>
       <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:10px">
-        <label title="Рабочий таймфрейм: все метрики (half-life, GK, ADF, slope) считаются по нему. Контекстный TF подтягивается автоматически для колонки вЂКонфлюэнс’." style="cursor:help;border-bottom:1px dotted var(--text3)">TF
+        <label title="Рабочий таймфрейм: все метрики (half-life, GK, ADF, slope) считаются по нему. Контекстный TF подтягивается автоматически для колонки в«Конфлюэнс’." style="cursor:help;border-bottom:1px dotted var(--text3)">TF
           <select id="gbsSmartTf" style="margin-left:4px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
             ${SUPPORTED_TFS.map(t => `<option value="${t}"${ui.tf === t ? ' selected' : ''}>${t}</option>`).join('')}
           </select>
@@ -834,7 +1040,7 @@ export function registerGridSmartScreener(deps) {
         <label title="Показывать только ряды с направлением SHORT (slope вниз + ADF/slope согласованы)" style="cursor:help"><input type="checkbox" id="gbsSmartShort"${ui.showShort ? ' checked' : ''}> SHORT</label>
         <label title="Показывать ряды без выраженного направления (adaptive threshold не пробит) — для нейтральных сеток" style="cursor:help"><input type="checkbox" id="gbsSmartNeutral"${ui.showNeutral ? ' checked' : ''}> NEUTRAL</label>
         <label title="Если включено — добавляет ряды с confidence &lt; 60% (слабое согласие тестов, использовать с осторожностью)" style="cursor:help;border-bottom:1px dotted #f59e0b"><input type="checkbox" id="gbsSmartLowConf"${ui.showLowConf ? ' checked' : ''}> Low conf (&lt;60%)</label>
-        <label title="Показывать колонку вЂКонфлюэнс’: сравнение наклона рабочего TF (напр. 15m) со старшим TF (напр. 1h). вњ“ — оба согласны по направлению, · — расходятся, — — данных нет" style="cursor:help;border-bottom:1px dotted #a78bfa"><input type="checkbox" id="gbsSmartConf"${ui.showConfluence ? ' checked' : ''}> Конфлюэнс</label>
+        <label title="Показывать колонку в«Конфлюэнс’: сравнение наклона рабочего TF (напр. 15m) со старшим TF (напр. 1h). вњ“ — оба согласны по направлению, · — расходятся, — — данных нет" style="cursor:help;border-bottom:1px dotted #a78bfa"><input type="checkbox" id="gbsSmartConf"${ui.showConfluence ? ' checked' : ''}> Конфлюэнс</label>
         <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsSmartLu">—</span></span>
       </div>
       <div style="padding:4px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text3);line-height:1.4">
@@ -860,6 +1066,7 @@ export function registerGridSmartScreener(deps) {
 
     modal.appendChild(box);
     document.body.appendChild(modal);
+    ui.modal = modal; // host for non-blocking error toasts (see showSmartToast)
 
     const onHdr = (e) => {
       const th = e.target.closest('.gbs-th');
@@ -932,10 +1139,16 @@ export function registerGridSmartScreener(deps) {
         if (!syms.length) {
           uiRef.lastRows = [];
           uiRef.lastRun = Date.now();
-          uiRef.error = 'Universe пустой: ещё не загрузились объёмы (S.mx / S.tk). Подожди загрузки списка символов и попробуй снова.';
+          uiRef.error = 'Universe пустой: ещё не загрузились объёмы (S.mx / S.tk). Подождите загрузки списка символов и попробуйте снова.';
           uiRef.diag = 'universe=0';
           uiRef.loading = false;
           if (uiRef.applyFiltersAndRender) uiRef.applyFiltersAndRender();
+          if (typeof showSmartToast === 'function' && uiRef.modal) {
+            showSmartToast(uiRef.modal, uiRef.error, {
+              actionLabel: 'Обновить',
+              onAction: () => { try { runSmartScan(uiRef); } catch (e) {} },
+            });
+          }
           return;
         }
         uiRef.diag = `universe ${syms.length}/${baseAll.length || 0} · mcap…`;
@@ -989,12 +1202,24 @@ export function registerGridSmartScreener(deps) {
         uiRef.diag = `rows ${rawRows.length}/${syms.length} · last ${new Date(uiRef.lastRun).toLocaleTimeString()}`;
         if (!rawRows.length) {
           uiRef.error = 'Список пуст: не удалось получить klines. Возможен rate-limit Binance.';
+          if (typeof showSmartToast === 'function' && uiRef.modal) {
+            showSmartToast(uiRef.modal, uiRef.error, {
+              actionLabel: 'Повторить',
+              onAction: () => { try { runSmartScan(uiRef); } catch (e) {} },
+            });
+          }
         }
       } catch (e) {
         if (isStale()) return;
         uiRef.lastRows = [];
         uiRef.error = `Ошибка скана: ${e?.message || String(e)}`;
         uiRef.diag = 'error';
+        if (typeof showSmartToast === 'function' && uiRef.modal) {
+          showSmartToast(uiRef.modal, uiRef.error, {
+            actionLabel: 'Повторить',
+            onAction: () => { try { runSmartScan(uiRef); } catch (e) {} },
+          });
+        }
       } finally {
         if (myId === uiRef.scanId) {
           uiRef.loading = false;

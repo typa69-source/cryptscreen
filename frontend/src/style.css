@@ -612,4 +612,11 @@ html,body{
 .gbs-skeleton{display:flex;align-items:center;gap:6px;height:16px;margin:4px 0;animation:gbs-shimmer 1.2s ease-in-out infinite}
 .gbs-skeleton-bar{height:8px;border-radius:3px;background:linear-gradient(90deg,rgba(124,58,237,.12),rgba(124,58,237,.28),rgba(124,58,237,.12))}
 .gbs-skeleton-bar--w12{flex:0 0 26px}
+
+/* Non-blocking toasts for Smart screener errors. Severity colours via --text
+ * fallbacks since we don't want to flood the palette. */
+.gbs-toast{border-left:3px solid var(--border2)}
+.gbs-toast--fatal{border-left-color:#ef4444}
+.gbs-toast--rate{border-left-color:#f59e0b}
+.gbs-toast--warn{border-left-color:#3b82f6}
 .gbs-skeleton-bar--w70{flex:1}
