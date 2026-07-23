@@ -1029,7 +1029,7 @@ export function registerGridSmartScreener(deps) {
         <button class="tbtn" id="gbsSmartX">Закрыть</button>
       </div>
       <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:10px">
-        <label title="Рабочий таймфрейм: все метрики (half-life, GK, ADF, slope) считаются по нему. Контекстный TF подтягивается автоматически для колонки в«Конфлюэнс’." style="cursor:help;border-bottom:1px dotted var(--text3)">TF
+        <label title="Рабочий таймфрейм: все метрики (half-life, GK, ADF, slope) считаются по нему. Контекстный TF подтягивается автоматически для колонки «Конфлюэнс’." style="cursor:help;border-bottom:1px dotted var(--text3)">TF
           <select id="gbsSmartTf" style="margin-left:4px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
             ${SUPPORTED_TFS.map(t => `<option value="${t}"${ui.tf === t ? ' selected' : ''}>${t}</option>`).join('')}
           </select>
@@ -1040,7 +1040,7 @@ export function registerGridSmartScreener(deps) {
         <label title="Показывать только ряды с направлением SHORT (slope вниз + ADF/slope согласованы)" style="cursor:help"><input type="checkbox" id="gbsSmartShort"${ui.showShort ? ' checked' : ''}> SHORT</label>
         <label title="Показывать ряды без выраженного направления (adaptive threshold не пробит) — для нейтральных сеток" style="cursor:help"><input type="checkbox" id="gbsSmartNeutral"${ui.showNeutral ? ' checked' : ''}> NEUTRAL</label>
         <label title="Если включено — добавляет ряды с confidence &lt; 60% (слабое согласие тестов, использовать с осторожностью)" style="cursor:help;border-bottom:1px dotted #f59e0b"><input type="checkbox" id="gbsSmartLowConf"${ui.showLowConf ? ' checked' : ''}> Low conf (&lt;60%)</label>
-        <label title="Показывать колонку в«Конфлюэнс’: сравнение наклона рабочего TF (напр. 15m) со старшим TF (напр. 1h). вњ“ — оба согласны по направлению, · — расходятся, — — данных нет" style="cursor:help;border-bottom:1px dotted #a78bfa"><input type="checkbox" id="gbsSmartConf"${ui.showConfluence ? ' checked' : ''}> Конфлюэнс</label>
+        <label title="Показывать колонку «Конфлюэнс’: сравнение наклона рабочего TF (напр. 15m) со старшим TF (напр. 1h). ✓ — оба согласны по направлению, · — расходятся, — — данных нет" style="cursor:help;border-bottom:1px dotted #a78bfa"><input type="checkbox" id="gbsSmartConf"${ui.showConfluence ? ' checked' : ''}> Конфлюэнс</label>
         <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsSmartLu">—</span></span>
       </div>
       <div style="padding:4px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text3);line-height:1.4">
@@ -1056,7 +1056,7 @@ export function registerGridSmartScreener(deps) {
             <th class="gbs-th" data-k="mr" title="Mean-reversion quality: Hurst ∈ [0.30,0.50], VR <0.7, OU half-life ∈ [10,50]. Чем выше — тем надёжнее возврат к средней">MR</th>
             <th class="gbs-th" data-k="fit" title="Grid fitness: GK vol 1–5%, vol/mcap >0.05, спред <2%. Чем выше — тем пригоднее для сетки">fit</th>
             <th class="gbs-th" data-k="gkh" title="GK vol / price за один бар, в %. Используется для оценки плотности сетки">ΔH/L</th>
-            <th title="Конфлюэнс со старшим TF: вњ“ — наклон согласен по знаку, · — против, — — данных нет">${ui.showConfluence ? 'старш.' : '—'}</th>
+            <th title="Конфлюэнс со старшим TF: ✓ — наклон согласен по знаку, · — против, — — данных нет">${ui.showConfluence ? 'старш.' : '—'}</th>
             <th title="Наведи на фиолетовые теги — там человеческим языком объясняется каждая метрика">Метрики</th>
           </tr></thead>
           <tbody id="gbsSmartBody"></tbody>

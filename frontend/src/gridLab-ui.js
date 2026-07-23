@@ -1159,7 +1159,11 @@ export function renderGridLabModal(defSymOpt, deps = {}) {
     btnBt.classList.toggle('on', tab === 'backtest');
     btnSel.classList.toggle('on', tab === 'selector');
     if (tab === 'selector') {
-      const rows = getGridSelectorRows(24);
+      // Selector rows are computed by the host (needs S.syms/S.mx/score fn).
+      // Falls back to local helper if host didn't inject one.
+      const rows = (deps.getGridSelectorRows || getGridSelectorRows)(
+        S?.syms, S?.mx, deps.calcGridCoinScore || window.calcGridCoinScore, { limit: 24 },
+      );
       // Render selector tab. Formatting helpers (fn/fk) and the symbol click
       // handler are resolved from the host's window at render time so we
       // don't pull main.js globals into this module.

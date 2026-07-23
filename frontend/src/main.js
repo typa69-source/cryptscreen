@@ -3192,7 +3192,7 @@ function openEMAEditor(mode='auto'){
       </div>
       <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
         <button class="tbtn" style="flex:1" id="addEmaBtn">пј‹ Добавить EMA</button>
-        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">вњ“ Готово</button>
+        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">✓ Готово</button>
       </div>`;
 
     const list=box.querySelector('#emaList');
@@ -5038,7 +5038,7 @@ function renderSettingsDensity(body){
   body.innerHTML=`
   <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.6">
     Плотности • горизонтальные лучи на уровнях с крупными стенками.<br>
-    <span style="color:#e04040">в–€</span> крупная &nbsp;<span style="color:#e8a020">в–€</span> средняя &nbsp;<span style="color:#606080">в–€</span> малая
+    <span style="color:#e04040">█</span> крупная &nbsp;<span style="color:#e8a020">█</span> средняя &nbsp;<span style="color:#606080">█</span> малая
   </div>
   <div class="smodal-row">
     <span class="smodal-lbl">Отображение плотностей</span>
@@ -5099,7 +5099,7 @@ function renderSettingsAlerts(body){
   const a=S.alertSettings;
   body.innerHTML=`
   <div style="font-size:9px;color:var(--text3);margin-bottom:10px;line-height:1.6">
-    Настройки звуковых алертов (рџ””в”Ђ луч и рџ””в•± линия).<br>
+    Настройки звуковых алертов (🔔─ луч и 🔔╱ линия).<br>
     Алерт срабатывает когда цена приближается к линии на заданный %.
   </div>
   <div class="smodal-row">
@@ -5458,7 +5458,7 @@ function openGroupManager(g){
       row.style.cssText=`display:flex;align-items:center;padding:5px 12px;cursor:pointer;gap:8px;border-bottom:1px solid rgba(37,37,48,.4);transition:background .06s;${inGrp?'background:rgba(255,255,255,.04)':''}`;
       row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'в…':'в†'):''}</span>
         <span style="font-size:10px;font-weight:500;color:${inGrp?'#fff':'var(--text2)'};flex:1">${m.sym.replace(/USDT$/,'')}</span>
-        ${inGrp?`<span style="font-size:9px;color:${col}">вњ“ в группе</span>`:''}`;
+        ${inGrp?`<span style="font-size:9px;color:${col}">✓ в группе</span>`:''}`;
       row.onmouseenter=()=>row.style.background=inGrp?'rgba(255,255,255,.07)':'rgba(255,255,255,.025)';
       row.onmouseleave=()=>row.style.background=inGrp?'rgba(255,255,255,.04)':'';
       row.onclick=()=>{
@@ -5720,15 +5720,15 @@ function toggleSessionBand(which){
 }
 
 function renderSettingsChartHead(body){
-  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Индикаторы»). Перетащите порядок, вњ“ • показать/скрыть.</div>';
+  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Индикаторы»). Перетащите порядок, ✓ • показать/скрыть.</div>';
   const list=document.createElement('div');list.className='ind-list';list.id='chartHeadList';
   S.chartHeadOrder.forEach(id=>{
     const def=CHART_HEAD_DEFS.find(d=>d.id===id);if(!def)return;
     const item=document.createElement('div');
     item.className='ind-item';item.dataset.id=id;item.draggable=true;
     const visible=S.chartHeadVisible.has(id);
-    item.innerHTML=`<span class="ind-handle" title="Перетащить">вЈї</span>
-      <span class="ind-check${visible?' checked':''}" onclick="toggleChartHeadCol('${id}',this)">вњ“</span>
+    item.innerHTML=`<span class="ind-handle" title="Перетащить">⋮⋮</span>
+      <span class="ind-check${visible?' checked':''}" onclick="toggleChartHeadCol('${id}',this)">✓</span>
       <span class="ind-name">${def.id==='chg'?'Рост':def.id==='vol'?'Объём':def.id==='trd'?'Сделки':def.id==='natr'?'NATR':'Корр.'}</span>
       <span class="ind-sub" style="opacity:.75">${def.id==='chg'?'24ч %':def.id==='vol'?'USDT 24ч':def.id==='trd'?'кол-во 24ч':def.id==='natr'?'5м/14 %':'к BTC'}</span>`;
     item.addEventListener('dragstart',e=>{e.dataTransfer.setData('text',id);item.style.opacity='0.4';});
@@ -5770,15 +5770,15 @@ function toggleChartHeadCol(id,el){
 }
 
 function renderSettingsInd(body){
-  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Перетащите для изменения порядка. Нажмите вњ“ для показа/скрытия.</div>';
+  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Перетащите для изменения порядка. Нажмите ✓ для показа/скрытия.</div>';
   const list=document.createElement('div');list.className='ind-list';list.id='indList';
   S.colOrder.forEach(id=>{
     const col=ALL_COLS.find(c=>c.id===id);if(!col)return;
     const item=document.createElement('div');
     item.className='ind-item';item.dataset.id=id;item.draggable=true;
     const visible=S.colVisible.has(id);
-    item.innerHTML=`<span class="ind-handle" title="Перетащить">вЈї</span>
-      <span class="ind-check${visible?' checked':''}" onclick="toggleCol('${id}',this)">вњ“</span>
+    item.innerHTML=`<span class="ind-handle" title="Перетащить">⋮⋮</span>
+      <span class="ind-check${visible?' checked':''}" onclick="toggleCol('${id}',this)">✓</span>
       <span class="ind-name">${col.l}</span>
       <span class="ind-sub">${col.s}</span>`;
     // Drag-and-drop
@@ -6638,9 +6638,9 @@ function renderPotentialPanel(){
         if(c.field==='emaTouch')val=calcEmaTouchSignal(sym,c.period||20);
         let fmt;
         if(c.field==='vol24'||c.field==='trd24')fmt=fk(val);
-        else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'вњ“':'·';
+        else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'✓':'·';
         else if(c.field==='bbBreak')fmt=val>0?'↑':val<0?'↓':'·';
-        else if(c.field==='emaTouch')fmt=val>=1?`вњ“(${Math.max(2,Math.min(400,c.period||20))})`:`·(${Math.max(2,Math.min(400,c.period||20))})`;
+        else if(c.field==='emaTouch')fmt=val>=1?`✓(${Math.max(2,Math.min(400,c.period||20))})`:`·(${Math.max(2,Math.min(400,c.period||20))})`;
         else fmt=val!=null?fn(val,2):'•';
         const absTxt=c.abs&&['ch24','ch7d','cday','bbBreak'].includes(c.field)?'|.| ':'';
         return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit?f.unit:''}</span>`;
@@ -6686,7 +6686,7 @@ function openPotPresetEditor(presetId){
       <div id="potCondList" style="flex:1;overflow-y:auto;min-height:0;padding:6px 14px"></div>
       <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
         <button class="tbtn" style="flex:1;color:var(--text2)" onclick="document.getElementById('potPresetModal').remove()">Отмена</button>
-        <button class="tbtn on" style="flex:2" id="potSaveBtn">вњ“ Сохранить</button>
+        <button class="tbtn on" style="flex:2" id="potSaveBtn">✓ Сохранить</button>
       </div>
       ${existing?`<div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
         <button class="tbtn${existing.enabled?' on':''}" style="flex:1" id="potToggleBtn">${existing.enabled?'в—Џ Вкл':'в—‹ Выкл'} алерты</button>
@@ -7093,6 +7093,8 @@ function renderGridLabModal(defSymOpt) {
     applyGbRatioGrid,
     gridLabBoundsUndo,
     gridLabBoundsRedo,
+    getGridSelectorRows,
+    calcGridCoinScore,
   });
 }
 
