@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<title>CryptScreen — Crypto Screener</title>
+</head>
+<body>
+
+<div id="rulerTooltip">
+  <div class="rt-pct" id="rtPct"></div>
+  <div class="rt-row" id="rtNatr"></div>
+  <div class="rt-row" id="rtBars"></div>
+  <div class="rt-row" id="rtTime"></div>
+  <div class="rt-row" id="rtVol"></div>
+  <div class="rt-row" id="rtVr"></div>
+  <div class="rt-row" id="rtTr"></div>
+</div>
+<div id="chartIndTooltip" style="display:none;position:fixed;z-index:901;pointer-events:none;background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:6px 9px;font-size:9px;color:var(--text2);max-width:280px;line-height:1.45;box-shadow:0 6px 20px rgba(0,0,0,.55)"></div>
+
+<div id="ld">
+  <div class="ld-logo">⬛ CRYPTSCREEN</div>
+  <div class="ld-main" id="ltxt">Инициализация...</div>
+  <div class="ld-bar"><div class="ld-fill" id="lfill"></div></div>
+  <div class="ld-log" id="llog"></div>
+  <div class="ld-err" id="lerr"></div>
+</div>
+
+<!-- Fullscreen is a mode of the same app (no separate header). -->
+
+<!-- ALERT LOG PANEL -->
+<div id="alertLogPanel">
+  <div class="alp-hdr">
+    <span class="alp-title">🔔 Сработавшие алерты</span>
+    <button class="alp-clear" onclick="S.alertLog=[];renderAlertLog();">Очистить</button>
+    <button class="alp-x" onclick="toggleAlertLog()">✕</button>
+  </div>
+  <div id="alertLogList"><div style="padding:12px;color:var(--text3);font-size:9px">Алертов пока не было</div></div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div id="settingsModal">
+  <div class="smodal">
+    <div class="smodal-hdr">
+      <span class="smodal-title">⚙ Настройки</span>
+      <button class="smodal-x" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="smodal-tabs">
+      <button class="smodal-tab on" id="stab-gen" onclick="switchSettingsTab('gen')">Общие</button>
+      <button class="smodal-tab" id="stab-chead" onclick="switchSettingsTab('chead')">Шапка граф</button>
+      <button class="smodal-tab" id="stab-ind" onclick="switchSettingsTab('ind')">Индикаторы</button>
+      <button class="smodal-tab" id="stab-density" onclick="switchSettingsTab('density')">Плотности</button>
+      <button class="smodal-tab" id="stab-alerts" onclick="switchSettingsTab('alerts')">Алерты</button>
+    </div>
+    <div class="smodal-body" id="smodal-body">
+      <!-- filled dynamically -->
+    </div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <div id="header">
+    <div class="logo" id="logoBtn" role="button" tabindex="0" onclick="goHome()" title="На главную">
+      <div class="logo-sq">C</div>CRYPTSCREEN
+    </div>
+    <div class="hsep"></div>
+    <div class="hright">
+      <span class="live-dot" id="ldot"></span>
+      <span id="hstatus">—</span>
+      <span id="hcount"></span>
+      <span id="htime"></span>
+      <div class="hsep"></div>
+      <button class="hbtn" id="chartSyncBtn" onclick="toggleChartAutoSync()" type="button" title="Когда выкл — список обновляется, но мини-графики 3×3 не подменяются при смене топа по сортировке">Графы·авто</button>
+      <button class="hbtn on" id="toggleScrBtn" onclick="toggleScreener()">▶ Список</button>
+      <button class="hbtn" onclick="toggleAlertLog()" title="История алертов">🔔<span id="alertBadge"></span></button>
+      <button class="hbtn" id="potBtn" onclick="togglePotentialPanel()" title="Потенциал — мониторинг условий">⚡ Потенциал<span id="potBadge" style="display:none;background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;margin-left:3px"></span></button>
+      <button class="hbtn" id="gridLabBtn" onclick="toggleGridLab()" title="Grid Lab: сетка, риск-профиль, живой график, Coin Selector">▦ Grid Lab</button>
+      <button class="hbtn" onclick="openGridSwingScreener()" title="Grid swing — боковик на дневках">⧖ Grid Swing</button>
+      <button class="hbtn" onclick="openGridIntradayScreener()" title="Grid intraday — консолидация после импульса">⚡ Grid Intra</button>
+      <button class="hbtn" onclick="openGridPickScreener()" title="Grid Pick — нейтраль / лонг / шорт под тип сетки">◎ Grid Pick</button>
+      <button class="hbtn" onclick="openSettings()">⚙ Настройки</button>
+    </div>
+  </div>
+
+  <div id="toolbar">
+    <!-- Fullscreen-only extras: replaces TF group -->
+    <div id="fsExtras" style="display:none;align-items:center;gap:6px;flex-shrink:0">
+      <button class="hbtn" id="fsCloseBtn" onclick="closeFullscreen()">← Назад</button>
+      <span id="fsCgDot" class="cg-dot chart-cg-dot" style="cursor:pointer;width:16px;height:16px" title="Цветовая группа — нажать" onclick="showChartGroupPicker(S.fsSym,this)"></span>
+      <img id="fsSymIcon" src="" alt="" style="display:none;width:18px;height:18px;border-radius:50%;flex-shrink:0">
+      <span id="fsSym" style="font-weight:600;color:#fff;cursor:pointer" title="Нажмите чтобы скопировать BTCUSDT" onclick="copyTicker(S.fsSym)"></span>
+      <span id="fsPrc" style="margin-left:6px"></span>
+      <div id="fsHeadStats" class="fs-head-stats" style="margin-left:4px;display:flex;align-items:center;gap:5px;flex-wrap:wrap"></div>
+      <div class="tsep"></div>
+    </div>
+
+    <div id="tfGroup">
+      <span style="color:var(--text3);font-size:9px;flex-shrink:0">ТФ</span>
+      <div class="tsep"></div>
+      <button class="tbtn" id="tf1m" onclick="setTf('1m','tf1m')">1м</button>
+      <button class="tbtn on" id="tf5m" onclick="setTf('5m','tf5m')">5м</button>
+      <button class="tbtn" id="tf15m" onclick="setTf('15m','tf15m')">15м</button>
+      <button class="tbtn" id="tf1h" onclick="setTf('1h','tf1h')">1ч</button>
+      <button class="tbtn" id="tf4h" onclick="setTf('4h','tf4h')">4ч</button>
+      <button class="tbtn" id="tf1d" onclick="setTf('1d','tf1d')">Д</button>
+      <div class="tsep"></div>
+    </div>
+    <span style="color:var(--text3);font-size:9px;flex-shrink:0">РИСУНОК</span>
+    <button class="tbtn on" id="draw-none" onclick="setDrawMode(null)" title="Курсор">↖</button>
+    <button class="tbtn" id="draw-hray" onclick="setDrawMode('hray')" title="Горизонтальный луч">─▷</button>
+    <button class="tbtn" id="draw-tline" onclick="setDrawMode('tline')" title="Трендовая линия">╱</button>
+    <button class="tbtn" id="draw-brush" onclick="setDrawMode('brush')" title="Кисть — свободный рисунок">✏</button>
+    <div id="brushPalette">
+      <div class="brush-color active" style="background:#f97316" title="Оранжевый" onclick="setBrushColor('#f97316',this)"></div>
+      <div class="brush-color" style="background:#ef4444" title="Красный" onclick="setBrushColor('#ef4444',this)"></div>
+      <div class="brush-color" style="background:#eab308" title="Жёлтый" onclick="setBrushColor('#eab308',this)"></div>
+      <div class="brush-color" style="background:#22c55e" title="Зелёный" onclick="setBrushColor('#22c55e',this)"></div>
+      <div class="brush-color" style="background:#3b82f6" title="Синий" onclick="setBrushColor('#3b82f6',this)"></div>
+      <div class="brush-color" style="background:#a855f7" title="Фиолетовый" onclick="setBrushColor('#a855f7',this)"></div>
+      <div class="brush-color" style="background:#ec4899" title="Розовый" onclick="setBrushColor('#ec4899',this)"></div>
+      <div class="brush-color" style="background:#e2e8f0" title="Белый" onclick="setBrushColor('#e2e8f0',this)"></div>
+      <input type="number" class="brush-size" id="brushSizeInput" min="1" max="12" value="2" title="Толщина" onchange="setBrushWidth(+this.value)">
+    </div>
+    <div id="linePalette" title="Цвет для выбранного типа линии (сохраняется отдельно для луча, тренда, алерт-луча и алерт-тренда)">
+      <div class="line-color active" data-c="#f97316" style="background:#f97316" title="Оранжевый" onclick="setLineColor('#f97316',this)"></div>
+      <div class="line-color" data-c="#ef4444" style="background:#ef4444" title="Красный" onclick="setLineColor('#ef4444',this)"></div>
+      <div class="line-color" data-c="#eab308" style="background:#eab308" title="Жёлтый" onclick="setLineColor('#eab308',this)"></div>
+      <div class="line-color" data-c="#22c55e" style="background:#22c55e" title="Зелёный" onclick="setLineColor('#22c55e',this)"></div>
+      <div class="line-color" data-c="#3b82f6" style="background:#3b82f6" title="Синий" onclick="setLineColor('#3b82f6',this)"></div>
+      <div class="line-color" data-c="#a855f7" style="background:#a855f7" title="Фиолетовый" onclick="setLineColor('#a855f7',this)"></div>
+      <div class="line-color" data-c="#ec4899" style="background:#ec4899" title="Розовый" onclick="setLineColor('#ec4899',this)"></div>
+      <div class="line-color" data-c="#e2e8f0" style="background:#e2e8f0" title="Белый" onclick="setLineColor('#e2e8f0',this)"></div>
+    </div>
+    <button class="tbtn" id="draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч (звук при достижении %)">🔔─</button>
+    <button class="tbtn" id="draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия (звук при достижении %)">🔔╱</button>
+    <button class="tbtn" id="draw-long" onclick="setDrawMode('long')" title="Лонг: вход → СЛ → ТП 2:1">▲Л</button>
+    <button class="tbtn" id="draw-short" onclick="setDrawMode('short')" title="Шорт: вход → СЛ → ТП 2:1">▼Ш</button>
+    <div class="tsep"></div>
+    <button class="tbtn" id="emaBtn" onclick="openEMAEditor('auto')" title="Настройки EMA">EMA</button>
+    <button class="tbtn" id="bbBtn" onclick="toggleBbOverlay()" title="Показать/скрыть полосы Боллинджера">BB</button>
+    <div class="tsep"></div>
+    <span id="sinfo" style="font-size:9px;color:var(--text3);flex-shrink:0"></span>
+    <div class="tsep"></div>
+    <button class="tbtn" id="densityBtn" onclick="toggleDensity()" title="Плотности объёма на графике">◈ Плотность</button>
+    <button class="tbtn" id="oiChartBtn" onclick="toggleOiChart()" title="Показать/скрыть OI линию на графиках">OI: ВЫКЛ</button>
+
+    <div class="tright">
+      <div class="vol-slider-wrap filter-slider-wrap">
+        <span style="font-size:9px;color:var(--text3);flex-shrink:0">ОБ≥</span>
+        <input type="range" class="vol-slider" id="volSlider" min="0" max="25" step="1" value="0" oninput="onVolFilter(this.value)">
+        <span class="vol-val" id="volVal">0</span>
+      </div>
+      <div class="vol-slider-wrap filter-slider-wrap">
+        <span style="font-size:9px;color:var(--text3);flex-shrink:0">СДЛК≥</span>
+        <input type="range" class="vol-slider" id="trdSlider" min="0" max="40" step="1" value="0" oninput="onTrdFilter(this.value)">
+        <span class="vol-val" id="trdVal">0</span>
+      </div>
+      <div class="pg-wrap pg-wrap-right">
+        <span style="color:var(--text3);font-size:9px;flex-shrink:0">СТР</span>
+        <button class="pg-btn" id="pgPrev" onclick="changePage(-1)" disabled>‹</button>
+        <span class="pg-info" id="pgInfo">1 / 1</span>
+        <button class="pg-btn" id="pgNext" onclick="changePage(1)" disabled>›</button>
+      </div>
+      <span class="pg-total" id="pgTotal"></span>
+      <div class="srch">
+        <span class="srch-ico">⌕</span>
+        <input class="sinput" id="sinput" type="text" placeholder="Поиск..." oninput="onSearchInput(this)">
+      </div>
+    </div>
+  </div>
+
+  <!-- FULLSCREEN BODY (shown instead of #body) -->
+  <div id="fsBody" style="display:none">
+    <div id="fsMain">
+      <div id="fsChartArea">
+        <div id="fsTop">
+          <div class="fs-tf-bar" id="fsTfBar0"><span class="fs-label">ОСНОВНОЙ:</span></div>
+          <div class="fs-chart-el" id="fsChartEl0"></div>
+        </div>
+        <div id="fsBtm">
+          <div id="fsLeft">
+            <div class="fs-tf-bar" id="fsTfBar1"><span class="fs-label">ЛЕВЫЙ:</span></div>
+            <div class="fs-chart-el" id="fsChartEl1"></div>
+          </div>
+          <div id="fsRight">
+            <div class="fs-tf-bar" id="fsTfBar2"><span class="fs-label">ПРАВЫЙ:</span></div>
+            <div class="fs-chart-el" id="fsChartEl2"></div>
+          </div>
+        </div>
+      </div>
+      <div class="spl" id="fsSpl" onmousedown="dragSpl(event,'fsSpl','fsChartArea','fsMain')"></div>
+      <div class="spanel" id="fsSpanel">
+        <div class="shdr" id="fsShdr"></div>
+        <div class="sbody" id="fsSbody"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="body">
+    <div id="cpanel">
+      <div id="cgrid"></div>
+    </div>
+    <div class="spl" id="spl" onmousedown="dragSpl(event,'spl','cpanel','body')"></div>
+    <div class="spanel" id="spanel">
+      <div class="shdr" id="shdr"></div>
+      <div class="sbody" id="sbody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- POTENTIAL PANEL -->
+<div id="potentialPanel" style="display:none">
+  <div class="pot-hdr">
+    <span class="pot-title">⚡ Потенциал</span>
+    <div style="display:flex;align-items:center;gap:4px;margin-left:auto">
+      <button class="alp-clear" id="potClearBtn" onclick="clearPotentialMatches()">Очистить</button>
+      <button class="alp-x" onclick="togglePotentialPanel()">✕</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

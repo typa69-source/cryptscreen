@@ -1,43 +1,5 @@
-﻿import './style.css'
-import { registerGridBotScreeners, buildGridLabPayload } from './gridBotScreeners.js'
-import { registerGridSmartScreener } from './gridSmart.js'
-import {
-  gbDepositClamp,
-  gridAdjacentStepPcts,
-  resolveGridLevelsForCfg,
-  buildRatioGridLevels,
-  gridRiskAnchorIdx,
-  buildGridRiskRows,
-  buildGridFavorableRows,
-  defaultGridLabPrefs,
-  loadGridLabPrefs,
-  saveGridLabPrefs,
-  computeRatioGridUpdate,
-  compileGridLabState,
-  runManualGridBacktest,
-  gridRiskMetaForPrice,
-  fmtGridLineTitle as fmtGridLineTitleLab,
-  captureGbLabViewport,
-  applyGbViewportFreeze,
-  gbWantBarsFromVisible,
-  GRIDLAB_PREFS_KEY,
-} from './gridLab.js'
-import {
-  pushBoundsUndo,
-  undoBounds,
-  redoBounds,
-  pushRedoFromCurrent,
-  pushUndoFromCurrent,
-  applyBoundsToPrefs,
-  readGridLabInputs as readGridLabInputsUi,
-  getGridSelectorRows as getGridSelectorRowsUi,
-  renderGridRiskProfile as renderGridRiskProfileUi,
-  renderManualBacktestPreviewUi,
-} from './gridLab-ui.js'
-import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
-import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
-import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
-import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile } from './metrics.js'
+import './style.css'
+import { registerGridBotScreeners } from './gridBotScreeners.js'
 
 // API base - in dev points to local backend, in prod to your Railway URL
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
@@ -75,19 +37,19 @@ function buildAuthUI() {
       <div class="auth-logo"><span>C</span>RYPT<span>S</span>CREEN</div>
       <div class="auth-sub">Crypto Futures Screener</div>
       <div class="auth-tabs">
-        <button class="auth-tab on" data-tab="login">Р’РѕР№С‚Рё</button>
-        <button class="auth-tab" data-tab="register">Р РµРіРёСЃС‚СЂР°С†РёСЏ</button>
+        <button class="auth-tab on" data-tab="login">Войти</button>
+        <button class="auth-tab" data-tab="register">Регистрация</button>
       </div>
       <form id="authForm">
         <div class="auth-field"><label class="auth-label">EMAIL</label><input class="auth-input" id="authEmail" type="email" placeholder="you@example.com" autocomplete="email"></div>
-        <div class="auth-field"><label class="auth-label">РџРђР РћР›Р¬</label><input class="auth-input" id="authPass" type="password" placeholder="вЂўвЂўвЂўвЂўвЂўвЂўвЂўвЂў" autocomplete="current-password"></div>
-        <div class="auth-field" id="authPassConfirmField" style="display:none"><label class="auth-label">РџРћР”РўР’Р•Р Р”РРўР• РџРђР РћР›Р¬</label><input class="auth-input" id="authPassConfirm" type="password" placeholder="вЂўвЂўвЂўвЂўвЂўвЂўвЂўвЂў" autocomplete="new-password"></div>
-        <button class="auth-btn" id="authSubmit" type="submit">Р’РћР™РўР</button>
+        <div class="auth-field"><label class="auth-label">ПАРОЛЬ</label><input class="auth-input" id="authPass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
+        <div class="auth-field" id="authPassConfirmField" style="display:none"><label class="auth-label">ПОДТВЕРДИТЕ ПАРОЛЬ</label><input class="auth-input" id="authPassConfirm" type="password" placeholder="••••••••" autocomplete="new-password"></div>
+        <button class="auth-btn" id="authSubmit" type="submit">ВОЙТИ</button>
         <div class="auth-err" id="authErr"></div>
         <div class="auth-ok" id="authOk"></div>
         <div style="margin-top:16px;padding-top:14px;border-top:1px solid #252530;text-align:center">
-          <button class="auth-guest" id="authGuest" type="button">РІРѕР№С‚Рё Р±РµР· СЂРµРіРёСЃС‚СЂР°С†РёРё в†’</button>
-          <div style="font-size:9px;color:#454555;margin-top:5px">РЅР°СЃС‚СЂРѕР№РєРё РЅРµ СЃРѕС…СЂР°РЅСЏСЋС‚СЃСЏ</div>
+          <button class="auth-guest" id="authGuest" type="button">войти без регистрации →</button>
+          <div style="font-size:9px;color:#454555;margin-top:5px">настройки не сохраняются</div>
         </div>
       </form>
     </div>
@@ -103,7 +65,7 @@ function buildAuthUI() {
     tab.addEventListener('click', () => {
       mode = tab.dataset.tab
       el.querySelectorAll('.auth-tab').forEach(t => t.classList.toggle('on', t === tab))
-      document.getElementById('authSubmit').textContent = mode === 'login' ? 'Р’РћР™РўР' : 'Р—РђР Р•Р“РРЎРўР РР РћР’РђРўР¬РЎРЇ'
+      document.getElementById('authSubmit').textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГИСТРИРОВАТЬСЯ'
       document.getElementById('authPassConfirmField').style.display = mode === 'register' ? '' : 'none'
       document.getElementById('authErr').textContent = ''
       document.getElementById('authOk').textContent = ''
@@ -118,11 +80,11 @@ function buildAuthUI() {
     const okEl = document.getElementById('authOk')
     const btn = document.getElementById('authSubmit')
     errEl.textContent = ''; okEl.textContent = ''
-    if (!email || !password) { errEl.textContent = 'Р’РІРµРґРёС‚Рµ email Рё РїР°СЂРѕР»СЊ'; return }
+    if (!email || !password) { errEl.textContent = 'Введите email и пароль'; return }
     if (mode === 'register') {
       const confirm = document.getElementById('authPassConfirm').value
-      if (password !== confirm) { errEl.textContent = 'РџР°СЂРѕР»Рё РЅРµ СЃРѕРІРїР°РґР°СЋС‚'; return }
-      if (password.length < 6) { errEl.textContent = 'РџР°СЂРѕР»СЊ РјРёРЅРёРјСѓРј 6 СЃРёРјРІРѕР»РѕРІ'; return }
+      if (password !== confirm) { errEl.textContent = 'Пароли не совпадают'; return }
+      if (password.length < 6) { errEl.textContent = 'Пароль минимум 6 символов'; return }
     }
     btn.disabled = true; btn.textContent = '...'
     try {
@@ -131,9 +93,9 @@ function buildAuthUI() {
         body: JSON.stringify({ email, password })
       })
       const data = await res.json()
-      if (!res.ok) { errEl.textContent = data.error || 'РћС€РёР±РєР°'; btn.disabled = false; btn.textContent = mode === 'login' ? 'Р’РћР™РўР' : 'Р—РђР Р•Р“РРЎРўР РР РћР’РђРўР¬РЎРЇ'; return }
+      if (!res.ok) { errEl.textContent = data.error || 'Ошибка'; btn.disabled = false; btn.textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГИСТРИРОВАТЬСЯ'; return }
       if (mode === 'register') {
-        okEl.textContent = 'РђРєРєР°СѓРЅС‚ СЃРѕР·РґР°РЅ! Р’С…РѕРґРёРјвЂ¦'
+        okEl.textContent = 'Аккаунт создан! Входим…'
         // auto-login after register
         const loginRes = await fetch(`${BACKEND}/api/auth/login`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -145,8 +107,8 @@ function buildAuthUI() {
         setToken(data.token); el.remove(); startApp()
       }
     } catch (e) {
-      errEl.textContent = 'РќРµС‚ СЃРѕРµРґРёРЅРµРЅРёСЏ СЃ СЃРµСЂРІРµСЂРѕРј'
-      btn.disabled = false; btn.textContent = mode === 'login' ? 'Р’РћР™РўР' : 'Р—РђР Р•Р“РРЎРўР РР РћР’РђРўР¬РЎРЇ'
+      errEl.textContent = 'Нет соединения с сервером'
+      btn.disabled = false; btn.textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГИСТРИРОВАТЬСЯ'
     }
   })
 
@@ -210,7 +172,7 @@ function addLogoutBtn() {
   if (!hright) return
   const btn = document.createElement('button')
   btn.className = 'hbtn'
-  btn.textContent = 'Р’С‹Р№С‚Рё'
+  btn.textContent = 'Выйти'
   btn.onclick = () => { removeToken(); location.reload() }
   hright.appendChild(btn)
 }
@@ -236,10 +198,165 @@ if (getToken()) {
 }
 
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════
 // ORIGINAL APP CODE
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-// State, constants, formatting and network helpers are imported from modules.
+// ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
+//  CONSTANTS
+// ═══════════════════════════════════════════════════════════════
+const API = 'https://fapi.binance.com/fapi/v1';
+const API_FDATA = 'https://fapi.binance.com/futures/data';
+// Timezone: offset candle times to device local time
+const TZ_OFFSET_S = -(new Date().getTimezoneOffset() * 60); // seconds to add to UTC
+function toChartTime(ms){ return Math.floor(ms/1000) + TZ_OFFSET_S; }
+const HIST_LIMIT = 1000;    // свечей при подгрузке истории (листание влево)
+const HIST_INITIAL = 1200; // свечей при первоначальной загрузке графика (чтобы реже ходить в API)
+const HIST_CACHE_MAX = 3000;
+const MIN_CHART_CANDLES = 32; // меньше — считаем данные битым и перезапрашиваем
+const HIST_TRIGGER = 35;
+const FS_TFS = ['1m','3m','5m','15m','30m','1h','4h','1d','3d','1w'];
+const DRAW_HIT = 8; // px threshold for hover detection
+function hexToRgbA(hex,a){
+  if(!hex||typeof hex!=='string')return`rgba(168,85,247,${a})`;
+  let h=hex.replace('#','');
+  if(h.length===3)h=h.split('').map(c=>c+c).join('');
+  const n=parseInt(h,16);
+  if(isNaN(n))return`rgba(168,85,247,${a})`;
+  return`rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
+}
+
+const ALL_COLS = [
+  {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены относительно цены 24 часа назад по данным Binance Futures (rolling 24h), в процентах. Положительное — рост, отрицательное — падение.'},
+  {id:'sp5',    l:'ТРНД', s:'…·30', tip:'Мини‑график последних 30 закрытий на том же таймфрейме, что и мини‑графики сетки (см. тулбар 1м/5м/15м/…). Пока нужный ТФ догружается в фоне, используется запасной ряд 5м. Сортировка — по % за отрезок (как у ИЗМ).'},
+  {id:'spv',    l:'ОБЪ',  s:'…·30', tip:'Мини‑график объёма (USDT, qv) за последние 30 баров на том же ТФ, что и колонка «ТРНД». Сортировка — по % изменения суммарного объёма за окно (как у ТРНД, но по объёму).'},
+  {id:'cday',   l:'ИЗМ',  s:'день%',  tip:'Изменение цены от первой 5-минутной свечи текущего календарного дня по локальному времени устройства до последней цены, в процентах.'},
+  {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Диапазон (макс−мин)/цена в процентах с начала локального календарного дня: 5-минутные свечи с полуночи по времени устройства.'},
+  {id:'r24',    l:'РЕНЖ', s:'24ч',    tip:'Диапазон за последние 24 часа по 5-минутным свечам: насколько широко ходила цена относительно текущей, в процентах.'},
+  {id:'r7d',    l:'РЕНЖ', s:'7д',     tip:'Диапазон за 7 дней по часовым свечам: отношение (high−low) к цене, в процентах — оценка волатильности недели.'},
+  {id:'na30',   l:'NATR', s:'1м/30',  tip:'NATR на 1м: ATR за 30 периодов, делённый на последнюю цену и умноженный на 100. Показывает типичный «размер шага» рынка относительно цены на минутном таймфрейме.'},
+  {id:'na14',   l:'NATR', s:'5м/14',  tip:'NATR на 5м: ATR(14) по пятиминутным свечам, нормализованный к цене (%). Удобно сравнивать волатильность разных монет независимо от абсолютной цены.'},
+  {id:'r1m5',   l:'РЕНЖ', s:'1м/5',   tip:'Диапазон последних пяти закрытых минутных свечей к текущей цене, в процентах — краткосрочный «микро-ренж».'},
+  {id:'tr5',    l:'СД*',  s:'5м/14',  tip:'Отношение числа сделок на последней 5-минутной свече к среднему числу сделок за предыдущие 14 закрытых пятиминуток. >1 — активность выше недавней нормы.'},
+  {id:'tr1h',   l:'СД*',  s:'1ч/24',  tip:'Отношение числа сделок на последней часовой свече к среднему за 24 предыдущих часа. Показывает всплеск или просадку торговой активности на 1ч ТФ.'},
+  {id:'vr5',    l:'ОБ*',  s:'5м/14',  tip:'Объём (в USDT) последней 5-минутной свечи, делённый на средний объём за 14 предыдущих пятиминуток. >1 — объём выше обычного для этого ТФ.'},
+  {id:'vr1h',   l:'ОБ*',  s:'1ч/24',  tip:'Объём последней часовой свечи к среднему часовому объёму за 24 закрытых часа. Индикатор всплеска или затишья на часовике.'},
+  {id:'ch7d',   l:'ИЗМ',  s:'7д',     tip:'Изменение цены за 7 дней по дневным (или агрегированным) данным, в процентах — среднесрочный тренд.'},
+  {id:'trd24',  l:'СДЛК', s:'24ч',    tip:'Суммарное число сделок (агрессивных обновлений книги) за 24 часа по данным тикера — ликвидность и интерес участников.'},
+  {id:'vol24',  l:'ОБЪЕМ',s:'24ч',    tip:'Совокупный объём торгов в USDT за 24 часа (quote volume). Сравнение ликвидности инструментов между собой.'},
+  {id:'corr',   l:'КРЛЦ', s:'24ч',    tip:'Коэффициент корреляции доходностей этой монеты и BTC за последние 24 часа по 5-минутным доходностям: ближе к 1 — движение с рынком, к 0 — своё движение.'},
+  {id:'corr14', l:'КРЛЦ', s:'5м/14',  tip:'Корреляция с BTC по последним 14 пятиминутным свечам — краткосрочное «следование» или расхождение с биткоином.'},
+  {id:'v15m',   l:'ОБ',   s:'1м/15',  tip:'Сумма объёма в USDT за последние 15 минут по минутным свечам — недавний приток/отток ликвидности без учёта направления цены.'},
+  {id:'v60m',   l:'ОБ',   s:'1м/60',  tip:'Сумма объёма в USDT за последний час по минутным свечам — более широкое окно, чем 15м, для оценки недавней активности.'},
+  {id:'fund',   l:'ФНД',  s:'8ч',     tip:'Ставка финансирования (lastFundingRate) с Binance Futures, в % за период ~8ч. Положительная — лонги платят шортам, отрицательная — наоборот. Обновляется пакетом раз в минуту.'},
+  {id:'oi1h',   l:'OIΔ',  s:'1ч%',    tip:'Изменение open interest за ~1 час по часовым снимкам Binance (openInterestHist, period=1h). Показывает приток/отток позиций относительно час назад.'},
+  {id:'oi4h',   l:'OIΔ',  s:'4ч%',    tip:'Изменение open interest за ~4 часа по тем же снимкам (сравнение с 4 барами назад). Догружается по очереди для части списка, чтобы не ловить лимиты API.'},
+];
+/** Колонки скринера по умолчанию скрытые (включаются в Настройки → Индикаторы). */
+const COLS_HIDDEN_BY_DEFAULT=new Set(['fund','oi1h','oi4h']);
+
+/** Плашки над мини-графиками и в полноэкранной шапке (отдельно от колонок скринера) */
+const CHART_HEAD_DEFS=[
+  {id:'chg', cls:'cchg', tip:'Изменение цены за 24 ч (тикер Binance Futures), %. Зелёный/красный — направление.'},
+  {id:'vol', cls:'cvol', tip:'Объём торгов в USDT за 24 ч по тикеру — ликвидность инструмента.'},
+  {id:'trd', cls:'ctrd', tip:'Число сделок за 24 ч — насколько «шумно» и часто обновляется рынок.'},
+  {id:'natr',cls:'cnatr',tip:'NATR 5м/14 (%): нормализованный ATR по пятиминуткам; типичная волатильность относительно цены.'},
+  {id:'corr',cls:'ccorr',tip:'Корреляция с BTC (краткий период или 24ч): насколько движение совпадает с биткоином.'},
+];
+const CHART_HEAD_IDS=CHART_HEAD_DEFS.map(d=>d.id);
+
+const GROUP_COLORS=['','#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899'];
+const FAVORITE_GROUP_ID=8;
+const FAVORITE_GROUP_COLOR='#fbbf24';
+// index 0=none, 1=red,2=orange,3=yellow,4=green,5=blue,6=violet,7=pink
+
+function trendColShortLabel(tf){
+  const m={ '1m':'1м', '3m':'3м', '5m':'5м', '15m':'15м', '30m':'30м', '1h':'1ч', '4h':'4ч', '1d':'Д' };
+  return`${m[tf]||'5м'}·30`;
+}
+function trendKlineFetchLimit(tf){
+  if(tf==='1m')return 80;
+  if(tf==='3m')return 100;
+  if(tf==='5m')return 300;
+  if(tf==='15m')return 120;
+  if(tf==='30m')return 100;
+  if(tf==='1h')return 170;
+  if(tf==='4h')return 120;
+  if(tf==='1d')return 90;
+  return 300;
+}
+function tfToolbarBtnId(tf){
+  const m={ '1m':'tf1m', '5m':'tf5m', '15m':'tf15m', '1h':'tf1h', '4h':'tf4h', '1d':'tf1d' };
+  return m[tf]||'tf5m';
+}
+
+const S = {
+  syms:[], tk:{}, k5m:{}, k15m:{}, k1h:{}, k1m:{}, kTrend:{}, mx:{}, btcR:[],
+  charts: Array.from({length:9},()=>mkChart()),
+  wsScreener:null, wsCharts:null, wsChartTrades:null,
+  sortId:'vol24', sortDir:'desc', sortAlpha:false,
+  tf:'5m', q:'', page:0, LC:null, bgDone:false,
+  fastMode:true,
+  // Throttled render pipeline
+  _renderPending:false,_renderTs:0,_renderMinMs:120,
+  drawMode:null, drawIdCounter:0,
+  symDrawings:{},      // drawings per symbol, shared between grid & FS
+  drawUndo:{},         // sym -> [drawings snapshot...]
+  drawRedo:{},         // sym -> [drawings snapshot...]
+  chartRightOffset:10, // пустые бары справа (Binance timeScale rightOffset)
+  chartVisibleBars:96, // сколько последних свечей показывать по умолчанию (масштаб)
+  minVol:0, minTrd:0, gridSize:9, gridRows:3, gridCols:3, upColor:'#1fa891', wmVisible:true, sortAbs:true,
+  screenerVisible:true, fsScreenerVisible:true,
+  colOrder: ALL_COLS.map(c=>c.id),
+  colVisible: new Set(ALL_COLS.map(c=>c.id).filter(id=>!COLS_HIDDEN_BY_DEFAULT.has(id))),
+  chartAutoSync:true,
+  /** Подсветка торговых сессий на графиках (UTC). */
+  sessionFx:{enabled:false,asia:true,london:true,ny:true},
+  showOiOnChart:false,
+  showBbOverlay:false,
+  chartHeadOrder:['chg','vol','trd','natr','corr'],
+  chartHeadVisible:new Set(['chg','vol','trd','natr']),
+  /** Цвет линий рисования по типу (не лонг/шорт) */
+  lineColors:{hray:'#e8a020',tline:'#3b82f6',aray:'#a855f7',atline:'#a855f7',autotl:'#38bdf8'},
+  autoTrend:{pivotBars:3,touchPct:0.22,minTouches:3,maxLines:5,lookback:160,extendBars:24},
+  fsSym:null, fsOpen:false, fsWs:null,
+  fsLayoutPreset:'three_top_wide',
+  fsChartCount:3,
+  fsChartTfs:['5m','1h','4h'],
+  fsCharts:[mkFsChart('5m'), mkFsChart('1h'), mkFsChart('4h')],
+  settingsTab:'gen',
+  showDensity:false,
+  densitySettings:{}, // per symbol: {largeMult, medMult, smallMult}
+  alertLog:[],
+  alertSettings:{repeat:true, cooldown:5, sound:true},
+  // #9: Color groups + favorites
+  symGroups:{},       // sym → groupIdx (1-7), 0=none
+  symFavorites:{},    // sym → true
+  activeGroupFilter:0,// 0=all, 1-7=color group, 8=favorites
+  lastGroupUsed:1,    // last group assigned by user
+  _savedCpW:'',_savedFsCaW:'',
+  // Potential monitor — multi-preset system
+  potentialPresets:[],
+  _potFilterPreset:null, // id of preset being used as screener filter
+  _potInterval:null,
+  _potNextId:1,
+  // EMA overlay settings
+  emaSettings:[
+    {period:9, color:'#f97316',visible:true},
+    {period:21,color:'#3b82f6',visible:true},
+    {period:50,color:'#a855f7',visible:false},
+    {period:200,color:'#e04040',visible:false},
+  ],
+  emaVisible:false,
+  emaCrossSound:true,
+  emaSymOverrides:{},
+  emaSymEnabled:{},
+  emaAlertPairs:[],
+  histCache:{}, // key: "${tf}:${sym}" -> candles[]
+};
+const DRAW_HISTORY_LIMIT=60;
+let _lastDrawSym=null;
+let _undoSymOrder=[];
+let _redoSymOrder=[];
 
 function loadChartViewPrefs(){
   try{
@@ -328,11 +445,11 @@ function lineColorForType(type){
   return(typeof c==='string'&&c.startsWith('#'))?c:null;
 }
 
-/** РџРѕСЃР»Рµ setData: РѕС‚СЃС‚СѓРї СЃРїСЂР°РІР° + В«Р·СѓРјВ» РїРѕ С‡РёСЃР»Сѓ РІРёРґРёРјС‹С… СЃРІРµС‡РµР№ */
+/** После setData: отступ справа + «зум» по числу видимых свечей */
 function applyDefaultChartView(ch){
   if(!ch?.lc||!ch.candles?.length)return;
   const len=ch.candles.length;
-  // РњР°Р»Рѕ Р±Р°СЂРѕРІ вЂ” С‚РѕР»СЊРєРѕ fit, Р±РµР· В«Р»РѕРіРёС‡РµСЃРєРѕРіРѕ Р·СѓРјР°В» РЅР° 32+ РїСѓСЃС‚С‹С… СЃР»РѕС‚РѕРІ
+  // Мало баров — только fit, без «логического зума» на 32+ пустых слотов
   if(len<MIN_CHART_CANDLES){
     try{ch.lc.timeScale().fitContent();}catch(e){}
     return;
@@ -351,9 +468,6 @@ function applyDefaultChartView(ch){
     ro=Math.max(0,Math.min(36,Math.round(ro*roShrink)));
   }
   try{
-    // Apply view only once per data load to avoid periodic rescaling flicker
-    if(ch._lastAppliedRangeFrom===from&&ch._lastAppliedRangeTo===len-1&&ch._lastAppliedRo===ro)return;
-    ch._lastAppliedRangeFrom=from;ch._lastAppliedRangeTo=len-1;ch._lastAppliedRo=ro;
     ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
     ch.lc.timeScale().setVisibleLogicalRange({from,to:len-1});
     ch.lc.timeScale().applyOptions({rightOffset:ro});
@@ -399,9 +513,9 @@ function activeCols(){
     .map(id=>ALL_COLS.find(c=>c.id===id)).filter(Boolean);
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  LOADING UI
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function ldSet(t,p,d){
   const tEl=document.getElementById('ltxt');
   const pEl=document.getElementById('lfill');
@@ -410,7 +524,7 @@ function ldSet(t,p,d){
   if(p!=null&&pEl)pEl.style.width=p+'%';
   if(d!=null&&dEl)dEl.textContent=d;
 }
-function ldErr(m){const e=document.getElementById('lerr');if(!e)return;e.style.display='block';e.innerHTML='вљ  '+String(m).replace(/\n/g,'<br>');}
+function ldErr(m){const e=document.getElementById('lerr');if(!e)return;e.style.display='block';e.innerHTML='⚠ '+String(m).replace(/\n/g,'<br>');}
 function ldHide(){
   const el=document.getElementById('ld');
   const appEl=document.getElementById('app');
@@ -423,45 +537,161 @@ function ldHide(){
 function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
 function setHtml(id,val){const el=document.getElementById(id);if(el)el.innerHTML=val;}
 
-// Network helpers (fj, parseKlines, batchKlines) and metrics are imported from modules.
+// ═══════════════════════════════════════════════════════════════
+//  FETCH
+// ═══════════════════════════════════════════════════════════════
+// Global rate limiter — track if we're banned
+let _bnBannedUntil = 0;
+const _reqQueue = []; let _reqRunning = 0; const _reqMax = 3;
 
-// Local pan-state helpers that coordinate with state.js variables.
+// ── Pan state tracking — skip heavy DOM work while user is dragging charts ──
+let _anyChartPanning = false;
+let _panEndTimer = null;
+let _deferredRenderNeeded = false;
+let _panOverlayRaf = null;
 function _panOverlayTick() {
   if (!_anyChartPanning) {
-    setPanOverlayRaf(null);
+    _panOverlayRaf = null;
     return;
   }
   for (const ch of [...S.charts, ...S.fsCharts]) {
     if (ch?.lc && ch.canvas) try { _rCanvasImmediate(ch); } catch (e) {}
   }
-  setPanOverlayRaf(requestAnimationFrame(_panOverlayTick));
+  _panOverlayRaf = requestAnimationFrame(_panOverlayTick);
 }
 function _onPanStart() {
-  setAnyChartPanning(true);
-  if (!_panOverlayRaf) setPanOverlayRaf(requestAnimationFrame(_panOverlayTick));
+  _anyChartPanning = true;
+  if (!_panOverlayRaf) _panOverlayRaf = requestAnimationFrame(_panOverlayTick);
   if (_panEndTimer) clearTimeout(_panEndTimer);
-  setPanEndTimer(setTimeout(() => {
-    setAnyChartPanning(false);
-    setPanEndTimer(null);
+  _panEndTimer = setTimeout(() => {
+    _anyChartPanning = false;
+    _panEndTimer = null;
     if (_panOverlayRaf) {
       cancelAnimationFrame(_panOverlayRaf);
-      setPanOverlayRaf(null);
+      _panOverlayRaf = null;
     }
     for (const ch of [...S.charts, ...S.fsCharts]) {
       if (ch?.lc && ch.canvas) try { _rCanvasImmediate(ch); } catch (e) {}
     }
     if (_deferredRenderNeeded && !document.hidden) {
-      setDeferredRenderNeeded(false);
+      _deferredRenderNeeded = false;
       if (typeof requestIdleCallback !== 'undefined') {
         requestIdleCallback(() => renderTable(), { timeout: 400 });
       } else {
         setTimeout(renderTable, 0);
       }
     }
-  }, 180));
+  }, 180);
+}
+function _runQueue(){
+  while(_reqRunning < _reqMax && _reqQueue.length){
+    const {fn,res,rej} = _reqQueue.shift();
+    _reqRunning++;
+    fn().then(r=>{_reqRunning--;res(r);_runQueue();}).catch(e=>{_reqRunning--;rej(e);_runQueue();});
+  }
+}
+function fj(url,timeout=15000,retries=2){
+  return new Promise((res,rej)=>{
+    const now=Date.now();
+    if(_bnBannedUntil>now){
+      const wait=_bnBannedUntil-now;
+      console.warn(`Binance ban active, waiting ${Math.round(wait/1000)}s`);
+      setTimeout(()=>fj(url,timeout,retries).then(res).catch(rej), Math.min(wait,30000));
+      return;
+    }
+    const doFetch=()=>new Promise((rs,rj)=>{
+      const t=setTimeout(()=>rj(new Error('Timeout')),timeout);
+      fetch(url).then(async r=>{
+        clearTimeout(t);
+        const text=await r.text();
+        let data;
+        try{data=JSON.parse(text);}catch(e){rj(new Error('JSON parse error'));return;}
+        if(data?.code===-1003){
+          const until=data.msg?.match(/banned until (\d+)/)?.[1];
+          if(until){_bnBannedUntil=+until;console.warn('Binance ban until',new Date(_bnBannedUntil));}
+          else _bnBannedUntil=Date.now()+60000;
+          rj(new Error('RATE_LIMIT'));return;
+        }
+        if(!r.ok){rj(new Error('HTTP '+r.status));return;}
+        rs(data);
+      }).catch(e=>{clearTimeout(t);rj(e);});
+    });
+    const attempt=(n)=>{
+      _reqQueue.push({fn:doFetch,res:rs=>{res(rs);},rej:e=>{
+        if(e.message==='RATE_LIMIT'&&n>0){
+          setTimeout(()=>attempt(n-1), 5000+Math.random()*5000);
+        } else { rej(e); }
+      }});
+      _runQueue();
+    };
+    attempt(retries);
+  });
+}
+function parseKlines(raw){
+  // Sanitize to avoid broken candles that cause chart "spikes".
+  const out=[];
+  for(const k of(raw||[])){
+    const t=+k[0],o=+k[1],h=+k[2],l=+k[3],c=+k[4],vol=+k[5],qv=+k[7],tr=+k[8];
+    if(!isFinite(t)||!isFinite(o)||!isFinite(h)||!isFinite(l)||!isFinite(c))continue;
+    const hh=Math.max(h,o,c);
+    const ll=Math.min(l,o,c);
+    out.push({t,o,h:hh,l:ll,c,v:isFinite(vol)?vol:0,tr:isFinite(tr)?tr:0,qv:isFinite(qv)?qv:0});
+  }
+  return out;
+}
+function mergeKlineChunks(a,b){
+  if(!a||!a.length)return b||[];
+  if(!b||!b.length)return a;
+  const byT=new Map();
+  for(const k of a)byT.set(k.t,k);
+  for(const k of b)if(!byT.has(k.t))byT.set(k.t,k);
+  return Array.from(byT.values()).sort((x,y)=>x.t-y.t);
+}
+async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
+  const out={};
+  for(let i=0;i<syms.length;i+=bs){
+    const batch=syms.slice(i,i+bs);
+    const results=await Promise.allSettled(batch.map(s=>fj(`${API}/klines?symbol=${encodeURIComponent(s)}&interval=${encodeURIComponent(iv)}&limit=${encodeURIComponent(lim)}`).then(d=>[s,parseKlines(d)])));
+    for(const r of results)if(r.status==='fulfilled')out[r.value[0]]=r.value[1];
+    if(pFrom!=null)ldSet(null,pFrom+Math.round((i/syms.length)*(pTo-pFrom)),`${iv}: ${Math.min(i+bs,syms.length)}/${syms.length}`);
+    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,120+Math.random()*120));
+  }
+  return out;
 }
 
-/** РџРѕСЃР»РµРґРЅРёРµ N Р±Р°СЂРѕРІ в†’ % РёР·РјРµРЅРµРЅРёСЏ quote-РѕР±СЉС‘РјР° (qv) + path РґР»СЏ SVG (Р»РѕРі-РјР°СЃС€С‚Р°Р± РїРѕ Y). */
+// ═══════════════════════════════════════════════════════════════
+//  METRICS
+// ═══════════════════════════════════════════════════════════════
+function calcATR(kl,n){if(!kl||kl.length<n+1)return null;let s=0;const f=kl.length-n;for(let i=f;i<kl.length;i++){const k=kl[i],p=kl[i-1];s+=Math.max(k.h-k.l,Math.abs(k.h-p.c),Math.abs(k.l-p.c));}return s/n;}
+function calcNATR(kl,n){const a=calcATR(kl,n);return a&&kl?a/kl[kl.length-1].c*100:null;}
+function calcRange(kl,n){if(!kl||kl.length<n)return null;const sl=kl.slice(-n);const H=sl.reduce((m,k)=>Math.max(m,k.h),-Infinity);const L=sl.reduce((m,k)=>Math.min(m,k.l),Infinity);return L>0?(H-L)/L*100:null;}
+function calcRel(kl,n,f){if(!kl||kl.length<n+1)return null;const sl=kl.slice(-n-1);const cur=sl[sl.length-1][f];let s=0;for(let i=0;i<n;i++)s+=sl[i][f];const avg=s/n;return avg>0?cur/avg:null;}
+/** Последние N закрытий свечей kl (любой ТФ) → % изменения за окно + path для SVG (viewBox 0 0 100 40). */
+function sparkTrendSnapshot(kl,n=30){
+  if(!kl||kl.length<6)return{sp5:null,sp5d:''};
+  const sl=kl.slice(-Math.min(n,kl.length));
+  if(sl.length<6)return{sp5:null,sp5d:''};
+  const closes=[];
+  for(const k of sl){
+    const c=+k.c;
+    if(isFinite(c)&&c>0)closes.push(c);
+  }
+  if(closes.length<6)return{sp5:null,sp5d:''};
+  const first=closes[0],last=closes[closes.length-1];
+  const chg=first>0?(last/first-1)*100:null;
+  let lo=Math.min(...closes),hi=Math.max(...closes);
+  if(hi<=lo)hi=lo+1e-9*Math.abs(lo||1);
+  const padY=5,padX=1;
+  const W=100,H=40;
+  const n1=closes.length-1||1;
+  const pts=closes.map((c,i)=>{
+    const x=padX+(i/n1)*(W-2*padX);
+    const y=padY+(1-(c-lo)/(hi-lo))*(H-2*padY);
+    return x.toFixed(2)+','+y.toFixed(2);
+  });
+  return{sp5:chg,sp5d:'M'+pts.join(' L')};
+}
+/** Последние N баров → % изменения quote-объёма (qv) + path для SVG (лог-масштаб по Y). */
 function sparkVolSnapshot(kl,n=30){
   if(!kl||kl.length<6)return{spVol:null,spVold:''};
   const sl=kl.slice(-Math.min(n,kl.length));
@@ -493,7 +723,7 @@ function sparkHeatBackground(pct){
   if(t>=0)return`rgba(34,197,94,${0.06+t*0.26})`;
   return`rgba(239,68,68,${0.06+(-t)*0.26})`;
 }
-/** РџРѕСЃР»РµРґРЅРёРµ period Р·Р°РєСЂС‹С‚РёР№ РЅР° k5 в†’ SMA, РїРѕР»РѕСЃС‹ Р‘РѕР»Р»РёРЅРґР¶РµСЂР°, РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅР°СЏ С€РёСЂРёРЅР° РїРѕР»РѕСЃ. */
+/** Последние period закрытий на k5 → SMA, полосы Боллинджера, относительная ширина полос. */
 function bollingerOnTail(k5,period=20,mult=2){
   if(!k5||k5.length<period)return null;
   const w=k5.slice(-period);
@@ -506,8 +736,29 @@ function bollingerOnTail(k5,period=20,mult=2){
   if(!isFinite(sma)||sma<=0)return null;
   return{sma,upper,lower,width:(upper-lower)/sma,lastC:closes[closes.length-1]};
 }
-/** РЈР·РєР°СЏ РїРѕР»РѕСЃР° vs РїСЂРµРґС‹РґСѓС‰РёР№ Р±Р°СЂ + РІСЃРїР»РµСЃРє vr5 + РІС‹С…РѕРґ Р·Р° РїРѕР»РѕСЃСѓ РЅР° РїРѕСЃР»РµРґРЅРµР№ СЃРІРµС‡Рµ. */
-
+/** Узкая полоса vs предыдущий бар + всплеск vr5 + выход за полосу на последней свече. */
+function calcSqueezePop(k5,vr5){
+  const period=20,mult=2;
+  if(!k5||k5.length<period+3||vr5==null||!isFinite(vr5))return 0;
+  const cur=bollingerOnTail(k5,period,mult);
+  const prev=bollingerOnTail(k5.slice(0,-1),period,mult);
+  if(!cur||!prev)return 0;
+  const squeezed=cur.width<prev.width*0.88&&cur.width<0.045;
+  const breakout=cur.lastC>cur.upper*1.00005||cur.lastC<cur.lower*0.99995;
+  return(squeezed&&vr5>=1.25&&breakout)?1:0;
+}
+function calcBbSignals(k5,vr5){
+  const period=20,mult=2;
+  if(!k5||k5.length<period+4)return{bbSqz:0,bbBreak:0,bbWidth:null,bbUpper:null,bbLower:null};
+  const cur=bollingerOnTail(k5,period,mult);
+  const prev=bollingerOnTail(k5.slice(0,-1),period,mult);
+  if(!cur||!prev)return{bbSqz:0,bbBreak:0,bbWidth:null,bbUpper:null,bbLower:null};
+  const bbSqz=(cur.width<prev.width*0.88&&cur.width<0.045)?1:0;
+  const breakUp=cur.lastC>cur.upper*1.00005;
+  const breakDn=cur.lastC<cur.lower*0.99995;
+  const bbBreak=breakUp?1:breakDn?-1:0;
+  return{bbSqz,bbBreak,bbWidth:cur.width,bbUpper:cur.upper,bbLower:cur.lower,volImpulse:(vr5!=null&&vr5>=1.25)?1:0};
+}
 function buildBbSeries(candles,period=20,mult=2){
   if(!Array.isArray(candles)||candles.length<period)return{upper:[],lower:[]};
   const upper=[],lower=[];
@@ -562,7 +813,7 @@ async function fetchOiHistoryForChart(sym,tf,firstCandleMs=null){
   if(merged.length<2)return[];
   return merged;
 }
-/** Р›РёРЅРµР№РЅР°СЏ РёРЅС‚РµСЂРїРѕР»СЏС†РёСЏ OI РїРѕ РІСЂРµРјРµРЅРё РїРѕРґ РєР°Р¶РґСѓСЋ СЃРІРµС‡Сѓ; % РёР·РјРµРЅРµРЅРёСЏ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ OI РЅР° РїРµСЂРІРѕРј Р±Р°СЂРµ РѕРєРЅР°. */
+/** Линейная интерполяция OI по времени под каждую свечу; % изменения относительно OI на первом баре окна. */
 function alignOiToCandles(candles,oiRaw){
   if(!Array.isArray(candles)||!candles.length||!Array.isArray(oiRaw)||!oiRaw.length)return[];
   const pts=oiRaw.slice().filter(p=>p&&isFinite(p.oi)&&p.time!=null).sort((a,b)=>a.time-b.time);
@@ -630,6 +881,15 @@ function getSessionKindByUtcHour(h){
   if(S.sessionFx.london!==false&&h>=8&&h<17)return'ld';
   if(S.sessionFx.asia!==false&&h>=0&&h<9)return'as';
   return'dead';
+}
+function calcNATRFlexible(kl,n){
+  if(!kl||kl.length<3)return null;
+  const p=Math.min(n,Math.max(2,kl.length-1));
+  return calcNATR(kl,p);
+}
+function calcRangeFlexible(kl,n){
+  if(!kl||kl.length<2)return null;
+  return calcRange(kl,Math.min(n,kl.length));
 }
 function calcRets(kl){if(!kl||kl.length<2)return[];const r=[];for(let i=1;i<kl.length;i++)r.push((kl[i].c-kl[i-1].c)/kl[i-1].c);return r;}
 function calcCorr(a,b){if(!a||!b||a.length<5)return null;const n=Math.min(a.length,b.length);const x=a.slice(-n),y=b.slice(-n);let mx=0,my=0;for(let i=0;i<n;i++){mx+=x[i];my+=y[i];}mx/=n;my/=n;let num=0,sx=0,sy=0;for(let i=0;i<n;i++){const xa=x[i]-mx,ya=y[i]-my;num+=xa*ya;sx+=xa*xa;sy+=ya*ya;}const d=Math.sqrt(sx*sy);return d>0?num/d:null;}
@@ -704,7 +964,7 @@ function calcAll(){
   for(const sym of S.syms){
     const t=S.tk[sym];if(!t)continue;
     const k5=S.k5m[sym],k1h=S.k1h[sym],k1m=S.k1m[sym];
-    // cday: РѕС‚ РїРµСЂРІРѕР№ 1С‡ СЃРІРµС‡Рё Р»РѕРєР°Р»СЊРЅРѕРіРѕ РєР°Р»РµРЅРґР°СЂРЅРѕРіРѕ РґРЅСЏ
+    // cday: от первой 1ч свечи локального календарного дня
     let cday=null;
     if(k1h&&k1h.length>0){
       const todayCandle=k1h.find(c=>c.t>=dayStartMs);
@@ -749,17 +1009,19 @@ function calcAll(){
   S.mx=nextMx;
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  FORMAT HELPERS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
+function fn(v,d=1){return(v==null||isNaN(v))?'—':v.toFixed(d);}
+function fk(v){if(v==null||isNaN(v))return'—';const a=Math.abs(v);if(a>=1e9)return(v/1e9).toFixed(1)+'B';if(a>=1e6)return(v/1e6).toFixed(1)+'M';if(a>=1e3)return(v/1e3).toFixed(0)+'K';return v.toFixed(0);}
 function fv(v,id){
-  if(v==null||isNaN(v))return'вЂ”';
+  if(v==null||isNaN(v))return'—';
   if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5'||id==='spv')return(v>0?'+':'')+fn(v,2)+'%';
-  if(id==='fund')return(v==null||!isFinite(v))?'вЂ”':(v*100).toFixed(3)+'%';
-  if(id==='oi1h'||id==='oi4h')return(v==null||!isFinite(v))?'вЂ”':(v>0?'+':'')+fn(v,2)+'%';
+  if(id==='fund')return(v==null||!isFinite(v))?'—':(v*100).toFixed(3)+'%';
+  if(id==='oi1h'||id==='oi4h')return(v==null||!isFinite(v))?'—':(v>0?'+':'')+fn(v,2)+'%';
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return fn(v,1);
   if(id==='na30'||id==='na14')return fn(v,2);
-  if(id==='tr5'||id==='tr1h'||id==='vr5'||id==='vr1h')return fn(v,1)+'Г—';
+  if(id==='tr5'||id==='tr1h'||id==='vr5'||id==='vr1h')return fn(v,1)+'×';
   if(id==='trd24')return fk(v);
   if(id==='vol24'||id==='v15m'||id==='v60m')return fk(v);
   if(id==='corr'||id==='corr14')return fn(v,2);
@@ -773,7 +1035,7 @@ function fc(v,id){
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return v>15?'y':'w';
   if(id==='na30'||id==='na14')return v>0.5?'y':'w';
   if(id==='corr'||id==='corr14')return v>0.75?'d':v<-0.2?'n':'w';
-  if(['tr5','tr1h','vr5','vr1h'].includes(id))return'w';
+  if(['tr5','tr1h','vr5','vr1h'].includes(id))return v>1?'p':v<1?'n':'w';
   return'w';
 }
 function fh(v,id){
@@ -786,9 +1048,9 @@ function fh(v,id){
     return'';
   }
   if(!['tr5','tr1h','vr5','vr1h'].includes(id))return'';
-  // Gradient green from >0.7 up to >3; base cells stay default/neutral at <=0.7
-  if(v>=3)return'hv3';if(v>=2)return'hv2';if(v>=1.4)return'hv1';if(v>=0.7)return'hv0';
-  return'';
+  // Inverted heat: values near 1 are neutral; >1 green (activity spike), <1 red (lull)
+  if(v>=3)return'hv3';if(v>=2)return'hv2';if(v>=1.5)return'hv1';
+  if(v<=0.4)return'hr3';if(v<=0.65)return'hr2';if(v<=0.85)return'hr1';return'';
 }
 
 function escapeHtml(str){
@@ -799,10 +1061,25 @@ function svgPathAttr(str){
   return String(str).replace(/[^\d\s\.,\-MLHVCSQTAZmlhvcsqtaz]/g,'');
 }
 
+function fmtPrice(p){
+  if(p==null||isNaN(p)||p===0)return'—';
+  const a=Math.abs(p);
+  let s='—';
+  if(a<0.0001)s=p.toFixed(8);else if(a<0.001)s=p.toFixed(7);else if(a<0.01)s=p.toFixed(6);
+  else if(a<0.1)s=p.toFixed(5);else if(a<1)s=p.toFixed(4);else if(a<100)s=p.toFixed(3);
+  else if(a<10000)s=p.toFixed(2);else s=p.toFixed(1);
+  return Number(s)===0?'0':s;
+}
+function getPriceMinMove(p){
+  if(!p||p<=0)return 0.00001;if(p<0.0001)return 1e-8;if(p<0.001)return 1e-7;
+  if(p<0.01)return 1e-6;if(p<0.1)return 1e-5;if(p<1)return 1e-4;
+  if(p<10)return 0.001;if(p<1000)return 0.01;return 0.1;
+}
+function formatDuration(s){s=Math.abs(s);if(s<60)return Math.round(s)+'с';if(s<3600)return Math.floor(s/60)+'м '+Math.round(s%60)+'с';if(s<86400)return Math.floor(s/3600)+'ч '+Math.floor((s%3600)/60)+'м';return Math.floor(s/86400)+'д '+Math.floor((s%86400)/3600)+'ч';}
 
 function copyTicker(sym){
-  // Accept short name (ETH) or full (ETHUSDT) вЂ” always copy full USDT form
-  if(!sym||sym==='вЂ”')return;
+  // Accept short name (ETH) or full (ETHUSDT) — always copy full USDT form
+  if(!sym||sym==='—')return;
   const full=String(sym).endsWith('USDT')?String(sym):String(sym)+'USDT';
   navigator.clipboard.writeText(full).then(()=>{
     // Brief visual toast
@@ -810,12 +1087,12 @@ function copyTicker(sym){
     if(!t){t=document.createElement('div');t.id='copyToast';
       t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg4);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:5px 14px;font-size:10px;z-index:9999;pointer-events:none;transition:opacity .3s';
       document.body.appendChild(t);}
-    t.textContent=`${full} СЃРєРѕРїРёСЂРѕРІР°РЅРѕ`;t.style.opacity='1';
+    t.textContent=`${full} скопировано`;t.style.opacity='1';
     clearTimeout(t._to);t._to=setTimeout(()=>{t.style.opacity='0';},1200);
   }).catch(()=>{});
 }
 
-function showConfirmModal(text,{title='РџРѕРґС‚РІРµСЂР¶РґРµРЅРёРµ',okText='РџРѕРґС‚РІРµСЂРґРёС‚СЊ',cancelText='РћС‚РјРµРЅР°',danger=false,onConfirm}={}){
+function showConfirmModal(text,{title='Подтверждение',okText='Подтвердить',cancelText='Отмена',danger=false,onConfirm}={}){
   const old=document.getElementById('csConfirmModal');if(old)old.remove();
   const ov=document.createElement('div');ov.id='csConfirmModal';
   ov.style.cssText='position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;';
@@ -846,9 +1123,9 @@ function showConfirmModal(text,{title='РџРѕРґС‚РІРµСЂР¶РґРµ
   ok.focus();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  CHART GRID BUILD
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function buildChartGrid(){
   const g=document.getElementById('cgrid');g.innerHTML='';
   const n=S.gridSize;
@@ -860,16 +1137,16 @@ function buildChartGrid(){
     g.insertAdjacentHTML('beforeend',`
       <div class="ccell" id="cc${i}">
         <div class="chead">
-          <span class="chart-cg-dot cg-dot" id="cgd${i}" title="Р¦РІРµС‚РѕРІР°СЏ РіСЂСѓРїРїР°" onclick="showChartGroupPicker(S.charts[${i}].sym,this)"></span>
+          <span class="chart-cg-dot cg-dot" id="cgd${i}" title="Цветовая группа" onclick="showChartGroupPicker(S.charts[${i}].sym,this)"></span>
           <img class="coin-icon" id="ci${i}" src="" alt="" style="display:none;width:14px;height:14px;border-radius:50%;flex-shrink:0">
-          <span class="csym" id="cs${i}" title="РќР°Р¶РјРёС‚Рµ РґР»СЏ РєРѕРїРёСЂРѕРІР°РЅРёСЏ" onclick="copyTicker(this.textContent)" style="cursor:pointer">вЂ”</span>
+          <span class="csym" id="cs${i}" title="Нажмите для копирования" onclick="copyTicker(this.textContent)" style="cursor:pointer">—</span>
           <span class="cprc" id="cp${i}"></span>
           <div class="chead-stats" id="chs${i}"></div>
           <span class="chead-gap"></span>
-          <button class="fs-open-btn" onclick="openFullscreen(${i})" title="РќР° РІРµСЃСЊ СЌРєСЂР°РЅ">в¤Ў</button>
+          <button class="fs-open-btn" onclick="openFullscreen(${i})" title="На весь экран">⤡</button>
         </div>
         <div class="cbody" id="cb${i}">
-          <div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">РѕР¶РёРґР°РЅРёРµ</span></div>
+          <div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">ожидание</span></div>
         </div>
       </div>`);
   }
@@ -918,16 +1195,16 @@ function clearChartHeadValues(slot){
   }
 }
 
-// Coin icon cache and loader вЂ” multi-CDN with fallback chain
+// Coin icon cache and loader — multi-CDN with fallback chain
 const _iconCache={};
 function setCoinIcon(elId,sym){
   const rawBase=sym.replace(/USDT$/,'').toUpperCase();
-  // Handle 1000X prefix tokens (e.g. 1000SHIBв†’SHIB, 1000BONKв†’BONK)
+  // Handle 1000X prefix tokens (e.g. 1000SHIB→SHIB, 1000BONK→BONK)
   const base=rawBase.replace(/^1000(?=[A-Z])/,'').replace(/^100(?=[A-Z])/,'');
   const el=document.getElementById(elId);if(!el)return;
   if(_iconCache[base]===false){el.style.display='none';return;}
   if(_iconCache[base]){el.src=_iconCache[base];el.style.display='';return;}
-  // CDN priority list вЂ” try each in order
+  // CDN priority list — try each in order
   const cdns=[
     `https://bin.bnbstatic.com/static/assets/logos/${base}.png`,
     `https://assets.coincap.io/assets/icons/${base.toLowerCase()}@2x.png`,
@@ -947,9 +1224,9 @@ function setCoinIcon(elId,sym){
   tryNext();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  CHART INIT
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function initLCChart(slot,isFs=false,fsIdx=null){
   if(!S.LC)return false;
   const ch=isFs?S.fsCharts[fsIdx]:S.charts[slot];
@@ -1065,7 +1342,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(drawSym)pushDrawUndo(drawSym);
     const stroke={id:++S.drawIdCounter,type:'brush',pts:[pt],color:_brushColor,width:_brushWidth,opacity:0.85};
     ch.drawings.push(stroke);
-    setLastDrawSym();
+    _lastDrawSym=drawSym||_lastDrawSym;
     ch._brushStroke=stroke;
   });
   interact.addEventListener('mousemove',e=>{
@@ -1146,7 +1423,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.addEventListener('contextmenu',e=>{
     if(S.drawMode)return; // already handled by interact
     e.preventDefault();
-    // Check if RMB is near ruler вЂ” if so, remove ruler
+    // Check if RMB is near ruler — if so, remove ruler
     if(ch.ruler&&ch.ruler.p1&&ch.ruler.p2){
       const{x,y}=getCoords(container,e.clientX,e.clientY);
       if(isNearRuler(ch,x,y)){
@@ -1163,7 +1440,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     removeDrawingAtCursor(ch);
   },{signal:sig});
 
-  // #6: dblclick in cursor mode в†’ edit alert %
+  // #6: dblclick in cursor mode → edit alert %
   container.addEventListener('dblclick',e=>{
     if(S.drawMode)return;
     const{x,y}=getCoords(container,e.clientX,e.clientY);
@@ -1174,7 +1451,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     }
   },{signal:sig});
 
-  // Drag drawing points вЂ” cursor mode
+  // Drag drawing points — cursor mode
   // For long/short: drag entry, TP, or SL line independently
   container.addEventListener('mousedown',e=>{
     if(e.button!==0||S.drawMode)return;
@@ -1246,7 +1523,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       const drawSym=getChartSym(ch);
       if(drawSym)pushDrawUndo(drawSym);
       ch.draggingDraw._undoPushed=true;
-      setLastDrawSym();
+      _lastDrawSym=drawSym||_lastDrawSym;
     }
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     const d=ch.drawings[ch.draggingDraw.drawIdx];
@@ -1254,7 +1531,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(ch.draggingDraw.pointKey==='trade'){
       const{isLong}=getTradeParams(d);
       const part=ch.draggingDraw.tradePart;
-      // Horizontal drags вЂ” use raw X coordinate
+      // Horizontal drags — use raw X coordinate
       if(part==='left'||part==='right'||part==='body'){
         const timePerPx=getTimePerPx(ch);
         const dx=x-ch.draggingDraw.dragStartX;
@@ -1266,7 +1543,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
           d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt};
         } else if(part==='right'){
           d.p2={...d.p2,time:ch.draggingDraw.orig_p2_time+dt};
-        } else { // body вЂ” move whole rect horizontally
+        } else { // body — move whole rect horizontally
           d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt,price:ch.draggingDraw.orig_entry+dPrice};
           d.p2={...d.p2,time:ch.draggingDraw.orig_p2_time+dt};
           d.slPrice=ch.draggingDraw.orig_sl+dPrice;
@@ -1274,7 +1551,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
         }
         rCanvas(ch);return;
       }
-      // Vertical drags вЂ” Ctrl: OHLC/live; РёРЅР°С‡Рµ РІРµСЂС‚РёРєР°Р»СЊ Рє СЃРІРµС‡Рµ, С†РµРЅР° РѕС‚ РєСѓСЂСЃРѕСЂР°
+      // Vertical drags — Ctrl: OHLC/live; иначе вертикаль к свече, цена от курсора
       const pt=e.ctrlKey?snapPoint(ch,x,y,true):snapPoint(ch,x,y,false);
       if(!pt)return;
       if(part==='entry'){
@@ -1330,9 +1607,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   return true;
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  CHART LOAD
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function getSymDrawings(sym){
   if(!S.symDrawings[sym])S.symDrawings[sym]=[];
   return S.symDrawings[sym];
@@ -1456,7 +1733,7 @@ function _getDrawStack(map,sym){
 function pushDrawUndo(sym){
   if(!sym)return;
   S.drawRedo={};
-  _redoSymOrder.splice(0,_redoSymOrder.length,...([]));
+  _redoSymOrder=[];
   const st=_getDrawStack(S.drawUndo,sym);
   st.push(cloneDrawings(getSymDrawings(sym)));
   if(st.length>DRAW_HISTORY_LIMIT)st.shift();
@@ -1471,7 +1748,7 @@ function undoLastDrawingAction(){
     _undoSymOrder.pop();
     _getDrawStack(S.drawRedo,sym).push(cloneDrawings(getSymDrawings(sym)));
     applySymDrawings(sym,st.pop());
-    setLastDrawSym();
+    _lastDrawSym=sym;
     _redoSymOrder.push(sym);
     return true;
   }
@@ -1485,7 +1762,7 @@ function redoLastDrawingAction(){
     _redoSymOrder.pop();
     _getDrawStack(S.drawUndo,sym).push(cloneDrawings(getSymDrawings(sym)));
     applySymDrawings(sym,rst.pop());
-    setLastDrawSym();
+    _lastDrawSym=sym;
     _undoSymOrder.push(sym);
     return true;
   }
@@ -1504,7 +1781,7 @@ function applySymDrawings(sym,drawings){
   });
   schedulePersistDrawings(sym);
 }
-function setSlotLoading(slot,on,text='Р—Р°РіСЂСѓР·РєР° РґР°РЅРЅС‹С…...'){
+function setSlotLoading(slot,on,text='Загрузка данных...'){
   const cb=document.getElementById(`cb${slot}`);
   if(!cb)return;
   let m=cb.querySelector('.chart-load-mask');
@@ -1526,10 +1803,10 @@ async function loadChart(slot,sym){
   if(!sym){
     ch.sym=null;ch.candles=[];ch.drawings=[];ch._histBootstrapDone=false;
     setSlotLoading(slot,false);
-    setText(`cs${slot}`,'вЂ”');
+    setText(`cs${slot}`,'—');
     clearChartHeadValues(slot);
     const cb=document.getElementById(`cb${slot}`);
-    if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">РїСѓСЃС‚Рѕ</span></div>`;
+    if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
     return;
   }
   ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
@@ -1577,7 +1854,7 @@ async function loadChart(slot,sym){
     refreshChartOiSeries(ch,S.tf,sym);
     if(S.showDensity)fetchOrderBook(sym); // #1: pre-fetch OB for density
   }catch(e){
-    if(cb&&ch.sym===sym)cb.innerHTML=`<div class="cph"><span style="color:var(--red);font-size:10px">РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё</span></div>`;
+    if(cb&&ch.sym===sym)cb.innerHTML=`<div class="cph"><span style="color:var(--red);font-size:10px">Ошибка загрузки</span></div>`;
     // If network briefly drops, retry once after a short delay (prevents "dead" chart tiles).
     setTimeout(()=>{ if(ch.sym===sym) loadChart(slot,sym); }, 3500);
   }
@@ -1588,7 +1865,7 @@ function paintSlotData(slot){
   if(!ch.candles.length||!ch.cs)return;
   if(ch.candles.length<MIN_CHART_CANDLES){
     ch._histBootstrapDone=false;
-    setSlotLoading(slot,true,'Р”РѕРіСЂСѓР¶Р°РµРј РёСЃС‚РѕСЂРёСЋ...');
+    setSlotLoading(slot,true,'Догружаем историю...');
     ch._thinPaintRetries=(ch._thinPaintRetries||0)+1;
     if(ch._thinPaintRetries<=3&&ch.sym){
       const sym=ch.sym,ck=`${S.tf}:${sym}`,tf=S.tf;
@@ -1616,8 +1893,6 @@ function paintSlotData(slot){
     repaintBbSeries(ch);
     repaintOiSeries(ch);
     syncLivePriceLabel(ch,lp,ch.candles[ch.candles.length-1].o);
-    // Reset range guard on fresh data so applyDefaultChartView actually applies
-    ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
     applyDefaultChartView(ch);
     updateChartHeader(slot,ch.sym);
     rCanvas(ch);
@@ -1635,9 +1910,9 @@ function updateChartHeader(slot,sym){
     }else{elChg.textContent='';elChg.className='cchg';}
   }
   const elVol=document.getElementById(`chs${slot}-vol`);
-  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">в—€</span>${fk(t.qv)}`:'';
+  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
   const elTrd=document.getElementById(`chs${slot}-trd`);
-  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">вљЎ</span>${fk(t.tr)}`:'';
+  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const elNatr=document.getElementById(`chs${slot}-natr`);
   if(elNatr){
     const na=m.na14;
@@ -1645,7 +1920,7 @@ function updateChartHeader(slot,sym){
   }
   const corVal=m.corr14??m.corr;
   const elCorr=document.getElementById(`chs${slot}-corr`);
-  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">в€ї</span>${fn(corVal,2)}`:'';
+  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
   const dot=document.getElementById(`cgd${slot}`);
   if(dot)styleGroupDot(dot,sym);
   // If stats wrap into two lines, tighten spacing to avoid clipping.
@@ -1703,8 +1978,6 @@ async function loadMoreHistory(slot){
           const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
         }catch(e){}
-        // Reset range guard so applyDefaultChartView can run again when new data settles
-        ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
         repaintBbSeries(ch);
         if(S.showOiOnChart&&ch.sym)void refreshChartOiSeries(ch,S.tf,ch.sym);
         else{ch._oiHist=alignOiToCandles(merged,ch._oiRaw||[]);repaintOiSeries(ch);}
@@ -1720,12 +1993,12 @@ async function loadMoreHistory(slot){
   }catch(e){}finally{ch.histLoading=false;}
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  CANVAS DRAWING SYSTEM
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function getCoords(container,cx,cy){const r=container.getBoundingClientRect();return{x:cx-r.left,y:cy-r.top};}
 
-// Convert chart time в†’ canvas X, extrapolating beyond last candle
+// Convert chart time → canvas X, extrapolating beyond last candle
 function timeToCoordX(ch,time){
   if(!ch.lc)return null;
   const ts=ch.lc.timeScale();
@@ -1767,7 +2040,7 @@ function pixelToPoint(ch,x,y){
   return{time,price};
 }
 
-/** Last / ticker price for Ctrl+snap (OHLC в€Є live). */
+/** Last / ticker price for Ctrl+snap (OHLC ∪ live). */
 function chartLivePriceForSnap(ch){
   const sym=ch.sym||S.fsSym;
   if(sym&&S.tk&&S.tk[sym]!=null&&isFinite(+S.tk[sym].p))return+S.tk[sym].p;
@@ -1775,7 +2048,7 @@ function chartLivePriceForSnap(ch){
   return null;
 }
 
-/** РЁРёСЂРёРЅР° Р±Р°СЂР° РІ СЃРµРєСѓРЅРґР°С… (РіСЂР°С„РёРє-С‚Р°Р№Рј), РґР»СЏ СЃРЅР°РїР° РїСЂР°РІРµРµ РїРѕСЃР»РµРґРЅРµР№ СЃРІРµС‡Рё. */
+/** Ширина бара в секундах (график-тайм), для снапа правее последней свечи. */
 function inferBarChartSec(ch){
   if(ch?.candles?.length>=2){
     const t1=toChartTime(ch.candles[ch.candles.length-2].t);
@@ -1787,8 +2060,8 @@ function inferBarChartSec(ch){
 }
 
 /**
- * ctrl=true: X/Y РјР°РіРЅРёС‚ Рє СЃРІРµС‡Рµ/OHLC.
- * ctrl=false: СЃРІРѕР±РѕРґРЅРѕРµ СЂР°Р·РјРµС‰РµРЅРёРµ, С‚РѕР»СЊРєРѕ РІРёСЂС‚СѓР°Р»СЊРЅР°СЏ СЃРµС‚РєР° Р±Р°СЂРѕРІ РїСЂР°РІРµРµ РїРѕСЃР»РµРґРЅРµР№ СЃРІРµС‡Рё.
+ * ctrl=true: X/Y магнит к свече/OHLC.
+ * ctrl=false: свободное размещение, только виртуальная сетка баров правее последней свечи.
  */
 function snapPoint(ch,x,y,ctrl){
   const raw=pixelToPoint(ch,x,y);if(!raw)return null;
@@ -1817,8 +2090,7 @@ function snapPoint(ch,x,y,ctrl){
     tSnapped=toChartTime(bestC.t);
   }
   if(!ctrl){
-    // Allow free placement beyond last candle too, snapping only time to the virtual bar grid
-    return{time:tSnapped,price:raw.price,tMs:(tSnapped-TZ_OFFSET_S)*1000,anchor:'c'};
+    return{time:tSnapped,price:raw.price,tMs:last.t,anchor:'c'};
   }
   let ohlcCandle=last;
   if(!(raw.time>tLast)){
@@ -1861,9 +2133,7 @@ function _inferOhlcAnchor(candle,price){
   return best;
 }
 
-/** РџСЂРёРІСЏР·РєР° С‚РѕС‡РєРё СЂРёСЃСѓРЅРєР° Рє СЃРІРµС‡Рµ С‚РµРєСѓС‰РµРіРѕ РўР¤ (С„РёРєСЃ Р»СѓС‡Р°/Р»РёРЅРёР№ РјРµР¶РґСѓ РўР¤).
- *  РўРѕР»СЊРєРѕ РµСЃР»Рё С‚РѕС‡РєР° Р±С‹Р»Р° СЃРѕР·РґР°РЅР° СЃ РјР°РіРЅРёС‚РѕРј (anchor !== 'c' РёРЅР°С‡Рµ СЃРѕС…СЂР°РЅСЏРµРј price РєР°Рє РµСЃС‚СЊ).
- */
+/** Привязка точки рисунка к свече текущего ТФ (фикс луча/линий между ТФ). */
 function resolveDrawPoint(ch,pt){
   if(!pt||!ch?.candles?.length)return pt;
   let tMs=pt.tMs;
@@ -1875,11 +2145,7 @@ function resolveDrawPoint(ch,pt){
     if(d<bestD){bestD=d;best=c;}
   }
   const time=toChartTime(best.t);
-  const anchor=pt.anchor||'c';
-  // Freehand points (anchor='c' and not explicitly OHLC-snapped) keep original price
-  if(anchor==='c'){
-    return{time,price:pt.price,tMs:best.t,anchor:'c'};
-  }
+  const anchor=pt.anchor||_inferOhlcAnchor(best,pt.price);
   const byAnchor={o:best.o,h:best.h,l:best.l,c:best.c};
   let price=byAnchor[anchor];
   if(price==null||!isFinite(price))price=pt.price;
@@ -2008,11 +2274,6 @@ function drawingDist(ch,d,px,py){
     if(y===null)return Infinity;
     const x0=timeToCoordX(ch,p1.time)??0;
     if(px<x0-4)return Infinity;
-    // Include alert band for aray so hover works over the whole visible ray
-    if(d.type==='aray'&&d.alertPct!=null&&d.alertPct>0){
-      const bandH=Math.abs((ch.cs.priceToCoordinate(p1.price*(1-d.alertPct/100))??y)-y);
-      return Math.max(Math.abs(py-y)-bandH,0);
-    }
     return Math.abs(py-y);
   }
   if(d.type==='tline'||d.type==='atline'){
@@ -2087,16 +2348,16 @@ function removeDrawingAtCursor(ch){
     const drawSym=getChartSym(ch);
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.splice(idx,1);ch.hoveredIdx=-1;
-    setLastDrawSym();
+    _lastDrawSym=drawSym||_lastDrawSym;
     rCanvas(ch);
     if(drawSym)schedulePersistDrawings(drawSym);
   }
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-//  DENSITY (ORDER BOOK CLUSTERS) вЂ” Fix #1: uses real depth API
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-const OB_CACHE={}; // sym в†’ {bids:[[price,usdVal],...], asks:[[...]], ts}
+// ═══════════════════════════════════════════════════════════════
+//  DENSITY (ORDER BOOK CLUSTERS) — Fix #1: uses real depth API
+// ═══════════════════════════════════════════════════════════════
+const OB_CACHE={}; // sym → {bids:[[price,usdVal],...], asks:[[...]], ts}
 const OB_TTL=45000; // refresh every 45s
 const OB_MAX_CONCURRENT=3;
 let _obPending=0;
@@ -2106,7 +2367,7 @@ const _densityFirstSeen=new Map(); // key: "sym:tier:bucket" -> first seen chart
 async function fetchOrderBook(sym){
   try{
     const data=await fj(`${API}/depth?symbol=${encodeURIComponent(sym)}&limit=1000`,10000);
-    // Convert to [price, USDT value] вЂ” Fix #1: in dollars, not coin qty
+    // Convert to [price, USDT value] — Fix #1: in dollars, not coin qty
     const toUsd=levels=>levels.map(([p,q])=>[+p,+p*+q]);
     OB_CACHE[sym]={bids:toUsd(data.bids),asks:toUsd(data.asks),ts:Date.now()};
     _densityCache.delete(sym); // invalidate density cache
@@ -2131,11 +2392,11 @@ function computeDensities(ch){
   let pMin=Infinity,pMax=-Infinity;
   if(ch.candles.length>0){
     const cp=ch.candles[ch.candles.length-1].c;
-    pMin=cp*0.7;pMax=cp*1.3; // В±30% from current price вЂ” narrower, more relevant
+    pMin=cp*0.7;pMax=cp*1.3; // ±30% from current price — narrower, more relevant
   }else{all.forEach(([p])=>{pMin=Math.min(pMin,p);pMax=Math.max(pMax,p);});}
   const relevant=all.filter(([p])=>p>=pMin&&p<=pMax);
   if(relevant.length<3)return[];
-  // Cluster: 0.3% width вЂ” slightly larger clusters = fewer, more meaningful
+  // Cluster: 0.3% width — slightly larger clusters = fewer, more meaningful
   const CLUSTER_PCT=0.003;
   const clusters=[];let cur=null;
   for(const[price,usdVal]of relevant){
@@ -2180,7 +2441,7 @@ function computeDensities(ch){
   return zones;
 }
 
-const _densityCache=new Map(); // sym в†’ {ts, zones}
+const _densityCache=new Map(); // sym → {ts, zones}
 const _DENSITY_CACHE_TTL=30000; // recompute every 30s max
 
 function drawSessionZones(ctx,ch,W,H){
@@ -2268,7 +2529,7 @@ function drawDensities(ctx,ch,W,H){
   ctx.restore();
 }
 
-// Track Ctrl key globally вЂ” Fix #5
+// Track Ctrl key globally — Fix #5
 let _ctrlHeld=false;
 document.addEventListener('keydown',e=>{if(e.key==='Control'||e.key==='Meta')_ctrlHeld=true;});
 document.addEventListener('keyup',e=>{if(e.key==='Control'||e.key==='Meta')_ctrlHeld=false;});
@@ -2277,7 +2538,7 @@ document.addEventListener('keyup',e=>{if(e.key==='Control'||e.key==='Meta')_ctrl
 const PRICE_AXIS_W=65;
 const TIME_AXIS_H=22;
 
-// в”Ђв”Ђ Render canvas в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Render canvas ──────────────────────────────────────────────
 // Per-chart RAF guard: only one pending rCanvas per chart at a time
 function rCanvas(ch,opts){
   if(_anyChartPanning||opts?.immediate){
@@ -2400,13 +2661,13 @@ function _rCanvasImmediate(ch){
   drawEMAs(ctx,ch,drawW,drawH);
   if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
-  // Custom crosshair: РІСЃРµРіРґР° РїСЂРё X Рє СЃРІРµС‡Рµ; Р±РµР· Ctrl вЂ” Y СЃРІРѕР±РѕРґРЅРѕ; СЃ Ctrl вЂ” Y Рє O/H/L/C РёР»Рё Рє С†РµРЅРµ.
+  // Custom crosshair: всегда при X к свече; без Ctrl — Y свободно; с Ctrl — Y к O/H/L/C или к цене.
   if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
     drawCustomCrosshair(ctx,ch,drawW,H);
   }
 }
 
-// Custom crosshair: Р±РµР· Ctrl вЂ” РІРµСЂС‚РёРєР°Р»СЊ Рє СЃРІРµС‡Рµ, РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊ СЃРІРѕР±РѕРґРЅР°; СЃ Ctrl вЂ” + РјР°РіРЅРёС‚ РїРѕ С†РµРЅРµ Рє OHLC/С‚РµРєСѓС‰РµР№.
+// Custom crosshair: без Ctrl — вертикаль к свече, горизонталь свободна; с Ctrl — + магнит по цене к OHLC/текущей.
 function drawCustomCrosshair(ctx,ch,W,H){
   const x=ch.hoverX,y=ch.hoverY;
   const ptV=snapPoint(ch,x,y,false);
@@ -2447,13 +2708,13 @@ function drawCustomCrosshair(ctx,ch,W,H){
       // time is in "local chart seconds" (UTC + TZ_OFFSET_S). Convert to real UTC ms for Date constructor.
       const d=new Date((time-TZ_OFFSET_S)*1000);
       const pad=n=>n.toString().padStart(2,'0');
-      // Use LOCAL timezone methods (getDate/getHours) вЂ” browser converts automatically
+      // Use LOCAL timezone methods (getDate/getHours) — browser converts automatically
       const tStr=`${pad(d.getDate())}.${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       let volStr='';
       const tMs=(time-TZ_OFFSET_S)*1000;
       const tfM=tfMs(S.fsCharts.includes(ch)?ch.tf:S.tf);
       const cHit=ch.candles.find(c=>Math.abs(c.t-tMs)<Math.max(2000,tfM*0.55));
-      if(cHit&&isFinite(cHit.qv))volStr=`РћР‘: ${fk(cHit.qv)}$`;
+      if(cHit&&isFinite(cHit.qv))volStr=`ОБ: ${fk(cHit.qv)}$`;
       ctx.save();ctx.font='9px JetBrains Mono,monospace';
       const tw=Math.max(ctx.measureText(tStr).width,volStr?ctx.measureText(volStr).width:0)+8;
       const lx=Math.min(Math.max(dx-tw/2,0),W-tw);
@@ -2479,7 +2740,7 @@ function drawingLineColor(d){
 }
 
 function emaHoverTip(period){
-  return`EMA ${period} вЂ” СЌРєСЃРїРѕРЅРµРЅС†РёР°Р»СЊРЅР°СЏ СЃРєРѕР»СЊР·СЏС‰Р°СЏ СЃСЂРµРґРЅСЏСЏ РїРѕ ${period} Р·Р°РєСЂС‹С‚РёСЏРј СЃРІРµС‡Рё. РЎРіР»Р°Р¶РёРІР°РµС‚ С†РµРЅРѕРІРѕР№ С€СѓРј Рё РїРѕРєР°Р·С‹РІР°РµС‚ Р»РѕРєР°Р»СЊРЅС‹Р№ С‚СЂРµРЅРґ; СЂР°СЃС…РѕР¶РґРµРЅРёРµ Рё РїРµСЂРµСЃРµС‡РµРЅРёРµ РЅРµСЃРєРѕР»СЊРєРёС… EMA РїРѕРјРѕРіР°СЋС‚ РѕС†РµРЅРёС‚СЊ СЃРёР»Сѓ РґРІРёР¶РµРЅРёСЏ.`;
+  return`EMA ${period} — экспоненциальная скользящая средняя по ${period} закрытиям свечи. Сглаживает ценовой шум и показывает локальный тренд; расхождение и пересечение нескольких EMA помогают оценить силу движения.`;
 }
 
 function hideChartIndTooltip(){
@@ -2564,7 +2825,7 @@ function drawRuler(ctx,ch){
   ctx.restore();
 }
 
-// в”Ђв”Ђ Alert Ray в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Alert Ray ─────────────────────────────────────────────────
 function drawAlertRay(ctx,ch,d,W,hov){
   const p1=resolveDrawPoint(ch,d.p1);
   const y=ch.cs.priceToCoordinate(p1.price);if(y===null)return;
@@ -2582,7 +2843,7 @@ function drawAlertRay(ctx,ch,d,W,hov){
   ctx.moveTo(xs,y);ctx.lineTo(W,y);ctx.stroke();ctx.setLineDash([]);
   ctx.fillStyle=col;ctx.font='9px JetBrains Mono,monospace';
   ctx.textAlign='right';
-  const pctLabel=d.alertPct!=null?` В±${d.alertPct}%`:'';
+  const pctLabel=d.alertPct!=null?` ±${d.alertPct}%`:'';
   ctx.fillText(fmtPrice(d.p1.price)+pctLabel,W-3,y-3);
   ctx.textAlign='left';
   ctx.beginPath();ctx.arc(xs,y,3,0,Math.PI*2);ctx.fill();
@@ -2590,23 +2851,22 @@ function drawAlertRay(ctx,ch,d,W,hov){
 }
 
 function drawAlertTLine(ctx,ch,d,hov){
-  const p1=resolveDrawPoint(ch,d.p1),p2=resolveDrawPoint(ch,d.p2);
-  const x1=timeToCoordX(ch,p1.time);
-  const y1=ch.cs.priceToCoordinate(p1.price);
-  const x2=timeToCoordX(ch,p2.time);
-  const y2=ch.cs.priceToCoordinate(p2.price);
+  const x1=timeToCoordX(ch,d.p1.time);
+  const y1=ch.cs.priceToCoordinate(d.p1.price);
+  const x2=timeToCoordX(ch,d.p2.time);
+  const y2=ch.cs.priceToCoordinate(d.p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
   const col=drawingLineColor(d);
   ctx.save();
   if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
-  // #7: Draw В±alertPct% band
+  // #7: Draw ±alertPct% band
   if(d.alertPct!=null&&d.alertPct>0){
     const factor=d.alertPct/100;
     // Upper band points (prices * (1+factor))
-    const y1u=ch.cs.priceToCoordinate(p1.price*(1+factor));
-    const y2u=ch.cs.priceToCoordinate(p2.price*(1+factor));
-    const y1l=ch.cs.priceToCoordinate(p1.price*(1-factor));
-    const y2l=ch.cs.priceToCoordinate(p2.price*(1-factor));
+    const y1u=ch.cs.priceToCoordinate(d.p1.price*(1+factor));
+    const y2u=ch.cs.priceToCoordinate(d.p2.price*(1+factor));
+    const y1l=ch.cs.priceToCoordinate(d.p1.price*(1-factor));
+    const y2l=ch.cs.priceToCoordinate(d.p2.price*(1-factor));
     if(y1u!=null&&y2u!=null&&y1l!=null&&y2l!=null){
       // Filled polygon
       ctx.beginPath();
@@ -2628,12 +2888,12 @@ function drawAlertTLine(ctx,ch,d,hov){
   if(d.alertPct!=null){
     const mx=(x1+x2)/2,my=(y1+y2)/2;
     ctx.font='bold 9px JetBrains Mono,monospace';ctx.fillStyle=col;ctx.textAlign='center';
-    ctx.fillText(`В±${d.alertPct}%`,mx,my-6);
+    ctx.fillText(`±${d.alertPct}%`,mx,my-6);
   }
   ctx.restore();
 }
 
-// в”Ђв”Ђ Brush stroke в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Brush stroke ──────────────────────────────────────────────
 function drawBrushStroke(ctx,ch,d,hov){
   if(!d.pts||d.pts.length<2)return;
   if(!ch.cs||!ch.lc)return;
@@ -2660,7 +2920,7 @@ function drawBrushStroke(ctx,ch,d,hov){
 let _brushColor='#f97316';
 let _brushWidth=2;
 
-// в”Ђв”Ђ Trade helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Trade helpers ──────────────────────────────────────────────
 // Returns entry/tp/sl as absolute prices (migrates old rr-based format)
 function getTradeParams(d){
   const isLong=d.type==='long';
@@ -2685,7 +2945,7 @@ function getTimePerPx(ch){
   return(t2-t1)/(x2-x1);
 }
 
-// в”Ђв”Ђ Trade Rectangle (Long / Short simulation) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Trade Rectangle (Long / Short simulation) ──────────────────
 function drawTradeRect(ctx,ch,d,hov,preview=false){
   if(!d.p1||!d.p2||!ch.cs||!ch.lc)return;
   const{isLong,entryPrice,tpPrice,slPrice}=getTradeParams(d);
@@ -2740,13 +3000,13 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   ctx.fillStyle=slCol;
   ctx.fillText(`SL ${fmtPrice(slPrice)} (${pctSl>=0?'+':''}${pctSl.toFixed(2)}%)`,rx+4,ySl+3);
   ctx.fillStyle='#ffffff88';ctx.font='9px JetBrains Mono,monospace';
-  ctx.fillText(`Р’С…РѕРґ ${fmtPrice(entryPrice)} В· R:R ${rr.toFixed(1)}:1`,lx+3,yEntry-4);
+  ctx.fillText(`Вход ${fmtPrice(entryPrice)} · R:R ${rr.toFixed(1)}:1`,lx+3,yEntry-4);
   ctx.fillStyle=dirCol;ctx.font='bold 10px JetBrains Mono,monospace';ctx.textAlign='center';
-  ctx.fillText(isLong?'в–І Р›РћРќР“':'в–ј РЁРћР Рў',(lx+rx)/2,(yTp+yEntry)/2+3);
+  ctx.fillText(isLong?'▲ ЛОНГ':'▼ ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
   ctx.globalAlpha=1;ctx.restore();
 }
 
-// в”Ђв”Ђ EMA overlay в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── EMA overlay ────────────────────────────────────────────────
 // EMA settings per chart (shared via S.emaSettings)
 const EMA_DEFAULTS=[
   {period:9, color:'#f97316',visible:true},
@@ -2841,9 +3101,9 @@ function drawEMAs(ctx,ch,W,H){
   ctx.globalAlpha=1;ctx.restore();
 }
 
-// в”Ђв”Ђ EMA Crossover alerts в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── EMA Crossover alerts ────────────────────────────────────────
 // Check last 2 EMA values: if they cross, fire alert
-let _emaCrossAlerted={}; // key="sym_aXb" в†’ last alert ts
+let _emaCrossAlerted={}; // key="sym_aXb" → last alert ts
 function checkEMACrossovers(ch){
   if(!ch.candles.length)return;
   const sym=ch.sym||S.fsSym;if(!sym)return;
@@ -2872,12 +3132,12 @@ function checkEMACrossovers(ch){
       const lastAlert=_emaCrossAlerted[key]||0;
       if(now-lastAlert<60000)continue; // 1 min cooldown
       _emaCrossAlerted[key]=now;
-      const dir=isAbove?'в†‘':'в†“';
-      const label=isAbove?'Р‘С‹С‡СЊРµ РїРµСЂРµСЃРµС‡РµРЅРёРµ':'РњРµРґРІРµР¶СЊРµ РїРµСЂРµСЃРµС‡РµРЅРёРµ';
+      const dir=isAbove?'↑':'↓';
+      const label=isAbove?'Бычье пересечение':'Медвежье пересечение';
       if(S.emaCrossSound)playAlert(isAbove?880:440);
       S.alertLog.unshift({ts:now,sym,curPrice:a1,linePrice:b1,distPct:0,
         type:'ema_cross',alertPct:0,
-        presetName:`[${tf}] EMA${a.period} ${dir} EMA${b.period} вЂ” ${label}`});
+        presetName:`[${tf}] EMA${a.period} ${dir} EMA${b.period} — ${label}`});
       if(S.alertLog.length>50)S.alertLog.pop();
       renderAlertLog();
       const badge=document.getElementById('alertBadge');
@@ -2886,7 +3146,7 @@ function checkEMACrossovers(ch){
   }
 }
 
-// в”Ђв”Ђ Alert Sound в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Alert Sound ────────────────────────────────────────────────
 let _alertCtx=null;
 function playAlert(freq=880){
   try{
@@ -2938,34 +3198,34 @@ function checkAlerts(ch,drawing){
 
 function renderAlertLog(){
   const el=document.getElementById('alertLogList');if(!el)return;
-  if(!S.alertLog.length){el.innerHTML='<div style="padding:12px;color:var(--text3);font-size:9px">РђР»РµСЂС‚РѕРІ РїРѕРєР° РЅРµ Р±С‹Р»Рѕ</div>';return;}
+  if(!S.alertLog.length){el.innerHTML='<div style="padding:12px;color:var(--text3);font-size:9px">Алертов пока не было</div>';return;}
   el.innerHTML=S.alertLog.map(a=>{
     const t=new Date(a.ts);const pad=n=>n.toString().padStart(2,'0');
     const tStr=`${pad(t.getHours())}:${pad(t.getMinutes())}:${pad(t.getSeconds())}`;
     const symShort=a.sym.replace(/USDT$/,'');
     if(a.type==='potential'){
-      return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="РћС‚РєСЂС‹С‚СЊ ${symShort}">
+      return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="Открыть ${symShort}">
         <span style="color:var(--text3);font-size:9px">${tStr}</span>
-        <span style="color:#f97316;font-size:9px;margin:0 4px">вљЎ</span>
+        <span style="color:#f97316;font-size:9px;margin:0 4px">⚡</span>
         <span style="color:#fff;font-weight:600;margin-right:5px">${symShort}</span>
-        <span style="color:#f97316;font-size:9px">${a.presetName||'РџРѕС‚РµРЅС†РёР°Р»'}</span>
+        <span style="color:#f97316;font-size:9px">${a.presetName||'Потенциал'}</span>
         <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(a.curPrice)}</span>
       </div>`;
     }
     if(a.type==='ema_cross'){
-      return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="РћС‚РєСЂС‹С‚СЊ ${symShort}">
+      return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="Открыть ${symShort}">
         <span style="color:var(--text3);font-size:9px">${tStr}</span>
         <span style="color:#fff;font-weight:600;margin:0 5px">${symShort}</span>
         <span style="color:#f97316;font-size:9px">${a.presetName||'EMA cross'}</span>
         <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(a.curPrice)}</span>
       </div>`;
     }
-    const dir=a.curPrice>=a.linePrice?'в†‘':'в†“';
-    return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="РћС‚РєСЂС‹С‚СЊ ${symShort}">
+    const dir=a.curPrice>=a.linePrice?'↑':'↓';
+    return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="Открыть ${symShort}">
       <span style="color:var(--text3);font-size:9px">${tStr}</span>
       <span style="color:#fff;font-weight:600;margin:0 5px">${symShort}</span>
       <span style="color:#a855f7">${dir} ${fmtPrice(a.curPrice)}</span>
-      <span style="color:var(--text3);font-size:9px;margin-left:auto">в‰€СѓСЂРѕРІРµРЅСЊ ${fmtPrice(a.linePrice)}</span>
+      <span style="color:var(--text3);font-size:9px;margin-left:auto">≈уровень ${fmtPrice(a.linePrice)}</span>
     </div>`;
   }).join('');
 }
@@ -3003,7 +3263,7 @@ function showAlertPctInput(ch,drawing,container){
   wrap.style.cssText=`position:fixed;z-index:500;left:${r.left+px}px;top:${r.top+py-14}px;
     background:var(--bg3);border:1px solid #a855f7;border-radius:4px;padding:3px 6px;
     display:flex;align-items:center;gap:4px;font-size:10px;color:#a855f7;font-family:inherit;`;
-  wrap.innerHTML=`<span>В±</span>
+  wrap.innerHTML=`<span>±</span>
     <input id="alertPctInp" type="number" min="0.01" max="99" step="0.1" placeholder="0.5"
       style="width:46px;background:transparent;border:none;outline:none;color:#a855f7;font:inherit;font-size:10px">
     <span>%</span>`;
@@ -3023,22 +3283,14 @@ function showAlertPctInput(ch,drawing,container){
   setTimeout(()=>document.addEventListener('mousedown',function h(e){if(!wrap.contains(e.target)){confirm();document.removeEventListener('mousedown',h);}},true),100);
 }
 
-// в”Ђв”Ђ Interact events в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Interact events ────────────────────────────────────────────
 function onInteractMove(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   ch.hoverX=x;ch.hoverY=y;
-  // Mirror container-level hover detection in draw mode so alert rays highlight correctly.
-  if(!ch.draggingDraw){
-    const now=performance.now();
-    if(now-(ch._lastHoverCheckTs||0)>32){
-      ch.hoveredIdx=findDrawingNear(ch,x,y);
-      ch._lastHoverCheckTs=now;
-    }
-  }
   rCanvas(ch);
 }
 
-// #6: dblclick in draw mode on an existing alert в†’ edit %
+// #6: dblclick in draw mode on an existing alert → edit %
 function onInteractDblClick(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   const idx=findDrawingNear(ch,x,y);
@@ -3056,7 +3308,7 @@ function onInteractClick(ch,e,container){
   if(S.drawMode==='hray'){
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:S.lineColors.hray});
-    setLastDrawSym();
+    _lastDrawSym=drawSym||_lastDrawSym;
     if(drawSym)schedulePersistDrawings(drawSym);
     rCanvas(ch);
     setDrawMode(null);
@@ -3065,7 +3317,7 @@ function onInteractClick(ch,e,container){
     else{
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:S.lineColors.tline});
-      setLastDrawSym();
+      _lastDrawSym=drawSym||_lastDrawSym;
       if(drawSym)schedulePersistDrawings(drawSym);
       ch.pendingP1=null;rCanvas(ch);
       setDrawMode(null);
@@ -3074,7 +3326,7 @@ function onInteractClick(ch,e,container){
     const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0,color:S.lineColors.aray};
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push(d);rCanvas(ch);
-    setLastDrawSym();
+    _lastDrawSym=drawSym||_lastDrawSym;
     if(drawSym)schedulePersistDrawings(drawSym);
     showAlertPctInput(ch,d,container);
     setDrawMode(null);
@@ -3084,7 +3336,7 @@ function onInteractClick(ch,e,container){
       const d={id:++S.drawIdCounter,type:'atline',p1:ch.pendingP1,p2:pt,alertPct:null,_lastAlert:0,color:S.lineColors.atline};
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
-      setLastDrawSym();
+      _lastDrawSym=drawSym||_lastDrawSym;
       if(drawSym)schedulePersistDrawings(drawSym);
       showAlertPctInput(ch,d,container);
       setDrawMode(null);
@@ -3101,7 +3353,7 @@ function onInteractClick(ch,e,container){
       const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice};
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
-      setLastDrawSym();
+      _lastDrawSym=drawSym||_lastDrawSym;
       if(drawSym)schedulePersistDrawings(drawSym);
       setDrawMode(null);
     }
@@ -3118,7 +3370,7 @@ function setDrawMode(mode){
    ['fs-draw-aray','aray'],['fs-draw-atline','atline']].forEach(([id,m])=>{
     const el=document.getElementById(id);if(el)el.classList.toggle('on',m===mode);
   });
-  // РџР°Р»РёС‚СЂР° РґР»СЏ Р»СѓС‡Р° / Р»РёРЅРёРё / Р°Р»РµСЂС‚РѕРІ (РЅРµ Р»РѕРЅРі-С€РѕСЂС‚)
+  // Палитра для луча / линии / алертов (не лонг-шорт)
   const lp=document.getElementById('linePalette');
   if(lp){
     const lineModes=['hray','tline','aray','atline'];
@@ -3167,27 +3419,27 @@ function openEMAEditor(mode='auto'){
     const targetSymEnabled=activeSym?!!S.emaSymEnabled[activeSym]:false;
     box.innerHTML=`
       <div style="display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA Р»РёРЅРёРё Рё Р°Р»РµСЂС‚С‹</span>
-        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('emaEditorModal').remove()">вњ•</button>
+        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA линии и алерты</span>
+        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('emaEditorModal').remove()">✕</button>
       </div>
       <div id="emaList" style="flex:1;overflow-y:auto;padding:8px 14px;display:flex;flex-direction:column;gap:6px;min-height:0"></div>
       <div style="padding:6px 14px;border-top:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <label style="font-size:9px;color:var(--text3)">РџРѕРєР°Р·С‹РІР°С‚СЊ EMA:</label>
-        <button id="emaGlobalBtn" class="tbtn${S.emaVisible?' on':''}" title="РџРѕРєР°Р·С‹РІР°С‚СЊ EMA РЅР° РІСЃРµС… РјРѕРЅРµС‚Р°С…">Р’СЃРµ</button>
-        <button id="emaSymOnlyBtn" class="tbtn${targetSymEnabled?' on':''}" title="РџРѕРєР°Р·С‹РІР°С‚СЊ EMA С‚РѕР»СЊРєРѕ РґР»СЏ РІС‹Р±СЂР°РЅРЅРѕР№ РјРѕРЅРµС‚С‹">РўРµРєСѓС‰Р°СЏ РјРѕРЅРµС‚Р°</button>
-        <label style="font-size:9px;color:var(--text3)">Р—РІСѓРє РїСЂРё РїРµСЂРµСЃРµС‡РµРЅРёРё:</label>
-        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}">${S.emaCrossSound?'в—Џ Р’РєР»':'в—‹ Р’С‹РєР»'}</button>
+        <label style="font-size:9px;color:var(--text3)">Показывать EMA:</label>
+        <button id="emaGlobalBtn" class="tbtn${S.emaVisible?' on':''}" title="Показывать EMA на всех монетах">Все</button>
+        <button id="emaSymOnlyBtn" class="tbtn${targetSymEnabled?' on':''}" title="Показывать EMA только для выбранной монеты">Текущая монета</button>
+        <label style="font-size:9px;color:var(--text3)">Звук при пересечении:</label>
+        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}">${S.emaCrossSound?'● Вкл':'○ Выкл'}</button>
         <span style="flex:1"></span>
-        <label style="font-size:9px;color:var(--text3)" title="Р—Р°РґР°С‚СЊ РѕС‚РґРµР»СЊРЅС‹Рµ EMA РґР»СЏ С‚РµРєСѓС‰РµР№ РјРѕРЅРµС‚С‹">Р РµР¶РёРј:</label>
-        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}">${_editSym?'рџ“Њ '+_editSym.replace(/USDT$/,''):'рџЊЌ Р“Р»РѕР±Р°Р»'}</button>
+        <label style="font-size:9px;color:var(--text3)" title="Задать отдельные EMA для текущей монеты">Режим:</label>
+        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}">${_editSym?'📌 '+_editSym.replace(/USDT$/,''):'🌍 Глобал'}</button>
       </div>
       <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
-        <div style="font-size:9px;color:var(--text3)">РђР»РµСЂС‚С‹ РїРµСЂРµСЃРµС‡РµРЅРёСЏ EMA (РґРѕР±Р°РІР»СЏСЋС‚СЃСЏ РІ РђР»РµСЂС‚С‹ СЃ РўР¤):</div>
+        <div style="font-size:9px;color:var(--text3)">Алерты пересечения EMA (добавляются в Алерты с ТФ):</div>
         <div id="emaPairsList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       </div>
       <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
-        <button class="tbtn" style="flex:1" id="addEmaBtn">пј‹ Р”РѕР±Р°РІРёС‚СЊ EMA</button>
-        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">вњ“ Р“РѕС‚РѕРІРѕ</button>
+        <button class="tbtn" style="flex:1" id="addEmaBtn">＋ Добавить EMA</button>
+        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">✓ Готово</button>
       </div>`;
 
     const list=box.querySelector('#emaList');
@@ -3216,25 +3468,25 @@ function openEMAEditor(mode='auto'){
       // Visible toggle
       const visBtn=document.createElement('button');
       visBtn.style.cssText=`background:${cfg.visible?cfg.color+'22':'transparent'};border:1px solid ${cfg.visible?cfg.color:'var(--border2)'};border-radius:3px;color:${cfg.visible?cfg.color:'var(--text3)'};font:inherit;font-size:9px;padding:2px 5px;cursor:pointer`;
-      visBtn.textContent=cfg.visible?'Р’РєР»':'Р’С‹РєР»';
+      visBtn.textContent=cfg.visible?'Вкл':'Выкл';
       visBtn.onclick=()=>{cfg.visible=!cfg.visible;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
       row.appendChild(visBtn);
       // Delete
       const delBtn=document.createElement('button');
       delBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0 2px;margin-left:auto';
-      delBtn.textContent='вњ•';delBtn.title='РЈРґР°Р»РёС‚СЊ';
+      delBtn.textContent='✕';delBtn.title='Удалить';
       delBtn.onclick=()=>{_activeSettings.splice(i,1);_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
       row.appendChild(delBtn);
       list.appendChild(row);
     });
 
     if(!_activeSettings.length){
-      list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">РќРµС‚ EMA Р»РёРЅРёР№. РќР°Р¶РјРё пј‹ С‡С‚РѕР±С‹ РґРѕР±Р°РІРёС‚СЊ.</div>';
+      list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">Нет EMA линий. Нажми ＋ чтобы добавить.</div>';
     }
     const pairsEl=box.querySelector('#emaPairsList');
     const visiblePeriods=[...new Set(_activeSettings.filter(c=>c.visible).map(c=>c.period))].sort((a,b)=>a-b);
     if(visiblePeriods.length<2){
-      pairsEl.innerHTML='<span style="font-size:9px;color:var(--text3)">РќСѓР¶РЅРѕ РјРёРЅРёРјСѓРј 2 Р°РєС‚РёРІРЅС‹Рµ EMA Р»РёРЅРёРё</span>';
+      pairsEl.innerHTML='<span style="font-size:9px;color:var(--text3)">Нужно минимум 2 активные EMA линии</span>';
     }else{
       pairsEl.innerHTML='';
       for(let i=0;i<visiblePeriods.length;i++){
@@ -3244,7 +3496,7 @@ function openEMAEditor(mode='auto'){
           if(!pair){pair={a,b,enabled:false};S.emaAlertPairs.push(pair);}
           const pbtn=document.createElement('button');
           pbtn.className='tbtn'+(pair.enabled?' on':'');
-          pbtn.textContent=`EMA${a}Г—EMA${b}`;
+          pbtn.textContent=`EMA${a}×EMA${b}`;
           pbtn.onclick=()=>{pair.enabled=!pair.enabled;render();};
           pairsEl.appendChild(pbtn);
         }
@@ -3284,7 +3536,7 @@ function openEMAEditor(mode='auto'){
 
 window.openEMAEditor=openEMAEditor;
 
-// в”Ђв”Ђ Ruler в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ── Ruler ──────────────────────────────────────────────────────
 function clearAllRulers(){
   const tt=document.getElementById('rulerTooltip');
   if(tt)tt.style.display='none';
@@ -3297,7 +3549,7 @@ function onRulerStart(ch,e,container){
   if(!ch.lc||!ch.cs)return;
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   const pt=snapPoint(ch,x,y,e.ctrlKey)||pixelToPoint(ch,x,y);if(!pt)return;
-  // Clear rulers on charts from opposite context (РЅРµ С‚СЂРѕРіР°РµРј РѕСЃРЅРѕРІРЅС‹Рµ РіСЂР°С„РёРєРё РёР· Grid Lab)
+  // Clear rulers on charts from opposite context (не трогаем основные графики из Grid Lab)
   if(!ch._gridLabChart){
     [...S.charts,...S.fsCharts].forEach((c)=>{if(c!==ch&&c.ruler){c.ruler=null;rCanvas(c);}});
   }
@@ -3316,27 +3568,11 @@ function onRulerMove(ch,e,container){
       if(fc===ch)return;
       if(!fc.lc||!fc.cs)return;
       fc.ruler={active:true,p1:{...ch.ruler.p1},p2:{...ch.ruler.p2},mouseX:e.clientX,mouseY:e.clientY,_mirror:true};
-      scheduleRulerRedraw(fc);
+      rCanvas(fc,{immediate:true});
     });
   }
-  scheduleRulerRedraw(ch);
-  // Tooltip (NATR/vol/trades) is heavier вЂ” throttle independently
-  const now=performance.now();
-  if(!ch._lastRulerTipTs||now-ch._lastRulerTipTs>50){
-    ch._lastRulerTipTs=now;
-    updateRulerTooltip(ch);
-  }
-}
-
-// rAF-throttled ruler redraw вЂ” caps redraws at the browser's frame rate even
-// when the mouse fires at 120Hz+. Each chart redraws at most once per frame.
-function scheduleRulerRedraw(ch){
-  if(ch._rulerRafPending)return;
-  ch._rulerRafPending=true;
-  requestAnimationFrame(()=>{
-    ch._rulerRafPending=false;
-    _rCanvasImmediate(ch);
-  });
+  rCanvas(ch,{immediate:true});
+  updateRulerTooltip(ch);
 }
 function onRulerEnd(ch){
   if(!ch.ruler)return;
@@ -3363,14 +3599,14 @@ function updateRulerTooltip(ch){
   for(const c of ch.candles)if(c.t>=tMin&&c.t<=tMax){bars++;vol+=c.qv;sumTr+=c.tr||0;rangeCl.push(c);}
 
   // NATR of the range
-  let natrTxt='вЂ”';
+  let natrTxt='—';
   if(rangeCl.length>=2){
     const natr=calcNATR(rangeCl,rangeCl.length-1);
     if(natr!=null)natrTxt=fn(natr,2)+'%';
   }
 
   // Volume spike: avg vol of range candles vs avg of preceding N candles
-  let vrTxt='вЂ”', trTxt='вЂ”';
+  let vrTxt='—', trTxt='—';
   if(rangeCl.length>0&&ch.candles.length>bars){
     const idx0=ch.candles.findIndex(c=>c.t===rangeCl[0].t);
     if(idx0>0){
@@ -3381,53 +3617,53 @@ function updateRulerTooltip(ch){
         const avgTr=pre.reduce((s,c)=>s+(c.tr||0),0)/pre.length;
         const rangeAvgVol=vol/rangeCl.length;
         const rangeAvgTr=sumTr/rangeCl.length;
-        if(avgVol>0)vrTxt=fn(rangeAvgVol/avgVol,2)+'Г—';
-        if(avgTr>0)trTxt=fn(rangeAvgTr/avgTr,2)+'Г—';
+        if(avgVol>0)vrTxt=fn(rangeAvgVol/avgVol,2)+'×';
+        if(avgTr>0)trTxt=fn(rangeAvgTr/avgTr,2)+'×';
       }
     }
   }
 
   setText('rtPct',(isUp?'+':'')+pct.toFixed(3)+'%');
   document.getElementById('rtPct').style.color=col;
-  setText('rtBars',`Р‘Р°СЂРѕРІ: ${bars}`);
-  setText('rtTime',`Р’СЂРµРјСЏ: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`);
-  setText('rtVol',`РћР±СЉС‘Рј: ${fk(vol)} USDT`);
-  // Candle-based change: open of first candle в†’ close of last candle in range
-  let cndPctTxt='вЂ”';
+  setText('rtBars',`Баров: ${bars}`);
+  setText('rtTime',`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`);
+  setText('rtVol',`Объём: ${fk(vol)} USDT`);
+  // Candle-based change: open of first candle → close of last candle in range
+  let cndPctTxt='—';
   if(rangeCl.length>=1){
     const openPrice=rangeCl[0].o;
     const closePrice=rangeCl[rangeCl.length-1].c;
     const cndPct=(closePrice-openPrice)/openPrice*100;
     const cndCol=cndPct>=0?'#1fa891':'#e04040';
-    setText('rtNatr',`РЎРІРµС‡Рё: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`);
+    setText('rtNatr',`Свечи: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`);
     document.getElementById('rtNatr').style.color=cndCol;
   } else {
-    setText('rtNatr','РЎРІРµС‡Рё: вЂ”');
+    setText('rtNatr','Свечи: —');
     document.getElementById('rtNatr').style.color='';
   }
   setText('rtVr',`NATR: ${natrTxt}`);
-  setText('rtTr',`РћР‘*: ${vrTxt}  РЎР”*: ${trTxt}`);
+  setText('rtTr',`ОБ*: ${vrTxt}  СД*: ${trTxt}`);
   const tw=175,th=120;
   tt.style.left=Math.min(r.mouseX+18,window.innerWidth-tw-8)+'px';
   tt.style.top=Math.max(r.mouseY-th-8,4)+'px';
   tt.style.display='block';
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-//  Р‘Р«РЎРўР Р«Р™ РџРћРРЎРљ РњРћРќР•РўР« (РїРµС‡Р°С‚СЊ СЃ РєР»Р°РІРёР°С‚СѓСЂС‹)
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
+//  БЫСТРЫЙ ПОИСК МОНЕТЫ (печать с клавиатуры)
+// ═══════════════════════════════════════════════════════════════
 function ensureQuickFindUI(){
   if(document.getElementById('quickFindModal'))return;
   const d=document.createElement('div');
   d.id='quickFindModal';
   d.style.cssText='display:none;position:fixed;inset:0;z-index:8000;background:rgba(0,0,0,.5);align-items:flex-start;justify-content:center;padding-top:10vh;';
   d.innerHTML=`<div style="background:#111113;border:1px solid #252530;border-radius:8px;width:min(440px,94vw);box-shadow:0 12px 40px #000;">
-  <div style="padding:10px 12px;border-bottom:1px solid #252530;font-size:11px;color:#80808f">РџРµСЂРµС…РѕРґ Рє РјРѕРЅРµС‚Рµ</div>
+  <div style="padding:10px 12px;border-bottom:1px solid #252530;font-size:11px;color:#80808f">Переход к монете</div>
   <div style="padding:10px 12px">
-    <input id="qfInput" type="text" autocomplete="off" spellcheck="false" placeholder="РќР°С‡РЅРёС‚Рµ РІРІРѕРґРёС‚СЊ С‚РёРєРµСЂвЂ¦"
+    <input id="qfInput" type="text" autocomplete="off" spellcheck="false" placeholder="Начните вводить тикер…"
       style="width:100%;box-sizing:border-box;background:#161619;border:1px solid #252530;border-radius:4px;padding:8px 10px;color:#e2e8f0;font:inherit;font-size:12px;outline:none">
     <div id="qfList" style="max-height:240px;overflow:auto;margin-top:8px;font-size:11px"></div>
-    <div style="font-size:9px;color:#454555;margin-top:8px">Enter вЂ” РІС‹Р±СЂР°С‚СЊ РїРµСЂРІСѓСЋ В· Esc вЂ” Р·Р°РєСЂС‹С‚СЊ</div>
+    <div style="font-size:9px;color:#454555;margin-top:8px">Enter — выбрать первую · Esc — закрыть</div>
   </div></div>`;
   document.body.appendChild(d);
   d.addEventListener('mousedown',ev=>{if(ev.target===d)closeQuickFind();});
@@ -3458,10 +3694,10 @@ function renderQuickFindList(){
   const inp=document.getElementById('qfInput');
   if(!list||!inp)return;
   const q=inp.value.trim().toUpperCase();
-  if(!q){list.innerHTML='<div style="padding:8px;color:#606070">Р’РІРµРґРёС‚Рµ СЃРёРјРІРѕР»С‹ С‚РёРєРµСЂР°</div>';return;}
-  if(!S.syms.length){list.innerHTML='<div style="padding:8px;color:#606070">РЎРїРёСЃРѕРє РјРѕРЅРµС‚ РµС‰С‘ РЅРµ Р·Р°РіСЂСѓР¶РµРЅ</div>';return;}
+  if(!q){list.innerHTML='<div style="padding:8px;color:#606070">Введите символы тикера</div>';return;}
+  if(!S.syms.length){list.innerHTML='<div style="padding:8px;color:#606070">Список монет ещё не загружен</div>';return;}
   const rows=S.syms.filter(s=>s.includes(q)).slice(0,50);
-  if(!rows.length){list.innerHTML='<div style="padding:8px;color:#606070">РќРµС‚ СЃРѕРІРїР°РґРµРЅРёР№</div>';return;}
+  if(!rows.length){list.innerHTML='<div style="padding:8px;color:#606070">Нет совпадений</div>';return;}
   list.innerHTML=rows.map(s=>{
     const base=s.replace(/USDT$/,'');
     return`<div class="qf-item" data-sym="${s}" style="padding:7px 9px;cursor:pointer;border-radius:4px;color:#e2e8f0">${base}</div>`;
@@ -3474,44 +3710,23 @@ function renderQuickFindList(){
 }
 function jumpToSymbol(sym,{openFs=false}={}){
   if(!sym)return;
-  // Try to find the symbol in the filtered/sorted list first (so the screener
-  // can land on the right page). If filters (volume/trades/group/preset) hide
-  // the symbol, fall back to opening it directly without touching the screener вЂ”
-  // the user explicitly chose it from the quick-find popup.
   const rows=sortedRows();
   let idx=rows.findIndex(r=>r.sym===sym);
   if(idx<0){
-    // Look up the symbol in the raw screener so we can still navigate to its page
-    const raw=(S.mx[sym])?[S.mx[sym]]:S.syms.filter(s=>s===sym).map(s=>({sym:s}));
-    if(raw.length){
-      const allSyms=Object.values(S.mx);
-      if(allSyms.length){
-        // Recompute the row set with the SAME sort but WITHOUT filters/group/preset
-        // so we get the symbol's position under the active sort.
-        const sorted=[...allSyms];
-        const sortId=S.sortId,sortDir=S.sortDir,sortAlpha=S.sortAlpha,sortAbs=S.sortAbs;
-        sorted.sort((a,b)=>{
-          if(sortAlpha)return sortDir==='asc'?a.sym.localeCompare(b.sym):b.sym.localeCompare(a.sym);
-          const sortKey=sortId==='spv'?'spVol':sortId;
-          let va=a[sortKey],vb=b[sortKey];
-          if(sortAbs&&(sortId==='ch24'||sortId==='ch7d'||sortId==='cday'||sortId==='sp5'||sortId==='spv'||sortId==='oi1h'||sortId==='oi4h')){
-            va=va!=null&&!isNaN(va)?Math.abs(va):va;vb=vb!=null&&!isNaN(vb)?Math.abs(vb):vb;
-          }
-          if(va==null||isNaN(va))return 1;if(vb==null||isNaN(vb))return-1;
-          return sortDir==='desc'?vb-va:va-vb;
-        });
-        idx=sorted.findIndex(r=>r.sym===sym);
-      }
+    if(S.syms.includes(sym)){
+      S.q=sym.replace(/USDT$/i,'');
+      S.page=0;
+      closeQuickFind();
+      updateCharts();renderTable();
+      if(openFs)openFullscreenBySym(sym);
+      return;
     }
+    closeQuickFind();
+    return;
   }
-  if(idx>=0)S.page=Math.floor(idx/S.charts.length);
+  S.page=Math.floor(idx/S.charts.length);
   closeQuickFind();
-  if(idx>=0){
-    updateCharts();renderTable();
-  }else{
-    // Symbol not in screener at all вЂ” still honour the openFs request
-    renderTable();
-  }
+  updateCharts();renderTable();
   if(openFs)openFullscreenBySym(sym);
 }
 
@@ -3522,8 +3737,8 @@ function handleUndoRedoShortcut(e){
   if(!mod||e.altKey||editable)return false;
   const key=(e.key||'').toLowerCase();
   const code=(e.code||'').toLowerCase();
-  const isZ=code==='keyz'||key==='z'||key==='СЏ';
-  const isY=code==='keyy'||key==='y'||key==='РЅ';
+  const isZ=code==='keyz'||key==='z'||key==='я';
+  const isY=code==='keyy'||key==='y'||key==='н';
   if(!isZ&&!isY)return false;
   const wantRedo=(e.shiftKey&&isZ)||isY;
   const ok=wantRedo?redoLastDrawingAction():undoLastDrawingAction();
@@ -3538,8 +3753,8 @@ document.addEventListener('keydown',e=>{
   const mod=(e.ctrlKey||e.metaKey);
   const key=(e.key||'').toLowerCase();
   const code=(e.code||'').toLowerCase();
-  const isZ=code==='keyz'||key==='z'||key==='СЏ';
-  const isY=code==='keyy'||key==='y'||key==='РЅ';
+  const isZ=code==='keyz'||key==='z'||key==='я';
+  const isY=code==='keyy'||key==='y'||key==='н';
   const qfOpen=document.getElementById('quickFindModal')&&document.getElementById('quickFindModal').style.display==='flex';
   if(qfOpen&&e.key==='Escape'){
     closeQuickFind();
@@ -3697,9 +3912,9 @@ window.addEventListener('online',()=>{
   handleResumeRecovery('network-online');
 });
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-//  WEBSOCKETS вЂ” generation counter pattern prevents reconnect storms
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
+//  WEBSOCKETS — generation counter pattern prevents reconnect storms
+// ═══════════════════════════════════════════════════════════════
 let _wsChartsGen=0; // increment on each start to invalidate old callbacks
 let _wsScreenerGen=0;
 let _wsChartsReconnectTimer=null;
@@ -3738,14 +3953,8 @@ function startChartWS(){
     const slot=S.charts.findIndex(c=>c.sym===symU);if(slot===-1)return;
     const ch=S.charts[slot];if(!ch.cs||!ch._histBootstrapDone)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q,v:+k.v,tr:+k.n};
-    const lastC=ch.candles[ch.candles.length-1];
-    if(lastC&&lastC.t===candle.t){
-      // Update existing candle only if close differs meaningfully (avoid jitter from identical re-broadcasts)
-      if(lastC.c!==candle.c||lastC.h!==candle.h||lastC.l!==candle.l||lastC.o!==candle.o||lastC.qv!==candle.qv){
-        ch.candles[ch.candles.length-1]=candle;
-      }
-    }
-    else if(lastC&&candle.t>lastC.t)appendCandleWithGaps(ch.candles,candle,tfMs(S.tf));
+    if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
+    else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)appendCandleWithGaps(ch.candles,candle,tfMs(S.tf));
     ch._lastRtUpdateTs=Date.now();
     S.histCache[`${S.tf}:${symU}`]=ch.candles.slice(-HIST_CACHE_MAX);
     ch._pendingCandle=candle;
@@ -3791,7 +4000,7 @@ function tfMs(tf){
   return 300000;
 }
 
-/** РћР±РЅРѕРІРёС‚СЊ С‚РµРєСѓС‰СѓСЋ (С„РѕСЂРјРёСЂСѓСЋС‰СѓСЋСЃСЏ) СЃРІРµС‡Сѓ РїРѕ В«Р¶РёРІРѕР№В» С†РµРЅРµ (book mid / last trade). */
+/** Обновить текущую (формирующуюся) свечу по «живой» цене (book mid / last trade). */
 function applyLivePriceToCandle(ch,tfStr,price,tsMs){
   if(!ch?.candles?.length)return false;
   if(price==null||!isFinite(price))return false;
@@ -3835,7 +4044,7 @@ function syncLivePriceLabel(ch,price,openPrice=null){
   if(!ch?.cs||price==null||!isFinite(price))return;
   const isDown=(openPrice!=null&&isFinite(openPrice)&&price<openPrice);
   const lineColor=isDown?'#e04040':'#1fa891';
-  // lineStyle: 2 = Dashed РІ LightweightCharts
+  // lineStyle: 2 = Dashed в LightweightCharts
   const opts={price,color:lineColor,lineVisible:true,lineWidth:1,lineStyle:2,axisLabelVisible:true,title:''};
   try{
     if(!ch.livePriceLine)ch.livePriceLine=ch.cs.createPriceLine(opts);
@@ -3843,7 +4052,7 @@ function syncLivePriceLabel(ch,price,openPrice=null){
   }catch(e){}
 }
 
-/** Р–РёРІРѕРµ РѕР±РЅРѕРІР»РµРЅРёРµ РїРѕСЃР»РµРґРЅРµР№ С†РµРЅС‹ РЅР° РіСЂР°С„РёРєРµ Grid Lab (Р±РµР· РґРѕР±Р°РІР»РµРЅРёСЏ СЃРёРјРІРѕР»Р° РІ streams СЃРґРµР»РѕРє). */
+/** Живое обновление последней цены на графике Grid Lab (без добавления символа в streams сделок). */
 function pulseGridLabFromTicker(symU,price,tsMs){
   const modal=document.getElementById('gridLabModal');
   const body=modal?.querySelector('#gridLabBody');
@@ -4012,7 +4221,7 @@ function startRealtimeWatchdog(){
   },2500);
 }
 
-// в”Ђв”Ђ Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) в”Ђв”Ђ
+// ── Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) ──
 const _tickerWorkerCode=`
 self.onmessage=function(e){
   try{
@@ -4049,9 +4258,9 @@ let _metricsSyncCursor=0;
 let _metricsSyncInterval=null;
 let _tickerRestFallbackInterval=null;
 let _lastTickerRestAt=0;
-/** lastFundingRate (РґРѕР»СЏ, РЅРµ %) РїРѕ СЃРёРјРІРѕР»Сѓ */
+/** lastFundingRate (доля, не %) по символу */
 let _fundRates={};
-/** {oi1h, oi4h} РІ % РѕС‚ openInterestHist 1h */
+/** {oi1h, oi4h} в % от openInterestHist 1h */
 let _oiDelta={};
 let _fundOiSymIdx=0;
 let _fundOiBusy=false;
@@ -4161,7 +4370,7 @@ async function refreshMetricKlinesSlice(){
     if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
     calcAll();
     if(!document.hidden){
-      if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
+      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
       else scheduleRender();
     }
     if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
@@ -4212,12 +4421,12 @@ async function refreshTicker24hrFallback(){
     }
     calcAll();
     if(!document.hidden){
-      if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
+      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
       else scheduleRender();
     }
     if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
   }catch(e){
-    // Silent fallback вЂ” WS is still the primary source.
+    // Silent fallback — WS is still the primary source.
   }
 }
 
@@ -4250,7 +4459,7 @@ function scheduleRealtimeMetricRecalc(gen){
         }
         calcAll();
         if(!document.hidden){
-          if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
+          if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
           else scheduleRender();
         }
         if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
@@ -4342,7 +4551,7 @@ function _applyTickerUpdate(arr,gen){
       updTime();
       if(!document.hidden){
         if(_anyChartPanning||_scrolling){
-          setDeferredRenderNeeded();
+          _deferredRenderNeeded=true;
         } else {
           scheduleRender();
         }
@@ -4395,9 +4604,9 @@ function updateFsHeaderValues(){
     }else{elChg.textContent='';elChg.className='cchg fs-stat';}
   }
   const elVol=document.getElementById('fsStat-vol');
-  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">в—€</span>${fk(t.qv)}`:'';
+  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
   const elTrd=document.getElementById('fsStat-trd');
-  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">вљЎ</span>${fk(t.tr)}`:'';
+  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const elNatr=document.getElementById('fsStat-natr');
   if(elNatr){
     const na=m.na14;
@@ -4405,17 +4614,17 @@ function updateFsHeaderValues(){
   }
   const corVal=m.corr14??m.corr;
   const elCorr=document.getElementById('fsStat-corr');
-  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">в€ї</span>${fn(corVal,2)}`:'';
+  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  SCREENER TABLE (shared for main & FS)
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function buildScreenerHeader(hdrEl){
   hdrEl.innerHTML='';
   const tickCol=document.createElement('div');
-  tickCol.className='tick-col';tickCol.title='РЎРѕСЂС‚РёСЂРѕРІР°С‚СЊ РїРѕ С‚РёРєРµСЂСѓ';
-  tickCol.innerHTML='<span class="tick-lbl">РўРРљР•Р  '+(S.sortAlpha?(S.sortDir==='asc'?'в–І':'в–ј'):'')+' </span>';
+  tickCol.className='tick-col';tickCol.title='Сортировать по тикеру';
+  tickCol.innerHTML='<span class="tick-lbl">ТИКЕР '+(S.sortAlpha?(S.sortDir==='asc'?'▲':'▼'):'')+' </span>';
   tickCol.onclick=()=>doSort('sym');
   hdrEl.appendChild(tickCol);
   const ms=document.createElement('div');ms.className='mscroll';
@@ -4447,7 +4656,7 @@ function buildScreenerHeader(hdrEl){
 
 function sortedRows(){
   let rows=Object.values(S.mx);
-  // РџРѕРґРјРµС€РёРІР°РµРј РјРѕРЅРµС‚С‹ Р±РµР· Р·Р°РїРёСЃРё РІ mx (РіРѕРЅРєР° calcAll / partial tk) вЂ” РёРЅР°С‡Рµ РїСѓСЃС‚С‹Рµ СЃР»РѕС‚С‹ Рё В«вЂ”В».
+  // Подмешиваем монеты без записи в mx (гонка calcAll / partial tk) — иначе пустые слоты и «—».
   if(S.syms.length){
     const have=new Set(rows.map(r=>r.sym));
     for(const sym of S.syms){
@@ -4461,9 +4670,7 @@ function sortedRows(){
       });
     }
   }
-  // Search is purely visual (search-hidden class in renderScreenerRow). It must never
-  // narrow the row set, otherwise mini-charts and the FS screener would collapse to
-  // a single symbol after typing in the search input.
+  if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
   const bypassGroup=(sym)=>S.activeGroupFilter>0&&symbolInGroup(sym,S.activeGroupFilter);
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||bypassGroup(r.sym));
   if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||bypassGroup(r.sym));
@@ -4526,16 +4733,16 @@ function buildScreenerRow(m,cols){
   row._sym=sym;
   const rt=document.createElement('div');rt.className='rtick';
   const gdot=document.createElement('span');gdot.className='cg-dot';
-  gdot.title='Р“СЂСѓРїРїР°/РёР·Р±СЂР°РЅРЅРѕРµ';
+  gdot.title='Группа/избранное';
   gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(sym,gdot);};
   rt.appendChild(gdot);
   const fstar=document.createElement('span');
   fstar.className='cg-fstar';
-  fstar.textContent='в…';
-  fstar.title='РР·Р±СЂР°РЅРЅРѕРµ';
+  fstar.textContent='★';
+  fstar.title='Избранное';
   rt.appendChild(fstar);
   const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=sym.replace(/USDT$/,'');
-  nameSpan.title='РќР°Р¶РјРёС‚Рµ РґР»СЏ РєРѕРїРёСЂРѕРІР°РЅРёСЏ';nameSpan.style.cursor='pointer';
+  nameSpan.title='Нажмите для копирования';nameSpan.style.cursor='pointer';
   nameSpan.onclick=ev=>{ev.stopPropagation();copyTicker(sym.replace(/USDT$/,''));openFullscreenBySym(sym);};
   rt.appendChild(nameSpan);
   row._gdot=gdot;row._fstar=fstar;row._name=nameSpan;row.appendChild(rt);
@@ -4566,9 +4773,7 @@ function updateScreenerRow(row,m,cols,inChart){
   const sym=m.sym;
   const grp=getSymGroup(sym);
   const grpCol=GROUP_COLORS[grp]||'';
-  const q=S.q?S.q.toUpperCase():'';
-  const matchesSearch=!q||sym.includes(q);
-  const newCls='srow'+(inChart.has(sym)?' inchart':'')+(S.fsOpen&&S.fsSym===sym?' infullscreen':'')+(matchesSearch?'':' search-hidden');
+  const newCls='srow'+(inChart.has(sym)?' inchart':'')+(S.fsOpen&&S.fsSym===sym?' infullscreen':'');
   if(row.className!==newCls)row.className=newCls;
   row._sym=sym;
   const gdot=row._gdot;
@@ -4620,7 +4825,7 @@ function updateScreenerRow(row,m,cols,inChart){
       const sig=`${chgDisp}|${dLine}`;
       if(cell._sparkSig!==sig){
         cell._sparkSig=sig;
-        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'вЂ”';
+        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'—';
         const ud=(chgDisp!=null&&chgDisp<0)?'down':'up';
         const bg=sparkHeatBackground(chgDisp);
         cell.innerHTML=`<div class="spark-inner ${escapeHtml(ud)}" style="background:${escapeHtml(bg)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${svgPathAttr(dLine)}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${escapeHtml(pct)}</span></div>`;
@@ -4636,7 +4841,7 @@ function updateScreenerRow(row,m,cols,inChart){
       const sig=`spv|${chgDisp}|${dLine}`;
       if(cell._sparkSig!==sig){
         cell._sparkSig=sig;
-        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'вЂ”';
+        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'—';
         const ud=(chgDisp!=null&&chgDisp<0)?'down':'up';
         const bg=sparkHeatBackground(chgDisp);
         cell.innerHTML=`<div class="spark-inner ${escapeHtml(ud)}" style="background:${escapeHtml(bg)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${svgPathAttr(dLine)}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${escapeHtml(pct)}</span></div>`;
@@ -4649,19 +4854,19 @@ function updateScreenerRow(row,m,cols,inChart){
     const newTxt=fv(val,c.id);
     const newCls='mc '+fc(val,c.id)+' '+fh(val,c.id);
     // While some derived metrics are being (re)computed, keep the previous value instead of flashing zeros/dashes.
-    // This is especially noticeable for РЎР”*/РћР‘* ratios.
+    // This is especially noticeable for СД*/ОБ* ratios.
     const holdDuringRecalc = (c.id==='tr5'||c.id==='tr1h'||c.id==='vr5'||c.id==='vr1h');
     const holdOiDuring = (_fundOiBusy&&(c.id==='oi1h'||c.id==='oi4h'));
     if(holdDuringRecalc){
       const vBad = (val==null||!isFinite(val)) || (_metricsSyncBusy && val===0);
-      if(vBad && cell.textContent && cell.textContent!=='вЂ”'){
+      if(vBad && cell.textContent && cell.textContent!=='—'){
         if(cell.className!==newCls)cell.className=newCls;
         return;
       }
     }
     if(holdOiDuring){
       const vBad=val==null||!isFinite(val);
-      if(vBad&&cell.textContent&&cell.textContent!=='вЂ”'){
+      if(vBad&&cell.textContent&&cell.textContent!=='—'){
         if(cell.className!==newCls)cell.className=newCls;
         return;
       }
@@ -4688,7 +4893,7 @@ function scheduleRender(){
   const run=()=>{
     _renderScheduled=false;
     S._renderTs=performance.now();
-    if(_anyChartPanning){setDeferredRenderNeeded();return;} // defer until pan ends
+    if(_anyChartPanning){_deferredRenderNeeded=true;return;} // defer until pan ends
     if(!_scrolling&&!document.hidden)renderTable();
   };
   if(due<=1)_scheduleUi(run);
@@ -4704,7 +4909,7 @@ document.addEventListener('DOMContentLoaded',()=>{
 function renderTable(){
   const rows=sortedRows();
   S._lastVisibleCount=rows.length;
-  const countTxt=rows.length+' РјРѕРЅРµС‚';
+  const countTxt=rows.length+' монет';
   setText('hcount',countTxt);
   renderScreenerInto(document.getElementById('sbody'),rows);
   if(S.fsOpen&&S.fsScreenerVisible){
@@ -4712,8 +4917,8 @@ function renderTable(){
   }
   updatePagination(rows.length);
   // Keep mini-charts in sync with live-sorted rows.
-  // Without this, when sorting by a live-updating metric (e.g. РР—Рњ24С‡),
-  // the table changes but the 3Г—3 grid can stay on stale symbols.
+  // Without this, when sorting by a live-updating metric (e.g. ИЗМ24ч),
+  // the table changes but the 3×3 grid can stay on stale symbols.
   maybeSyncChartsToTopRows(rows);
 }
 
@@ -4745,7 +4950,7 @@ function updatePagination(total){
   ['pgInfo','fsPgInfo'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=`${S.page+1} / ${tp}`;});
   ['pgPrev','fsPgPrev'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=S.page===0;});
   ['pgNext','fsPgNext'].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=S.page>=tp-1;});
-  setText('pgTotal',`(${total} РјРѕРЅРµС‚)`);
+  setText('pgTotal',`(${total} монет)`);
 }
 
 function updSortHdr(){
@@ -4755,9 +4960,9 @@ function updSortHdr(){
   if(si)si.textContent='';
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  CONTROLS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function doSort(id){
   if(id==='sym'){
     S.sortAlpha=true;S.sortId='sym';
@@ -4803,9 +5008,9 @@ function setTf(tf,btnId){
   schedulePersistUserSettings();
 }
 
-/** Р СѓСЃСЃРєР°СЏ СЂР°СЃРєР»Р°РґРєР° в†’ Р»Р°С‚РёРЅРёС†Р° (РїРѕРёСЃРє С‚РёРєРµСЂР° РєР°Рє РЅР° EN-РєР»Р°РІРёР°С‚СѓСЂРµ). */
+/** Русская раскладка → латиница (поиск тикера как на EN-клавиатуре). */
 function mapRuKeyboardToEn(s){
-  const ru='С‘Р№С†СѓРєРµРЅРіС€С‰Р·С…СЉС„С‹РІР°РїСЂРѕР»РґР¶СЌСЏС‡СЃРјРёС‚СЊР±СЋРЃР™Р¦РЈРљР•РќР“РЁР©Р—РҐРЄР¤Р«Р’РђРџР РћР›Р”Р–Р­РЇР§РЎРњРРўР¬Р‘Р®';
+  const ru='ёйцукенгшщзхъфывапролджэячсмитьбюЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ';
   const en='`qwertyuiop[]asdfghjkl;\'zxcvbnm,./~QWERTYUIOP{}ASDFGHJKL:"ZXCVBNM<>?';
   let out='';
   for(const ch of String(s||'')){
@@ -4826,11 +5031,13 @@ function onSearchInput(inp){
   onSearch(mapped);
 }
 function onSearch(q){
-  const clean=mapRuKeyboardToEn(q).trim();
-  S.q=clean;
+  S.q=mapRuKeyboardToEn(q);
   S.page=0;
   renderTable();
-  // Search only highlights the row in the right-side screener; it never filters the list.
+  // Keep mini-charts unchanged if the query resolves to a single coin, so the screener list doesn't collapse to one symbol.
+  const rows=sortedRows();
+  const isExactCoin=(q.length>=2&&rows.length===1&&rows[0].sym.toLowerCase().startsWith(q.trim().toLowerCase()));
+  if(!isExactCoin)updateCharts();
 }
 
 function onVolFilter(val){
@@ -4875,42 +5082,47 @@ function _setHeaderLiveDot(mode){
   dot.className='live-dot'+(mode==='warn'?' live-dot-warn':mode==='err'?' live-dot-err':mode==='pause'?' live-dot-pause':'');
 }
 
-/** РЎС‚Р°С‚СѓСЃ Binance WS (С‚РёРєРµСЂ + РјРёРЅРёвЂ‘РіСЂР°С„РёРєРё): СЃРІРµР¶РёР№ / РїРѕРґРєР»СЋС‡РµРЅРёРµ / РЅРµС‚ РґР°РЅРЅС‹С… >20СЃ */
+/** Статус Binance WS (тикер + мини‑графики): свежий / подключение / нет данных >20с */
 function updateHeaderStreamStatus(){
   const hs=document.getElementById('hstatus');
   if(!hs)return;
   const now=Date.now();
   if(document.hidden){
-    hs.textContent='Р’РєР»Р°РґРєР° РЅР° РїР°СѓР·Рµ';
+    hs.textContent='Вкладка на паузе';
     _setHeaderLiveDot('pause');
     return;
   }
   if(typeof navigator!=='undefined'&&!navigator.onLine){
-    hs.textContent='РќРµС‚ СЃРµС‚Рё';
+    hs.textContent='Нет сети';
     _setHeaderLiveDot('err');
     return;
   }
-  // Skip the "РџРѕРґРєР»СЋС‡РµРЅРёРµ РїРѕС‚РѕРєР°вЂ¦" indicator вЂ” it was always showing on first paint
-  // and adding visual noise without telling the user anything actionable.
   const wantChart=S.charts.some(c=>c.sym);
   const scrConn=!!S.wsScreener;
   const chartConn=wantChart&&!!S.wsCharts;
+  const scrPending=scrConn&&!_lastScreenerWsMsgAt;
+  const chartPending=wantChart&&(!S.wsCharts||!_lastChartWsMsgAt);
+  if(scrPending||chartPending){
+    hs.textContent='Подключение потока…';
+    _setHeaderLiveDot('warn');
+    return;
+  }
   let worst=0;
   let any=false;
   if(scrConn&&_lastScreenerWsMsgAt){any=true;worst=Math.max(worst,now-_lastScreenerWsMsgAt);}
   if(chartConn&&_lastChartWsMsgAt){any=true;worst=Math.max(worst,now-_lastChartWsMsgAt);}
   if(!any){
-    hs.textContent='РћРЅР»Р°Р№РЅ';
+    hs.textContent='Онлайн';
     _setHeaderLiveDot('');
     return;
   }
   if(worst>=STREAM_STALE_MS){
-    hs.textContent=`РќРµС‚ РїРѕС‚РѕРєР° ${Math.round(worst/1000)}СЃ`;
+    hs.textContent=`Нет потока ${Math.round(worst/1000)}с`;
     _setHeaderLiveDot('warn');
     return;
   }
   const s=Math.round(worst/1000);
-  hs.textContent=s<=1?'РџРѕС‚РѕРє РѕРє':'РџРѕС‚РѕРє РѕРє В· '+s+'СЃ';
+  hs.textContent=s<=1?'Поток ок':'Поток ок · '+s+'с';
   _setHeaderLiveDot('');
 }
 
@@ -4927,16 +5139,16 @@ function syncChartSyncBtnUi(){
   const b=document.getElementById('chartSyncBtn');
   if(!b)return;
   b.classList.toggle('on',S.chartAutoSync);
-  b.textContent=S.chartAutoSync?'Р“СЂР°С„С‹В·Р°РІС‚Рѕ':'Р“СЂР°С„С‹В·СЃС‚РѕРї';
+  b.textContent=S.chartAutoSync?'Графы·авто':'Графы·стоп';
   b.title=S.chartAutoSync
-    ?'Р’РєР»: РјРёРЅРё-РіСЂР°С„РёРєРё 3Г—3 РїРѕРґСЃС‚СЂР°РёРІР°СЋС‚СЃСЏ РїРѕРґ С‚РµРєСѓС‰РёР№ С‚РѕРї СЃС‚СЂР°РЅРёС†С‹ РїСЂРё Р¶РёРІРѕР№ СЃРѕСЂС‚РёСЂРѕРІРєРµ. РЎРїРёСЃРѕРє РІСЃРµРіРґР° РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ.'
-    :'Р’С‹РєР»: СЃРїРёСЃРѕРє РѕР±РЅРѕРІР»СЏРµС‚СЃСЏ, РЅРѕ СЃРёРјРІРѕР»С‹ РІ СЃРµС‚РєРµ РіСЂР°С„РёРєРѕРІ РЅРµ РјРµРЅСЏСЋС‚СЃСЏ СЃР°РјРё вЂ” РїРѕРєР° РЅРµ РїРµСЂРµР»РёСЃС‚РЅС‘С‚Рµ СЃС‚СЂР°РЅРёС†Сѓ РёР»Рё РЅРµ СЃРјРµРЅРёС‚Рµ СЃРѕСЂС‚РёСЂРѕРІРєСѓ РІСЂСѓС‡РЅСѓСЋ.';
+    ?'Вкл: мини-графики 3×3 подстраиваются под текущий топ страницы при живой сортировке. Список всегда обновляется.'
+    :'Выкл: список обновляется, но символы в сетке графиков не меняются сами — пока не перелистнёте страницу или не смените сортировку вручную.';
 }
 function syncOiChartBtnUi(){
   const btn=document.getElementById('oiChartBtn');
   if(!btn)return;
   btn.classList.toggle('on',S.showOiOnChart);
-  btn.textContent=S.showOiOnChart?'OI: Р’РљР›':'OI: Р’Р«РљР›';
+  btn.textContent=S.showOiOnChart?'OI: ВКЛ':'OI: ВЫКЛ';
 }
 function toggleOiChart(){
   S.showOiOnChart=!S.showOiOnChart;
@@ -4976,13 +5188,13 @@ function updateToggleScrBtn(){
   const btn=document.getElementById('toggleScrBtn');
   if(!btn)return;
   const on=S.fsOpen?S.fsScreenerVisible:S.screenerVisible;
-  btn.textContent=(on?'в—Ђ':'в–¶')+' РЎРїРёСЃРѕРє';
+  btn.textContent=(on?'◀':'▶')+' Список';
   btn.classList.toggle('on',on);
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  AUTO CHART UPDATE
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function updateCharts(){
   const rows=sortedRows();
   const start=S.page*S.charts.length;
@@ -5007,9 +5219,9 @@ function updateCharts(){
   schedulePersistUserSettings();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  TOGGLE SCREENER
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function toggleDensity(){
   S.showDensity=!S.showDensity;
   const btn=document.getElementById('densityBtn');
@@ -5032,39 +5244,39 @@ function renderSettingsDensity(body){
   body.dataset.densitySym=sym; // store so inputs always reference correct sym
   body.innerHTML=`
   <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.6">
-    РџР»РѕС‚РЅРѕСЃС‚Рё вЂ” РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅС‹Рµ Р»СѓС‡Рё РЅР° СѓСЂРѕРІРЅСЏС… СЃ РєСЂСѓРїРЅС‹РјРё СЃС‚РµРЅРєР°РјРё.<br>
-    <span style="color:#e04040">в–€</span> РєСЂСѓРїРЅР°СЏ &nbsp;<span style="color:#e8a020">в–€</span> СЃСЂРµРґРЅСЏСЏ &nbsp;<span style="color:#606080">в–€</span> РјР°Р»Р°СЏ
+    Плотности — горизонтальные лучи на уровнях с крупными стенками.<br>
+    <span style="color:#e04040">█</span> крупная &nbsp;<span style="color:#e8a020">█</span> средняя &nbsp;<span style="color:#606080">█</span> малая
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РћС‚РѕР±СЂР°Р¶РµРЅРёРµ РїР»РѕС‚РЅРѕСЃС‚РµР№</span>
+    <span class="smodal-lbl">Отображение плотностей</span>
     <div class="smodal-btns">
-      ${tbtnHtml('dOn','Р’РєР»',"setDensityVisible(true)",S.showDensity)}
-      ${tbtnHtml('dOff','Р’С‹РєР»',"setDensityVisible(false)",!S.showDensity)}
+      ${tbtnHtml('dOn','Вкл',"setDensityVisible(true)",S.showDensity)}
+      ${tbtnHtml('dOff','Выкл',"setDensityVisible(false)",!S.showDensity)}
     </div>
   </div>
   ${sym?`
-  <div style="font-size:9px;color:var(--text2);margin:10px 0 4px">РџРѕСЂРѕРіРё РґР»СЏ: <b style="color:#fff">${sym.replace(/USDT$/,'')}</b></div>
+  <div style="font-size:9px;color:var(--text2);margin:10px 0 4px">Пороги для: <b style="color:#fff">${sym.replace(/USDT$/,'')}</b></div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РљСЂСѓРїРЅР°СЏ (Г—Пѓ)</span>
+    <span class="smodal-lbl">Крупная (×σ)</span>
     <input id="dLarge" type="number" step="0.1" min="0.5" max="20" value="${ds.largeMult}"
       oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'largeMult',this.value)"
       style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РЎСЂРµРґРЅСЏСЏ (Г—Пѓ)</span>
+    <span class="smodal-lbl">Средняя (×σ)</span>
     <input id="dMed" type="number" step="0.1" min="0.5" max="20" value="${ds.medMult}"
       oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'medMult',this.value)"
       style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РњР°Р»Р°СЏ (Г—Пѓ)</span>
+    <span class="smodal-lbl">Малая (×σ)</span>
     <input id="dSmall" type="number" step="0.1" min="0.1" max="20" value="${ds.smallMult}"
       oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'smallMult',this.value)"
       style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
   </div>
   <div style="margin-top:8px">
-    <button class="tbtn" onclick="resetDensitySettings(document.getElementById('smodal-body').dataset.densitySym)">вџі РЎР±СЂРѕСЃ</button>
-  </div>`:'<div style="font-size:9px;color:var(--text3);margin-top:8px">РћС‚РєСЂРѕР№С‚Рµ РјРѕРЅРµС‚Сѓ РґР»СЏ РЅР°СЃС‚СЂРѕР№РєРё РїРѕСЂРѕРіРѕРІ</div>'}
+    <button class="tbtn" onclick="resetDensitySettings(document.getElementById('smodal-body').dataset.densitySym)">⟳ Сброс</button>
+  </div>`:'<div style="font-size:9px;color:var(--text3);margin-top:8px">Откройте монету для настройки порогов</div>'}
   `;
 }
 
@@ -5094,36 +5306,36 @@ function renderSettingsAlerts(body){
   const a=S.alertSettings;
   body.innerHTML=`
   <div style="font-size:9px;color:var(--text3);margin-bottom:10px;line-height:1.6">
-    РќР°СЃС‚СЂРѕР№РєРё Р·РІСѓРєРѕРІС‹С… Р°Р»РµСЂС‚РѕРІ (рџ””в”Ђ Р»СѓС‡ Рё рџ””в•± Р»РёРЅРёСЏ).<br>
-    РђР»РµСЂС‚ СЃСЂР°Р±Р°С‚С‹РІР°РµС‚ РєРѕРіРґР° С†РµРЅР° РїСЂРёР±Р»РёР¶Р°РµС‚СЃСЏ Рє Р»РёРЅРёРё РЅР° Р·Р°РґР°РЅРЅС‹Р№ %.
+    Настройки звуковых алертов (🔔─ луч и 🔔╱ линия).<br>
+    Алерт срабатывает когда цена приближается к линии на заданный %.
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Р РµР¶РёРј СЃСЂР°Р±Р°С‚С‹РІР°РЅРёСЏ</span>
+    <span class="smodal-lbl">Режим срабатывания</span>
     <div class="smodal-btns">
-      ${tbtnHtml('arRep','РџРѕРІС‚РѕСЂ',"setAlertSetting('repeat',true)",a.repeat)}
-      ${tbtnHtml('arOne','1 СЂР°Р·',"setAlertSetting('repeat',false)",!a.repeat)}
+      ${tbtnHtml('arRep','Повтор',"setAlertSetting('repeat',true)",a.repeat)}
+      ${tbtnHtml('arOne','1 раз',"setAlertSetting('repeat',false)",!a.repeat)}
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РљСѓР»РґР°СѓРЅ (СЃРµРє)</span>
+    <span class="smodal-lbl">Кулдаун (сек)</span>
     <div style="display:flex;align-items:center;gap:6px">
-      ${[5,15,30,60].map(s=>`<button class="tbtn${a.cooldown===s?' on':''}" onclick="setAlertSetting('cooldown',${s})">${s}СЃ</button>`).join('')}
+      ${[5,15,30,60].map(s=>`<button class="tbtn${a.cooldown===s?' on':''}" onclick="setAlertSetting('cooldown',${s})">${s}с</button>`).join('')}
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Р—РІСѓРє</span>
+    <span class="smodal-lbl">Звук</span>
     <div class="smodal-btns">
-      ${tbtnHtml('asOn','Р’РєР»',"setAlertSetting('sound',true)",a.sound)}
-      ${tbtnHtml('asOff','Р’С‹РєР»',"setAlertSetting('sound',false)",!a.sound)}
+      ${tbtnHtml('asOn','Вкл',"setAlertSetting('sound',true)",a.sound)}
+      ${tbtnHtml('asOff','Выкл',"setAlertSetting('sound',false)",!a.sound)}
     </div>
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:12px">
-    <span class="smodal-lbl" style="color:var(--text2)">РСЃС‚РѕСЂРёСЏ Р°Р»РµСЂС‚РѕРІ</span>
-    <button class="tbtn" onclick="toggleAlertLog();closeSettings()">рџ”” РћС‚РєСЂС‹С‚СЊ Р»РѕРі</button>
+    <span class="smodal-lbl" style="color:var(--text2)">История алертов</span>
+    <button class="tbtn" onclick="toggleAlertLog();closeSettings()">🔔 Открыть лог</button>
   </div>
   <div class="smodal-row" style="border-bottom:none">
-    <span class="smodal-lbl" style="color:var(--text2)">РЎР±СЂРѕСЃ РІСЃРµС… Р°Р»РµСЂС‚РѕРІ</span>
-    <button class="tbtn" onclick="resetAllAlerts()">вџі РЎР±СЂРѕСЃ fired</button>
+    <span class="smodal-lbl" style="color:var(--text2)">Сброс всех алертов</span>
+    <button class="tbtn" onclick="resetAllAlerts()">⟳ Сброс fired</button>
   </div>`;
 }
 
@@ -5138,9 +5350,9 @@ function resetAllAlerts(){
   });
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  #11: CLEAR DRAWINGS (double-click button in chart header)
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 const _clearClickTs={};
 function clearDrawingsSlot(slot){
   const now=Date.now();
@@ -5150,7 +5362,7 @@ function clearDrawingsSlot(slot){
     if(ch.sym&&ch.drawings.length){
       pushDrawUndo(ch.sym);
       applySymDrawings(ch.sym,[]);
-      setLastDrawSym();
+      _lastDrawSym=ch.sym;
     }
     ch.pendingP1=null;
     rCanvas(ch);
@@ -5170,7 +5382,7 @@ function clearFsDrawings(){
     if(S.fsSym&&getSymDrawings(S.fsSym).length){
       pushDrawUndo(S.fsSym);
       applySymDrawings(S.fsSym,[]);
-      setLastDrawSym();
+      _lastDrawSym=S.fsSym;
     }
     _fsClearTs=0;
     const btn=document.getElementById('fsClearDrawBtn');
@@ -5182,9 +5394,9 @@ function clearFsDrawings(){
   }
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  #9: COLOR GROUPS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function getSymGroup(sym){return S.symGroups[sym]||0;}
 function isSymFavorite(sym){return !!S.symFavorites?.[sym];}
 function symbolInGroup(sym,g){
@@ -5248,7 +5460,7 @@ function buildGroupFilterBar(){
     grpSec.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 5px;border:1px solid var(--border2);border-radius:6px;background:rgba(255,255,255,.02);';
     const allBtn=document.createElement('button');
     allBtn.className='cg-filter-all'+(S.activeGroupFilter===0&&!S._potFilterPreset?' active':'');
-    allBtn.textContent='Р’СЃРµ';
+    allBtn.textContent='Все';
     allBtn.onclick=()=>{S.activeGroupFilter=0;S._potFilterPreset=null;scheduleGroupUiRefresh();};
     grpSec.appendChild(allBtn);
     for(let g=1;g<=FAVORITE_GROUP_ID;g++){
@@ -5276,12 +5488,12 @@ function buildGroupFilterBar(){
         btn.style.justifyContent='center';
         btn.style.fontSize='13px';
         btn.style.lineHeight='1';
-        btn.textContent='в…';
+        btn.textContent='★';
       }else{
         btn.style.background=GROUP_COLORS[g];
         btn.textContent='';
       }
-      btn.title=`${g===FAVORITE_GROUP_ID?'РР·Р±СЂР°РЅРЅРѕРµ':`Р“СЂСѓРїРїР° ${g}`} (${cnt} РјРѕРЅРµС‚). Р›РљРњ вЂ” С„РёР»СЊС‚СЂ В· РџРљРњ вЂ” РѕС‡РёСЃС‚РёС‚СЊ РіСЂСѓРїРїСѓ`;
+      btn.title=`${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
       btn.onclick=()=>{
         const next=S.activeGroupFilter===g?0:g;
         S.activeGroupFilter=next;
@@ -5290,9 +5502,9 @@ function buildGroupFilterBar(){
       };
       btn.oncontextmenu=ev=>{ev.preventDefault();ev.stopPropagation();
         if(!cnt)return;
-        showConfirmModal(`РћС‡РёСЃС‚РёС‚СЊ ${g===FAVORITE_GROUP_ID?'РёР·Р±СЂР°РЅРЅРѕРµ':`РіСЂСѓРїРїСѓ ${g}`} (${cnt} РјРѕРЅРµС‚)?`,{
-          title:g===FAVORITE_GROUP_ID?'РћС‡РёСЃС‚РєР° РёР·Р±СЂР°РЅРЅРѕРіРѕ':'РћС‡РёСЃС‚РєР° РіСЂСѓРїРїС‹',
-          okText:'РћС‡РёСЃС‚РёС‚СЊ',
+        showConfirmModal(`Очистить ${g===FAVORITE_GROUP_ID?'избранное':`группу ${g}`} (${cnt} монет)?`,{
+          title:g===FAVORITE_GROUP_ID?'Очистка избранного':'Очистка группы',
+          okText:'Очистить',
           danger:true,
           onConfirm:()=>{
             if(g===FAVORITE_GROUP_ID)S.symFavorites={};
@@ -5307,26 +5519,26 @@ function buildGroupFilterBar(){
       // Small "+" button to manage this group
       const addBtn=document.createElement('button');
       addBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font:inherit;font-size:8px;padding:0 1px;line-height:1;margin-left:-1px;';
-      addBtn.title=g===FAVORITE_GROUP_ID?'РЈРїСЂР°РІР»РµРЅРёРµ РёР·Р±СЂР°РЅРЅС‹Рј':`РЈРїСЂР°РІР»РµРЅРёРµ РіСЂСѓРїРїРѕР№ ${g}`;addBtn.textContent='пј‹';
+      addBtn.title=g===FAVORITE_GROUP_ID?'Управление избранным':`Управление группой ${g}`;addBtn.textContent='＋';
       addBtn.onclick=ev=>{ev.stopPropagation();openGroupManager(g);};
       wrap.appendChild(addBtn);
       grpSec.appendChild(wrap);
     }
     bar.appendChild(grpSec);
 
-    // Potential preset tabs вЂ” appear as filter tabs alongside color groups
+    // Potential preset tabs — appear as filter tabs alongside color groups
     const potSec=document.createElement('div');
     potSec.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 5px;border:1px solid #5a401f;border-radius:6px;background:rgba(249,115,22,.06);';
     const potLbl=document.createElement('span');
-    potLbl.textContent='РџРѕС‚РµРЅС†РёР°Р»';
+    potLbl.textContent='Потенциал';
     potLbl.style.cssText='font-size:9px;color:#f6b07d;padding:0 3px;';
     potSec.appendChild(potLbl);
     S.potentialPresets.forEach(pr=>{
       const cnt=Object.keys(pr.matches||{}).length;
       const tab=document.createElement('button');
       tab.style.cssText=`background:${pr.enabled?(cnt?'rgba(249,115,22,.18)':'rgba(255,255,255,.05)'):'transparent'};border:1px solid ${pr.enabled?'#f97316':'var(--border2)'};border-radius:4px;color:${pr.enabled?(cnt?'#f97316':'var(--text2)'):'var(--text3)'};cursor:pointer;font:inherit;font-size:9px;padding:2px 7px;transition:all .1s;white-space:nowrap;display:flex;align-items:center;gap:3px;`;
-      tab.innerHTML=`вљЎ ${pr.name}${cnt?` <span style="background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;line-height:1.5">${cnt}</span>`:''}`;
-      tab.title=`${pr.name}: ${cnt} РјРѕРЅРµС‚. Р›РљРњ вЂ” С„РёР»СЊС‚СЂ, РџРљРњ вЂ” РЅР°СЃС‚СЂРѕР№РєР°`;
+      tab.innerHTML=`⚡ ${pr.name}${cnt?` <span style="background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;line-height:1.5">${cnt}</span>`:''}`;
+      tab.title=`${pr.name}: ${cnt} монет. ЛКМ — фильтр, ПКМ — настройка`;
       tab.onclick=()=>{
         // Toggle filter: show only coins in this preset (exclusive)
         S.activeGroupFilter=0;
@@ -5340,7 +5552,7 @@ function buildGroupFilterBar(){
     // "+" to add new preset
     const addPotBtn=document.createElement('button');
     addPotBtn.style.cssText='background:none;border:1px dashed #a06a35;border-radius:4px;color:#f2bb88;cursor:pointer;font:inherit;font-size:10px;padding:2px 6px;';
-    addPotBtn.textContent='пј‹ РџСЂРµСЃРµС‚';addPotBtn.title='Р”РѕР±Р°РІРёС‚СЊ РїСЂРµСЃРµС‚ РџРѕС‚РµРЅС†РёР°Р»Р°';
+    addPotBtn.textContent='＋ Пресет';addPotBtn.title='Добавить пресет Потенциала';
     addPotBtn.onclick=()=>openPotPresetEditor(null);
     potSec.appendChild(addPotBtn);
     bar.appendChild(potSec);
@@ -5371,13 +5583,13 @@ function showQuickGroupChanger(sym,anchorEl){
     box-shadow:0 4px 16px rgba(0,0,0,.6)`;
   // Label
   const lbl=document.createElement('div');lbl.style.cssText='font-size:9px;color:var(--text3);padding-bottom:2px;border-bottom:1px solid var(--border);';
-  lbl.textContent='Р¦РІРµС‚РѕРІР°СЏ РіСЂСѓРїРїР° + РР·Р±СЂР°РЅРЅРѕРµ:';pick.appendChild(lbl);
+  lbl.textContent='Цветовая группа + Избранное:';pick.appendChild(lbl);
   // Color row
   const row=document.createElement('div');row.style.cssText='display:flex;gap:6px;align-items:center;';
   // "none" option
   const none=document.createElement('div');
   none.className='cg-dot';none.style.background='var(--bg4)';none.style.borderColor='var(--border2)';
-  none.title='РЎРЅСЏС‚СЊ РіСЂСѓРїРїСѓ';
+  none.title='Снять группу';
   if(getSymGroup(sym)===0)none.style.outline='2px solid #fff';
   none.onclick=()=>{setSymGroup(sym,0);pick.remove();syncAllGroupDots(sym);};
   row.appendChild(none);
@@ -5385,15 +5597,15 @@ function showQuickGroupChanger(sym,anchorEl){
     const dot=document.createElement('div');dot.className='cg-dot';
     dot.style.background=GROUP_COLORS[g];
     if(getSymGroup(sym)===g)dot.style.outline='2px solid #fff';
-    dot.title=`Р“СЂСѓРїРїР° ${g} В· РЅР°Р¶РјРёС‚Рµ С‡С‚РѕР±С‹ СѓСЃС‚Р°РЅРѕРІРёС‚СЊ`;
+    dot.title=`Группа ${g} · нажмите чтобы установить`;
     dot.onclick=()=>{S.lastGroupUsed=g;setSymGroup(sym,g);pick.remove();syncAllGroupDots(sym);};
     row.appendChild(dot);
   }
   const favOn=isSymFavorite(sym);
   const fav=document.createElement('div');
   fav.className='cg-dot cg-fav-dot';
-  fav.textContent='в…';
-  fav.title='РР·Р±СЂР°РЅРЅРѕРµ В· РЅР°Р¶РјРёС‚Рµ С‡С‚РѕР±С‹ РґРѕР±Р°РІРёС‚СЊ/СѓР±СЂР°С‚СЊ';
+  fav.textContent='★';
+  fav.title='Избранное · нажмите чтобы добавить/убрать';
   if(favOn)fav.style.outline='2px solid #fff';
   fav.onclick=()=>{setSymFavorite(sym,!favOn);pick.remove();syncAllGroupDots(sym);};
   row.appendChild(fav);
@@ -5428,14 +5640,14 @@ function openGroupManager(g){
   // Header
   const hdr=document.createElement('div');
   hdr.style.cssText='display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);gap:8px;flex-shrink:0';
-  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'в…':''}</span>
-    <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'РР·Р±СЂР°РЅРЅРѕРµ':`Р“СЂСѓРїРїР° ${g}`}</span>
-    <span style="font-size:9px;color:var(--text3)">РќР°Р¶РјРёС‚Рµ РјРѕРЅРµС‚Сѓ С‡С‚РѕР±С‹ РґРѕР±Р°РІРёС‚СЊ/СѓР±СЂР°С‚СЊ</span>
-    <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">вњ•</button>`;
+  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'★':''}</span>
+    <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`}</span>
+    <span style="font-size:9px;color:var(--text3)">Нажмите монету чтобы добавить/убрать</span>
+    <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">✕</button>`;
   box.appendChild(hdr);
   // Search
   const srch=document.createElement('input');
-  srch.placeholder='РџРѕРёСЃРє...';srch.autocomplete='off';
+  srch.placeholder='Поиск...';srch.autocomplete='off';
   srch.style.cssText='background:var(--bg3);border:none;border-bottom:1px solid var(--border);color:var(--text);font:inherit;font-size:10px;padding:6px 12px;outline:none;flex-shrink:0';
   box.appendChild(srch);
   // List
@@ -5451,9 +5663,9 @@ function openGroupManager(g){
       const inGrp=symbolInGroup(m.sym,g);
       const row=document.createElement('div');
       row.style.cssText=`display:flex;align-items:center;padding:5px 12px;cursor:pointer;gap:8px;border-bottom:1px solid rgba(37,37,48,.4);transition:background .06s;${inGrp?'background:rgba(255,255,255,.04)':''}`;
-      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'в…':'в†'):''}</span>
+      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'★':'☆'):''}</span>
         <span style="font-size:10px;font-weight:500;color:${inGrp?'#fff':'var(--text2)'};flex:1">${m.sym.replace(/USDT$/,'')}</span>
-        ${inGrp?`<span style="font-size:9px;color:${col}">вњ“ РІ РіСЂСѓРїРїРµ</span>`:''}`;
+        ${inGrp?`<span style="font-size:9px;color:${col}">✓ в группе</span>`:''}`;
       row.onmouseenter=()=>row.style.background=inGrp?'rgba(255,255,255,.07)':'rgba(255,255,255,.025)';
       row.onmouseleave=()=>row.style.background=inGrp?'rgba(255,255,255,.04)':'';
       row.onclick=()=>{
@@ -5517,9 +5729,9 @@ function toggleFsScreener(){
   if(S.fsScreenerVisible)renderTable();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  SPLITTER (generic)
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function dragSpl(e,splId,leftId,bodyId){
   e.preventDefault();
   const spl=document.getElementById(splId);spl.classList.add('drag');
@@ -5545,9 +5757,9 @@ function dragSpl(e,splId,leftId,bodyId){
   window.addEventListener('mousemove',onM);window.addEventListener('mouseup',onU);
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  SETTINGS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function openSettings(){
   switchSettingsTab(S.settingsTab);
   document.getElementById('settingsModal').classList.add('open');
@@ -5571,75 +5783,75 @@ function tbtnHtml(id,label,onclick,active){return`<button class="tbtn${active?' 
 
 function renderSettingsGen(body){
   const fsPresetLabel=(
-    S.fsLayoutPreset==='two_horizontal'?'2 РіСЂР°С„РёРєР° (РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊРЅРѕ)':
-    S.fsLayoutPreset==='two_vertical'?'2 РіСЂР°С„РёРєР° (РІРµСЂС‚РёРєР°Р»СЊРЅРѕ)':
-    S.fsLayoutPreset==='four_grid'?'4 РіСЂР°С„РёРєР° (2Г—2)':
-    '3 РіСЂР°С„РёРєР° (С€РёСЂРѕРєРёР№ СЃРІРµСЂС…Сѓ)'
+    S.fsLayoutPreset==='two_horizontal'?'2 графика (горизонтально)':
+    S.fsLayoutPreset==='two_vertical'?'2 графика (вертикально)':
+    S.fsLayoutPreset==='four_grid'?'4 графика (2×2)':
+    '3 графика (широкий сверху)'
   );
   body.innerHTML=`
   <div class="smodal-row">
-    <span class="smodal-lbl">РњРёРЅРё-РіСЂР°С„РёРєРё: РІРµСЂС‚РёРєР°Р»СЊ Г— РіРѕСЂРёР·РѕРЅС‚Р°Р»СЊ</span>
+    <span class="smodal-lbl">Мини-графики: вертикаль × горизонталь</span>
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;max-width:290px;flex:1">
       <div style="display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-end">
-        <span style="font-size:9px;color:var(--text3);min-width:54px">Р’РµСЂС‚РёРєР°Р»СЊ</span>
+        <span style="font-size:9px;color:var(--text3);min-width:54px">Вертикаль</span>
         <input type="range" min="1" max="7" step="1" value="${S.gridRows}" oninput="setGridRows(this.value)" style="flex:1;max-width:170px">
         <span style="font-size:10px;color:var(--text3);min-width:20px;text-align:right">${S.gridRows}</span>
       </div>
       <div style="display:flex;align-items:center;gap:8px;width:100%;justify-content:flex-end">
-        <span style="font-size:9px;color:var(--text3);min-width:54px">Р“РѕСЂРёР·РѕРЅС‚Р°Р»СЊ</span>
+        <span style="font-size:9px;color:var(--text3);min-width:54px">Горизонталь</span>
         <input type="range" min="1" max="7" step="1" value="${S.gridCols}" oninput="setGridCols(this.value)" style="flex:1;max-width:170px">
         <span style="font-size:10px;color:var(--text3);min-width:20px;text-align:right">${S.gridCols}</span>
       </div>
-      <div style="font-size:9px;color:var(--text3)">РС‚РѕРі: ${S.gridRows} Г— ${S.gridCols} = ${S.gridSize} РіСЂР°С„РёРєРѕРІ</div>
+      <div style="font-size:9px;color:var(--text3)">Итог: ${S.gridRows} × ${S.gridCols} = ${S.gridSize} графиков</div>
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РљСЂСѓРїРЅС‹Р№ СЂРµР¶РёРј: РїСЂРµСЃРµС‚С‹</span>
+    <span class="smodal-lbl">Крупный режим: пресеты</span>
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;max-width:320px;flex:1">
       <div class="smodal-btns" style="gap:4px;flex-wrap:wrap;justify-content:flex-end">
-        ${tbtnHtml('fspH2','2 РіРѕСЂРёР·',"setFsLayoutPreset('two_horizontal')",S.fsLayoutPreset==='two_horizontal')}
-        ${tbtnHtml('fspV2','2 РІРµСЂС‚РёРє',"setFsLayoutPreset('two_vertical')",S.fsLayoutPreset==='two_vertical')}
-        ${tbtnHtml('fsp3','3 (С€РёСЂ+2)',"setFsLayoutPreset('three_top_wide')",S.fsLayoutPreset==='three_top_wide')}
-        ${tbtnHtml('fsp4','2Г—2',"setFsLayoutPreset('four_grid')",S.fsLayoutPreset==='four_grid')}
+        ${tbtnHtml('fspH2','2 гориз',"setFsLayoutPreset('two_horizontal')",S.fsLayoutPreset==='two_horizontal')}
+        ${tbtnHtml('fspV2','2 вертик',"setFsLayoutPreset('two_vertical')",S.fsLayoutPreset==='two_vertical')}
+        ${tbtnHtml('fsp3','3 (шир+2)',"setFsLayoutPreset('three_top_wide')",S.fsLayoutPreset==='three_top_wide')}
+        ${tbtnHtml('fsp4','2×2',"setFsLayoutPreset('four_grid')",S.fsLayoutPreset==='four_grid')}
       </div>
-      <div style="font-size:9px;color:var(--text3)">РђРєС‚РёРІРЅС‹Р№: ${fsPresetLabel}</div>
+      <div style="font-size:9px;color:var(--text3)">Активный: ${fsPresetLabel}</div>
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Р¦РІРµС‚ СЂРѕСЃС‚Р° СЃРІРµС‡РµР№</span>
+    <span class="smodal-lbl">Цвет роста свечей</span>
     <div class="smodal-btns">
-      ${tbtnHtml('scGreen','Р—РµР»С‘РЅС‹Р№',"setUpColor('green')",S.upColor==='#1fa891')}
-      ${tbtnHtml('scWhite','Р‘РµР»С‹Р№',"setUpColor('white')",S.upColor==='#cccccc')}
+      ${tbtnHtml('scGreen','Зелёный',"setUpColor('green')",S.upColor==='#1fa891')}
+      ${tbtnHtml('scWhite','Белый',"setUpColor('white')",S.upColor==='#cccccc')}
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Р’РѕРґСЏРЅРѕР№ Р·РЅР°Рє РЅР° РіСЂР°С„РёРєР°С…</span>
+    <span class="smodal-lbl">Водяной знак на графиках</span>
     <div class="smodal-btns">
-      ${tbtnHtml('swOn','Р’РєР»',"setWatermark(true)",S.wmVisible)}
-      ${tbtnHtml('swOff','Р’С‹РєР»',"setWatermark(false)",!S.wmVisible)}
+      ${tbtnHtml('swOn','Вкл',"setWatermark(true)",S.wmVisible)}
+      ${tbtnHtml('swOff','Выкл',"setWatermark(false)",!S.wmVisible)}
     </div>
   </div>
   <div class="smodal-row" style="flex-direction:column;align-items:stretch;gap:8px">
-    <span class="smodal-lbl">РђРІС‚Рѕ-РЅР°РєР»РѕРЅРєРё (вџ‚ РЅР° С‚СѓР»Р±Р°СЂРµ)</span>
-    <div style="font-size:9px;color:var(--text3);line-height:1.45">РџРёРІРѕС‚С‹ + РєР°СЃР°РЅРёСЏ СЃРІРµС‡РµР№. РџРѕРґРґРµСЂР¶РєР° вЂ” РїРѕ РјРёРЅРёРјСѓРјР°Рј, СЃРѕРїСЂРѕС‚РёРІР»РµРЅРёРµ вЂ” РїРѕ РјР°РєСЃРёРјСѓРјР°Рј.</div>
+    <span class="smodal-lbl">Авто-наклонки (⟂ на тулбаре)</span>
+    <div style="font-size:9px;color:var(--text3);line-height:1.45">Пивоты + касания свечей. Поддержка — по минимумам, сопротивление — по максимумам.</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px">
-      <label>РџРёРІРѕС‚ (Р±Р°СЂ) <input type="number" min="2" max="8" value="${S.autoTrend.pivotBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('pivotBars',+this.value)"></label>
-      <label>РљР°СЃР°РЅРёСЏ в‰Ґ <input type="number" min="2" max="8" value="${S.autoTrend.minTouches}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('minTouches',+this.value)"></label>
-      <label>Р”РѕРїСѓСЃРє % <input type="number" min="0.05" max="2" step="0.05" value="${S.autoTrend.touchPct}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('touchPct',+this.value)"></label>
-      <label>РњР°РєСЃ. Р»РёРЅРёР№ <input type="number" min="1" max="10" value="${S.autoTrend.maxLines}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('maxLines',+this.value)"></label>
-      <label>РћРєРЅРѕ Р±Р°СЂРѕРІ <input type="number" min="60" max="400" value="${S.autoTrend.lookback}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('lookback',+this.value)"></label>
-      <label>РџСЂРѕРґР»РёС‚СЊ <input type="number" min="0" max="80" value="${S.autoTrend.extendBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('extendBars',+this.value)"></label>
+      <label>Пивот (бар) <input type="number" min="2" max="8" value="${S.autoTrend.pivotBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('pivotBars',+this.value)"></label>
+      <label>Касания ≥ <input type="number" min="2" max="8" value="${S.autoTrend.minTouches}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('minTouches',+this.value)"></label>
+      <label>Допуск % <input type="number" min="0.05" max="2" step="0.05" value="${S.autoTrend.touchPct}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('touchPct',+this.value)"></label>
+      <label>Макс. линий <input type="number" min="1" max="10" value="${S.autoTrend.maxLines}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('maxLines',+this.value)"></label>
+      <label>Окно баров <input type="number" min="60" max="400" value="${S.autoTrend.lookback}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('lookback',+this.value)"></label>
+      <label>Продлить <input type="number" min="0" max="80" value="${S.autoTrend.extendBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('extendBars',+this.value)"></label>
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РЎРѕСЂС‚РёСЂРѕРІРєР° РёР·Рј. РїРѕ РјРѕРґСѓР»СЋ</span>
+    <span class="smodal-lbl">Сортировка изм. по модулю</span>
     <div class="smodal-btns">
-      ${tbtnHtml('sabsOn','Р’РєР»',"setSortAbs(true)",S.sortAbs)}
-      ${tbtnHtml('sabsOff','Р’С‹РєР»',"setSortAbs(false)",!S.sortAbs)}
+      ${tbtnHtml('sabsOn','Вкл',"setSortAbs(true)",S.sortAbs)}
+      ${tbtnHtml('sabsOff','Выкл',"setSortAbs(false)",!S.sortAbs)}
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РћС‚СЃС‚СѓРї СЃРїСЂР°РІР° (Р±Р°СЂС‹ РїСѓСЃС‚РѕС‚С‹)</span>
+    <span class="smodal-lbl">Отступ справа (бары пустоты)</span>
     <div style="display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end;max-width:280px">
       <input type="range" id="chartRoSlider" min="0" max="28" step="1" value="${S.chartRightOffset}"
         oninput="setChartRightOffset(this.value)" style="flex:1;max-width:180px">
@@ -5647,7 +5859,7 @@ function renderSettingsGen(body){
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Р’РёРґРёРјС‹С… СЃРІРµС‡РµР№ (РјР°СЃС€С‚Р°Р±)</span>
+    <span class="smodal-lbl">Видимых свечей (масштаб)</span>
     <div style="display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end;max-width:280px">
       <input type="range" id="chartVisSlider" min="48" max="200" step="4" value="${S.chartVisibleBars}"
         oninput="setChartVisibleBars(this.value)" style="flex:1;max-width:180px">
@@ -5655,34 +5867,34 @@ function renderSettingsGen(body){
     </div>
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:0">
-    <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">РќР° РїРѕР»РЅРѕСЌРєСЂР°РЅРЅС‹С… РіСЂР°С„РёРєР°С… РјР°СЃС€С‚Р°Р± Рё РѕС‚СЃС‚СѓРї СЃРїСЂР°РІР° РїРѕРґСЃС‚СЂР°РёРІР°СЋС‚СЃСЏ РїРѕ С€РёСЂРёРЅРµ РѕРєРЅР°: РїРѕРєР°Р·С‹РІР°РµС‚СЃСЏ Р±РѕР»СЊС€Рµ СЃРІРµС‡РµР№, В«РїСѓСЃС‚С‹РµВ» Р±Р°СЂС‹ СЃРїСЂР°РІР° СЃР»РµРіРєР° СѓР¶РёРјР°СЋС‚СЃСЏ вЂ” С‡С‚РѕР±С‹ РєСЂСѓРїРЅС‹Р№ РіСЂР°С„РёРє РЅРµ РєР°Р·Р°Р»СЃСЏ С‡СЂРµР·РјРµСЂРЅРѕ В«СЂР°СЃС‚СЏРЅСѓС‚С‹РјВ».</span>
+    <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">На полноэкранных графиках масштаб и отступ справа подстраиваются по ширине окна: показывается больше свечей, «пустые» бары справа слегка ужимаются — чтобы крупный график не казался чрезмерно «растянутым».</span>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РђРІС‚РѕСЃРјРµРЅР° РјРѕРЅРµС‚ РІ СЃРµС‚РєРµ РіСЂР°С„РёРєРѕРІ</span>
+    <span class="smodal-lbl">Автосмена монет в сетке графиков</span>
     <div class="smodal-btns">
-      ${tbtnHtml('cSynOn','Р’РєР»',"setChartAutoSyncOpt(true)",S.chartAutoSync)}
-      ${tbtnHtml('cSynOff','РЎС‚РѕРї',"setChartAutoSyncOpt(false)",!S.chartAutoSync)}
+      ${tbtnHtml('cSynOn','Вкл',"setChartAutoSyncOpt(true)",S.chartAutoSync)}
+      ${tbtnHtml('cSynOff','Стоп',"setChartAutoSyncOpt(false)",!S.chartAutoSync)}
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">РџРѕРґСЃРІРµС‚РєР° СЃРµСЃСЃРёР№ (UTC)</span>
+    <span class="smodal-lbl">Подсветка сессий (UTC)</span>
     <div class="smodal-btns">
-      ${tbtnHtml('sessOn','Р’РєР»',"setSessionFxEnabled(true)",S.sessionFx.enabled)}
-      ${tbtnHtml('sessOff','Р’С‹РєР»',"setSessionFxEnabled(false)",!S.sessionFx.enabled)}
+      ${tbtnHtml('sessOn','Вкл',"setSessionFxEnabled(true)",S.sessionFx.enabled)}
+      ${tbtnHtml('sessOff','Выкл',"setSessionFxEnabled(false)",!S.sessionFx.enabled)}
     </div>
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Р—РѕРЅС‹ СЃРµСЃСЃРёР№</span>
+    <span class="smodal-lbl">Зоны сессий</span>
     <div class="smodal-btns" style="flex-wrap:wrap;justify-content:flex-end;max-width:240px;gap:4px">
-      ${tbtnHtml('sessAsia','РђР·РёСЏ 0вЂ“9',"toggleSessionBand('asia')",S.sessionFx.asia)}
-      ${tbtnHtml('sessLon','Р›РѕРЅРґРѕРЅ 8вЂ“17',"toggleSessionBand('london')",S.sessionFx.london)}
-      ${tbtnHtml('sessNy','NY 13вЂ“22',"toggleSessionBand('ny')",S.sessionFx.ny)}
+      ${tbtnHtml('sessAsia','Азия 0–9',"toggleSessionBand('asia')",S.sessionFx.asia)}
+      ${tbtnHtml('sessLon','Лондон 8–17',"toggleSessionBand('london')",S.sessionFx.london)}
+      ${tbtnHtml('sessNy','NY 13–22',"toggleSessionBand('ny')",S.sessionFx.ny)}
     </div>
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:0">
-    <span class="smodal-lbl" style="flex:1;font-size:8px;color:var(--text3);line-height:1.45;font-weight:400">Р“СЂР°РЅРёС†С‹ РІ UTC (РєР°Рє Сѓ РіР»РѕР±Р°Р»СЊРЅС‹С… СЂС‹РЅРєРѕРІ). РџРµСЂРµСЃРµС‡РµРЅРёСЏ: РїСЂРёРѕСЂРёС‚РµС‚ NY в†’ Р›РѕРЅРґРѕРЅ в†’ РђР·РёСЏ; РІРЅРµ Р·РѕРЅ вЂ” РїСЂРёРіР»СѓС€С‘РЅРЅР°СЏ РїРѕР»РѕСЃР° В«РјС‘СЂС‚РІРѕРµ РІСЂРµРјСЏВ».</span>
+    <span class="smodal-lbl" style="flex:1;font-size:8px;color:var(--text3);line-height:1.45;font-weight:400">Границы в UTC (как у глобальных рынков). Пересечения: приоритет NY → Лондон → Азия; вне зон — приглушённая полоса «мёртвое время».</span>
   </div>
-  <div class="smodal-ver">CryptScreen v1.4 В· Binance Futures</div>`;
+  <div class="smodal-ver">CryptScreen v1.4 · Binance Futures</div>`;
 }
 
 function setChartAutoSyncOpt(on){
@@ -5715,17 +5927,17 @@ function toggleSessionBand(which){
 }
 
 function renderSettingsChartHead(body){
-  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">РџР»Р°С€РєРё РЅР°Рґ РјРёРЅРё-РіСЂР°С„РёРєР°РјРё Рё РІ С€Р°РїРєРµ РїРѕР»РЅРѕСЌРєСЂР°РЅРЅРѕРіРѕ СЂРµР¶РёРјР°. РћС‚РґРµР»СЊРЅРѕ РѕС‚ РєРѕР»РѕРЅРѕРє СЃРїРёСЃРєР° РјРѕРЅРµС‚ (РІРєР»Р°РґРєР° В«РРЅРґРёРєР°С‚РѕСЂС‹В»). РџРµСЂРµС‚Р°С‰РёС‚Рµ РїРѕСЂСЏРґРѕРє, вњ“ вЂ” РїРѕРєР°Р·Р°С‚СЊ/СЃРєСЂС‹С‚СЊ.</div>';
+  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Индикаторы»). Перетащите порядок, ✓ — показать/скрыть.</div>';
   const list=document.createElement('div');list.className='ind-list';list.id='chartHeadList';
   S.chartHeadOrder.forEach(id=>{
     const def=CHART_HEAD_DEFS.find(d=>d.id===id);if(!def)return;
     const item=document.createElement('div');
     item.className='ind-item';item.dataset.id=id;item.draggable=true;
     const visible=S.chartHeadVisible.has(id);
-    item.innerHTML=`<span class="ind-handle" title="РџРµСЂРµС‚Р°С‰РёС‚СЊ">вЈї</span>
-      <span class="ind-check${visible?' checked':''}" onclick="toggleChartHeadCol('${id}',this)">вњ“</span>
-      <span class="ind-name">${def.id==='chg'?'Р РѕСЃС‚':def.id==='vol'?'РћР±СЉС‘Рј':def.id==='trd'?'РЎРґРµР»РєРё':def.id==='natr'?'NATR':'РљРѕСЂСЂ.'}</span>
-      <span class="ind-sub" style="opacity:.75">${def.id==='chg'?'24С‡ %':def.id==='vol'?'USDT 24С‡':def.id==='trd'?'РєРѕР»-РІРѕ 24С‡':def.id==='natr'?'5Рј/14 %':'Рє BTC'}</span>`;
+    item.innerHTML=`<span class="ind-handle" title="Перетащить">⣿</span>
+      <span class="ind-check${visible?' checked':''}" onclick="toggleChartHeadCol('${id}',this)">✓</span>
+      <span class="ind-name">${def.id==='chg'?'Рост':def.id==='vol'?'Объём':def.id==='trd'?'Сделки':def.id==='natr'?'NATR':'Корр.'}</span>
+      <span class="ind-sub" style="opacity:.75">${def.id==='chg'?'24ч %':def.id==='vol'?'USDT 24ч':def.id==='trd'?'кол-во 24ч':def.id==='natr'?'5м/14 %':'к BTC'}</span>`;
     item.addEventListener('dragstart',e=>{e.dataTransfer.setData('text',id);item.style.opacity='0.4';});
     item.addEventListener('dragend',()=>{item.style.opacity='';document.querySelectorAll('#chartHeadList .ind-item').forEach(i=>i.classList.remove('drag-over'));});
     item.addEventListener('dragover',e=>{e.preventDefault();item.classList.add('drag-over');});
@@ -5765,15 +5977,15 @@ function toggleChartHeadCol(id,el){
 }
 
 function renderSettingsInd(body){
-  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">РџРµСЂРµС‚Р°С‰РёС‚Рµ РґР»СЏ РёР·РјРµРЅРµРЅРёСЏ РїРѕСЂСЏРґРєР°. РќР°Р¶РјРёС‚Рµ вњ“ РґР»СЏ РїРѕРєР°Р·Р°/СЃРєСЂС‹С‚РёСЏ.</div>';
+  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Перетащите для изменения порядка. Нажмите ✓ для показа/скрытия.</div>';
   const list=document.createElement('div');list.className='ind-list';list.id='indList';
   S.colOrder.forEach(id=>{
     const col=ALL_COLS.find(c=>c.id===id);if(!col)return;
     const item=document.createElement('div');
     item.className='ind-item';item.dataset.id=id;item.draggable=true;
     const visible=S.colVisible.has(id);
-    item.innerHTML=`<span class="ind-handle" title="РџРµСЂРµС‚Р°С‰РёС‚СЊ">вЈї</span>
-      <span class="ind-check${visible?' checked':''}" onclick="toggleCol('${id}',this)">вњ“</span>
+    item.innerHTML=`<span class="ind-handle" title="Перетащить">⣿</span>
+      <span class="ind-check${visible?' checked':''}" onclick="toggleCol('${id}',this)">✓</span>
       <span class="ind-name">${col.l}</span>
       <span class="ind-sub">${col.s}</span>`;
     // Drag-and-drop
@@ -5916,9 +6128,9 @@ function setChartVisibleBars(v){
   schedulePersistUserSettings();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  FULLSCREEN ANALYSIS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function buildFsChartLayout(){
   const area=document.getElementById('fsChartArea');
   if(!area)return;
@@ -5938,23 +6150,23 @@ function buildFsChartLayout(){
   };
   if(S.fsLayoutPreset==='two_horizontal'){
     area.className='fs-layout-2h';
-    area.append(makeCell(0,'Р’Р•Р РҐ'),makeCell(1,'РќРР—'));
+    area.append(makeCell(0,'ВЕРХ'),makeCell(1,'НИЗ'));
     return;
   }
   if(S.fsLayoutPreset==='two_vertical'){
     area.className='fs-layout-2v';
-    area.append(makeCell(0,'Р›Р•Р’Р«Р™'),makeCell(1,'РџР РђР’Р«Р™'));
+    area.append(makeCell(0,'ЛЕВЫЙ'),makeCell(1,'ПРАВЫЙ'));
     return;
   }
   if(S.fsLayoutPreset==='four_grid'){
     area.className='fs-layout-4';
-    area.append(makeCell(0,'Р›Р•Р’Р«Р™ Р’Р•Р РҐ'),makeCell(1,'РџР РђР’Р«Р™ Р’Р•Р РҐ'),makeCell(2,'Р›Р•Р’Р«Р™ РќРР—'),makeCell(3,'РџР РђР’Р«Р™ РќРР—'));
+    area.append(makeCell(0,'ЛЕВЫЙ ВЕРХ'),makeCell(1,'ПРАВЫЙ ВЕРХ'),makeCell(2,'ЛЕВЫЙ НИЗ'),makeCell(3,'ПРАВЫЙ НИЗ'));
     return;
   }
   area.className='fs-layout-3';
-  const top=makeCell(0,'РћРЎРќРћР’РќРћР™');
+  const top=makeCell(0,'ОСНОВНОЙ');
   top.classList.add('fs-span-all');
-  area.append(top,makeCell(1,'Р›Р•Р’Р«Р™'),makeCell(2,'РџР РђР’Р«Р™'));
+  area.append(top,makeCell(1,'ЛЕВЫЙ'),makeCell(2,'ПРАВЫЙ'));
 }
 function buildFsTfBar(barId,idx){
   const bar=document.getElementById(barId);
@@ -6220,9 +6432,9 @@ function startFsWs(){
   S.fsWs=ws;
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  BACKGROUND KLINES
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 async function loadKlinesBackground(){
   try{
     const visible=S.charts.map(c=>c.sym).filter(Boolean);
@@ -6260,15 +6472,15 @@ async function loadKlinesBackground(){
   }catch(e){
     console.warn('bg klines',e);
   }finally{
-    S.bgDone=true; // РіР°СЂР°РЅС‚РёСЂСѓРµРј true РґР°Р¶Рµ РїСЂРё РѕС€РёР±РєРµ
+    S.bgDone=true; // гарантируем true даже при ошибке
   }
 }
 
 function loadScript(url){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 //  MAIN
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
 function hydrateUserSession(){
   const pd=window.__pendingDrawings;
   if(pd&&typeof pd==='object'){
@@ -6432,26 +6644,26 @@ async function main() {
     loadChartHeadPrefs();
     loadLineColorPrefs();
     loadUiPrefs();
-    ldSet('Р—Р°РіСЂСѓР·РєР° Р±РёР±Р»РёРѕС‚РµРєРё РіСЂР°С„РёРєРѕРІвЂ¦',5);
+    ldSet('Загрузка библиотеки графиков…',5);
     for(const url of['https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js','https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js']){
       try{await loadScript(url);if(typeof LightweightCharts!=='undefined'){S.LC=LightweightCharts;break;}}catch(e){}
     }
 
-    ldSet('РџРѕСЃС‚СЂРѕРµРЅРёРµ РёРЅС‚РµСЂС„РµР№СЃР°вЂ¦',12);
+    ldSet('Построение интерфейса…',12);
     buildChartGrid();
     ensureQuickFindUI();
     buildScreenerHeader(document.getElementById('shdr'));
     updSortHdr();
     if(S.LC)for(let i=0;i<S.gridSize;i++)initLCChart(i);
 
-    ldSet('РџРѕР»СѓС‡РµРЅРёРµ СЃРїРёСЃРєР° С„СЊСЋС‡РµСЂСЃРѕРІ BinanceвЂ¦',18);
+    ldSet('Получение списка фьючерсов Binance…',18);
     let info;
     try{info=await fj(`${API}/exchangeInfo`);}
-    catch(e){throw new Error(`РќРµ СѓРґР°Р»РѕСЃСЊ РїРѕРґРєР»СЋС‡РёС‚СЊСЃСЏ Рє Binance API.\n${e.message}\n\nРџСЂРёС‡РёРЅС‹: РЅРµС‚ РёРЅС‚РµСЂРЅРµС‚Р°, Binance Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ, CORS.`);}
-    if(!info||!Array.isArray(info.symbols))throw new Error('Binance РІРµСЂРЅСѓР» РЅРµРѕР¶РёРґР°РЅРЅС‹Р№ РѕС‚РІРµС‚');
+    catch(e){throw new Error(`Не удалось подключиться к Binance API.\n${e.message}\n\nПричины: нет интернета, Binance заблокирован, CORS.`);}
+    if(!info||!Array.isArray(info.symbols))throw new Error('Binance вернул неожиданный ответ');
     S.syms=info.symbols.filter(s=>s?.contractType==='PERPETUAL'&&s?.quoteAsset==='USDT'&&s?.status==='TRADING').map(s=>s.symbol).sort();
 
-    ldSet('Р—Р°РіСЂСѓР·РєР° 24-С‡Р°СЃРѕРІС‹С… РґР°РЅРЅС‹С…вЂ¦',45);
+    ldSet('Загрузка 24-часовых данных…',45);
     const rawTk=await fj(`${API}/ticker/24hr`);
     if(Array.isArray(rawTk)){
       for(const t of rawTk){
@@ -6460,8 +6672,8 @@ async function main() {
       }
     }
 
-    ldSet('Р’С‹С‡РёСЃР»РµРЅРёРµ РјРµС‚СЂРёРєвЂ¦',70);calcAll();
-    ldSet('Р“РѕС‚РѕРІРѕ!',100);
+    ldSet('Вычисление метрик…',70);calcAll();
+    ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);
     const restoredLayout=hydrateUserSession();
@@ -6472,52 +6684,52 @@ async function main() {
     syncChartSyncBtnUi();
     syncOiChartBtnUi();
     syncBbBtnUi();
-    S.bgDone=true; // СЂР°Р·СЂРµС€РёС‚СЊ realtime-РѕР±РЅРѕРІР»РµРЅРёРµ РјРµС‚СЂРёРє СЃСЂР°Р·Сѓ, РЅРµ Р¶РґР°С‚СЊ С„РѕРЅРѕРІРѕР№ Р·Р°РіСЂСѓР·РєРё РёСЃС‚РѕСЂРёРё
+    S.bgDone=true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
     loadKlinesBackground();
     startRealtimeWatchdog();
     ensureFundOiLoop();
     setTimeout(autoResizeScreener,300);
   }catch(err){
-    console.error('Init error:',err);ldSet('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё',100);ldErr(err.message||String(err));
+    console.error('Init error:',err);ldSet('Ошибка загрузки',100);ldErr(err.message||String(err));
   }
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-//  POTENTIAL MONITOR вЂ” multi-preset tabbed system
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
+//  POTENTIAL MONITOR — multi-preset tabbed system
+// ═══════════════════════════════════════════════════════════════
 const POT_FIELDS=[
-  {id:'ch24',   label:'РР—Рњ 24С‡ %',  unit:'%',  step:0.5},
-  {id:'ch7d',   label:'РР—Рњ 7Рґ %',   unit:'%',  step:0.5},
-  {id:'cday',   label:'РР—Рњ РґРµРЅСЊ %', unit:'%',  step:0.5},
+  {id:'ch24',   label:'ИЗМ 24ч %',  unit:'%',  step:0.5},
+  {id:'ch7d',   label:'ИЗМ 7д %',   unit:'%',  step:0.5},
+  {id:'cday',   label:'ИЗМ день %', unit:'%',  step:0.5},
   {id:'bbSqz',  label:'BB Squeeze', unit:'',   step:1},
   {id:'bbBreak',label:'BB Breakout',unit:'',   step:1},
   {id:'volImpulse',label:'Volume impulse',unit:'',step:1},
   {id:'emaTouch',label:'EMA touch', unit:'',   step:1},
-  {id:'vr5',    label:'РћР‘* 5Рј',     unit:'Г—',  step:0.1},
-  {id:'vr1h',   label:'РћР‘* 1С‡',     unit:'Г—',  step:0.1},
-  {id:'tr5',    label:'РЎР”* 5Рј',     unit:'Г—',  step:0.1},
-  {id:'tr1h',   label:'РЎР”* 1С‡',     unit:'Г—',  step:0.1},
-  {id:'na14',   label:'NATR 5Рј',    unit:'%',  step:0.01},
-  {id:'na30',   label:'NATR 1Рј',    unit:'%',  step:0.01},
-  {id:'trd24',  label:'РЎРґРµР»РєРё 24С‡', unit:'',   step:50},
-  {id:'vol24',  label:'РћР±СЉС‘Рј 24С‡',  unit:'M$', step:10},
+  {id:'vr5',    label:'ОБ* 5м',     unit:'×',  step:0.1},
+  {id:'vr1h',   label:'ОБ* 1ч',     unit:'×',  step:0.1},
+  {id:'tr5',    label:'СД* 5м',     unit:'×',  step:0.1},
+  {id:'tr1h',   label:'СД* 1ч',     unit:'×',  step:0.1},
+  {id:'na14',   label:'NATR 5м',    unit:'%',  step:0.01},
+  {id:'na30',   label:'NATR 1м',    unit:'%',  step:0.01},
+  {id:'trd24',  label:'Сделки 24ч', unit:'',   step:50},
+  {id:'vol24',  label:'Объём 24ч',  unit:'M$', step:10},
 ];
 const POT_FIELD_DESC={
-  ch24:'РР·РјРµРЅРµРЅРёРµ С†РµРЅС‹ Р·Р° 24 С‡Р°СЃР° РІ РїСЂРѕС†РµРЅС‚Р°С….',
-  ch7d:'РР·РјРµРЅРµРЅРёРµ С†РµРЅС‹ Р·Р° 7 РґРЅРµР№ РІ РїСЂРѕС†РµРЅС‚Р°С….',
-  cday:'РР·РјРµРЅРµРЅРёРµ С†РµРЅС‹ СЃ РЅР°С‡Р°Р»Р° С‚РµРєСѓС‰РµРіРѕ РґРЅСЏ РІ РїСЂРѕС†РµРЅС‚Р°С….',
-  bbSqz:'РџРѕР»РѕСЃС‹ Р‘РѕР»Р»РёРЅРґР¶РµСЂР° СЃР¶Р°Р»РёСЃСЊ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ РїСЂРѕС€Р»РѕРіРѕ Р±Р°СЂР° (СѓР·РєРёР№ РґРёР°РїР°Р·РѕРЅ).',
-  bbBreak:'Р¦РµРЅР° РІС‹С€Р»Р° Р·Р° РІРµСЂС…РЅСЋСЋ/РЅРёР¶РЅСЋСЋ РїРѕР»РѕСЃСѓ Р‘РѕР»Р»РёРЅРґР¶РµСЂР° РЅР° РїРѕСЃР»РµРґРЅРµР№ СЃРІРµС‡Рµ.',
-  volImpulse:'Р•СЃС‚СЊ РІСЃРїР»РµСЃРє РѕР±СЉС‘РјР°: РћР‘* 5Рј >= 1.25 РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ РїРѕСЃР»РµРґРЅРёС… 14 СЃРІРµС‡РµР№.',
-  emaTouch:'РљР°СЃР°РЅРёРµ EMA РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїРµСЂРёРѕРґР° РїРѕСЃР»РµРґРЅРµР№ СЃРІРµС‡РѕР№ (high/low РїРµСЂРµСЃРµРєР°РµС‚ EMA).',
-  vr5:'РћР±СЉС‘Рј РїРѕСЃР»РµРґРЅРµР№ 5Рј СЃРІРµС‡Рё Рє СЃСЂРµРґРЅРµРјСѓ РѕР±СЉС‘РјСѓ Р·Р° 14 СЃРІРµС‡РµР№.',
-  vr1h:'РћР±СЉС‘Рј РїРѕСЃР»РµРґРЅРµР№ 1С‡ СЃРІРµС‡Рё Рє СЃСЂРµРґРЅРµРјСѓ Р·Р° 24 С‡Р°СЃР°.',
-  tr5:'РЎРґРµР»РєРё РїРѕСЃР»РµРґРЅРµР№ 5Рј СЃРІРµС‡Рё Рє СЃСЂРµРґРЅРµРјСѓ Р·Р° 14 СЃРІРµС‡РµР№.',
-  tr1h:'РЎРґРµР»РєРё РїРѕСЃР»РµРґРЅРµР№ 1С‡ СЃРІРµС‡Рё Рє СЃСЂРµРґРЅРµРјСѓ Р·Р° 24 С‡Р°СЃР°.',
-  na14:'NATR РЅР° 5Рј (РІРѕР»Р°С‚РёР»СЊРЅРѕСЃС‚СЊ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ С†РµРЅС‹).',
-  na30:'NATR РЅР° 1Рј (РІРѕР»Р°С‚РёР»СЊРЅРѕСЃС‚СЊ РѕС‚РЅРѕСЃРёС‚РµР»СЊРЅРѕ С†РµРЅС‹).',
-  trd24:'РљРѕР»РёС‡РµСЃС‚РІРѕ СЃРґРµР»РѕРє Р·Р° 24 С‡Р°СЃР°.',
-  vol24:'РўРѕСЂРіРѕРІС‹Р№ РѕР±СЉС‘Рј Р·Р° 24 С‡Р°СЃР° РІ РјРёР»Р»РёРѕРЅР°С… USDT.',
+  ch24:'Изменение цены за 24 часа в процентах.',
+  ch7d:'Изменение цены за 7 дней в процентах.',
+  cday:'Изменение цены с начала текущего дня в процентах.',
+  bbSqz:'Полосы Боллинджера сжались относительно прошлого бара (узкий диапазон).',
+  bbBreak:'Цена вышла за верхнюю/нижнюю полосу Боллинджера на последней свече.',
+  volImpulse:'Есть всплеск объёма: ОБ* 5м >= 1.25 относительно последних 14 свечей.',
+  emaTouch:'Касание EMA выбранного периода последней свечой (high/low пересекает EMA).',
+  vr5:'Объём последней 5м свечи к среднему объёму за 14 свечей.',
+  vr1h:'Объём последней 1ч свечи к среднему за 24 часа.',
+  tr5:'Сделки последней 5м свечи к среднему за 14 свечей.',
+  tr1h:'Сделки последней 1ч свечи к среднему за 24 часа.',
+  na14:'NATR на 5м (волатильность относительно цены).',
+  na30:'NATR на 1м (волатильность относительно цены).',
+  trd24:'Количество сделок за 24 часа.',
+  vol24:'Торговый объём за 24 часа в миллионах USDT.',
 };
 
 function calcEmaTouchSignal(sym,period){
@@ -6561,12 +6773,12 @@ function renderPotentialPanel(){
   // Add button
   const tplBtn=document.createElement('button');
   tplBtn.className='pot-tab';
-  tplBtn.title='Р“РѕС‚РѕРІС‹Р№ РїСЂРµСЃРµС‚: BB squeeze + volume impulse + breakout';
-  tplBtn.textContent='пј‹Squeeze';
+  tplBtn.title='Готовый пресет: BB squeeze + volume impulse + breakout';
+  tplBtn.textContent='＋Squeeze';
   tplBtn.onclick=()=>{addBuiltinSqueezePreset();renderPotentialPanel();};
   tabBar.appendChild(tplBtn);
   const addBtn=document.createElement('button');
-  addBtn.className='pot-tab pot-tab-add';addBtn.title='Р”РѕР±Р°РІРёС‚СЊ РїСЂРµСЃРµС‚';addBtn.textContent='пј‹';
+  addBtn.className='pot-tab pot-tab-add';addBtn.title='Добавить пресет';addBtn.textContent='＋';
   addBtn.onclick=()=>openPotPresetEditor(null);
   tabBar.appendChild(addBtn);
 
@@ -6577,17 +6789,17 @@ function renderPotentialPanel(){
 
   const pr=S.potentialPresets.find(p=>p.id===_potActiveTab);
   if(!pr){
-    body.innerHTML='<div class="pot-empty">РќР°Р¶РјРё пј‹ С‡С‚РѕР±С‹ РґРѕР±Р°РІРёС‚СЊ РїСЂРµСЃРµС‚ СЃ СѓСЃР»РѕРІРёСЏРјРё</div>';
+    body.innerHTML='<div class="pot-empty">Нажми ＋ чтобы добавить пресет с условиями</div>';
     return;
   }
 
   // Preset controls
   const ctrl=document.createElement('div');ctrl.className='pot-preset-ctrl';
   ctrl.innerHTML=`
-    <span style="font-size:9px;color:var(--text3);flex:1">${pr.conditions.length} СѓСЃР»РѕРІРёР№</span>
-    <button class="tbtn${pr.enabled?' on':''}" onclick="togglePotPreset('${pr.id}')">${pr.enabled?'в—Џ Р’РєР»':'в—‹ Р’С‹РєР»'}</button>
-    <button class="tbtn" onclick="openPotPresetEditor('${pr.id}')" title="Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ">вњЋ</button>
-    <button class="tbtn" onclick="deletePotPreset('${pr.id}')" style="color:var(--red)" title="РЈРґР°Р»РёС‚СЊ">вњ•</button>`;
+    <span style="font-size:9px;color:var(--text3);flex:1">${pr.conditions.length} условий</span>
+    <button class="tbtn${pr.enabled?' on':''}" onclick="togglePotPreset('${pr.id}')">${pr.enabled?'● Вкл':'○ Выкл'}</button>
+    <button class="tbtn" onclick="openPotPresetEditor('${pr.id}')" title="Редактировать">✎</button>
+    <button class="tbtn" onclick="deletePotPreset('${pr.id}')" style="color:var(--red)" title="Удалить">✕</button>`;
   body.appendChild(ctrl);
 
   // Conditions summary
@@ -6598,8 +6810,8 @@ function renderPotentialPanel(){
       const parts=[];
       if(c.field==='emaTouch')parts.push(`period=${Math.max(2,Math.min(400,c.period||20))}`);
       else{
-        if(c.min!=null)parts.push(`в‰Ґ${c.min}${f?.unit||''}`);
-        if(c.max!=null)parts.push(`в‰¤${c.max}${f?.unit||''}`);
+        if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
+        if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
       }
       const absTxt=c.abs&&['ch24','ch7d','cday','bbBreak'].includes(c.field)?'|.| ':'';
       return`<span class="pot-cond-tag">${absTxt}${f?.label||c.field} ${parts.join(' ')}</span>`;
@@ -6609,7 +6821,7 @@ function renderPotentialPanel(){
     dsc.style.cssText='display:flex;flex-direction:column;gap:3px;margin-top:6px';
     dsc.innerHTML=pr.conditions.map(c=>{
       const txt=POT_FIELD_DESC[c.field];
-      return txt?`<span style="font-size:9px;color:var(--text3)">вЂў ${txt}</span>`:'';
+      return txt?`<span style="font-size:9px;color:var(--text3)">• ${txt}</span>`:'';
     }).join('');
     if(dsc.innerHTML.trim())body.appendChild(dsc);
   }
@@ -6618,7 +6830,7 @@ function renderPotentialPanel(){
   const listEl=document.createElement('div');listEl.className='pot-list';
   const matches=Object.entries(pr.matches||{}).sort((a,b)=>b[1].ts-a[1].ts);
   if(!matches.length){
-    listEl.innerHTML=`<div class="pot-empty">${pr.enabled?'РЎРѕРІРїР°РґРµРЅРёР№ РЅРµС‚ вЂ” Р¶РґС‘РјвЂ¦':'РњРѕРЅРёС‚РѕСЂРёРЅРі РІС‹РєР»СЋС‡РµРЅ'}</div>`;
+    listEl.innerHTML=`<div class="pot-empty">${pr.enabled?'Совпадений нет — ждём…':'Мониторинг выключен'}</div>`;
   } else {
     matches.forEach(([sym,d])=>{
       const sn=sym.replace(/USDT$/,'');
@@ -6633,10 +6845,10 @@ function renderPotentialPanel(){
         if(c.field==='emaTouch')val=calcEmaTouchSignal(sym,c.period||20);
         let fmt;
         if(c.field==='vol24'||c.field==='trd24')fmt=fk(val);
-        else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'вњ“':'В·';
-        else if(c.field==='bbBreak')fmt=val>0?'в†‘':val<0?'в†“':'В·';
-        else if(c.field==='emaTouch')fmt=val>=1?`вњ“(${Math.max(2,Math.min(400,c.period||20))})`:`В·(${Math.max(2,Math.min(400,c.period||20))})`;
-        else fmt=val!=null?fn(val,2):'вЂ”';
+        else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'✓':'·';
+        else if(c.field==='bbBreak')fmt=val>0?'↑':val<0?'↓':'·';
+        else if(c.field==='emaTouch')fmt=val>=1?`✓(${Math.max(2,Math.min(400,c.period||20))})`:`·(${Math.max(2,Math.min(400,c.period||20))})`;
+        else fmt=val!=null?fn(val,2):'—';
         const absTxt=c.abs&&['ch24','ch7d','cday','bbBreak'].includes(c.field)?'|.| ':'';
         return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit?f.unit:''}</span>`;
       }).join('');
@@ -6666,31 +6878,31 @@ function openPotPresetEditor(presetId){
   const render=()=>{
     box.innerHTML=`
       <div style="display:flex;align-items:center;padding:12px 14px;border-bottom:1px solid var(--border);flex-shrink:0;gap:8px">
-        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${existing?'Р РµРґР°РєС‚РёСЂРѕРІР°С‚СЊ':'РќРѕРІС‹Р№'} РїСЂРµСЃРµС‚</span>
-        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('potPresetModal').remove()">вњ•</button>
+        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${existing?'Редактировать':'Новый'} пресет</span>
+        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('potPresetModal').remove()">✕</button>
       </div>
       <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <label style="font-size:9px;color:var(--text3);display:block;margin-bottom:4px">РќРђР—Р’РђРќРР•</label>
-        <input id="potPresetName" value="${existing?.name||''}" placeholder="РќР°РїСЂРёРјРµСЂ: РРјРїСѓР»СЊСЃ СЂРѕСЃС‚Р°"
+        <label style="font-size:9px;color:var(--text3);display:block;margin-bottom:4px">НАЗВАНИЕ</label>
+        <input id="potPresetName" value="${existing?.name||''}" placeholder="Например: Импульс роста"
           style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:5px 8px;outline:none">
       </div>
       <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:space-between">
-        <span style="font-size:10px;color:var(--text2)">РЈСЃР»РѕРІРёСЏ (Р’РЎР• РґРѕР»Р¶РЅС‹ СЃРѕРІРїР°СЃС‚СЊ)</span>
-        <button class="tbtn" id="potAddCond">пј‹ РЈСЃР»РѕРІРёРµ</button>
+        <span style="font-size:10px;color:var(--text2)">Условия (ВСЕ должны совпасть)</span>
+        <button class="tbtn" id="potAddCond">＋ Условие</button>
       </div>
       <div id="potCondList" style="flex:1;overflow-y:auto;min-height:0;padding:6px 14px"></div>
       <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
-        <button class="tbtn" style="flex:1;color:var(--text2)" onclick="document.getElementById('potPresetModal').remove()">РћС‚РјРµРЅР°</button>
-        <button class="tbtn on" style="flex:2" id="potSaveBtn">вњ“ РЎРѕС…СЂР°РЅРёС‚СЊ</button>
+        <button class="tbtn" style="flex:1;color:var(--text2)" onclick="document.getElementById('potPresetModal').remove()">Отмена</button>
+        <button class="tbtn on" style="flex:2" id="potSaveBtn">✓ Сохранить</button>
       </div>
       ${existing?`<div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
-        <button class="tbtn${existing.enabled?' on':''}" style="flex:1" id="potToggleBtn">${existing.enabled?'в—Џ Р’РєР»':'в—‹ Р’С‹РєР»'} Р°Р»РµСЂС‚С‹</button>
-        <button class="tbtn" style="flex:1;color:var(--red)" id="potDeleteBtn">РЈРґР°Р»РёС‚СЊ РїСЂРµСЃРµС‚</button>
+        <button class="tbtn${existing.enabled?' on':''}" style="flex:1" id="potToggleBtn">${existing.enabled?'● Вкл':'○ Выкл'} алерты</button>
+        <button class="tbtn" style="flex:1;color:var(--red)" id="potDeleteBtn">Удалить пресет</button>
       </div>`:''}`;
 
     // Render conditions
     const cl=box.querySelector('#potCondList');
-    if(!wCond.length){cl.innerHTML='<div style="font-size:9px;color:var(--text3);padding:8px 0">РќРµС‚ СѓСЃР»РѕРІРёР№ вЂ” РЅР°Р¶РјРё пј‹ С‡С‚РѕР±С‹ РґРѕР±Р°РІРёС‚СЊ</div>';}
+    if(!wCond.length){cl.innerHTML='<div style="font-size:9px;color:var(--text3);padding:8px 0">Нет условий — нажми ＋ чтобы добавить</div>';}
     wCond.forEach((c,idx)=>{
       const f=POT_FIELDS.find(x=>x.id===c.field)||POT_FIELDS[0];
       const row=document.createElement('div');
@@ -6699,20 +6911,20 @@ function openPotPresetEditor(presetId){
         <select style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:3px 4px">
           ${POT_FIELDS.map(x=>`<option value="${x.id}"${x.id===c.field?' selected':''}>${x.label}</option>`).join('')}
         </select>
-        <label title="РРіРЅРѕСЂРёСЂРѕРІР°С‚СЊ РЅР°РїСЂР°РІР»РµРЅРёРµ (+/-), РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ РјРѕРґСѓР»СЊ" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','ch7d','cday','bbBreak'].includes(c.field)?'':'visibility:hidden'}">
+        <label title="Игнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','ch7d','cday','bbBreak'].includes(c.field)?'':'visibility:hidden'}">
           |x|
           <input type="checkbox" ${c.abs?'checked':''}>
         </label>
-        <span style="font-size:9px;color:var(--text3)">РѕС‚</span>
-        <input type="number" value="${c.min??''}" placeholder="вЂ”" step="${f.step}" class="pot-min"
+        <span style="font-size:9px;color:var(--text3)">от</span>
+        <input type="number" value="${c.min??''}" placeholder="—" step="${f.step}" class="pot-min"
           style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <span style="font-size:9px;color:var(--text3)">РґРѕ</span>
-        <input type="number" value="${c.max??''}" placeholder="вЂ”" step="${f.step}" class="pot-max"
+        <span style="font-size:9px;color:var(--text3)">до</span>
+        <input type="number" value="${c.max??''}" placeholder="—" step="${f.step}" class="pot-max"
           style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <span style="font-size:9px;color:var(--text3);${c.field==='emaTouch'?'':'display:none;'}" class="pot-ema-lbl" title="РџРµСЂРёРѕРґ EMA, РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ 20">EMA period</span>
+        <span style="font-size:9px;color:var(--text3);${c.field==='emaTouch'?'':'display:none;'}" class="pot-ema-lbl" title="Период EMA, по умолчанию 20">EMA period</span>
         <input type="number" value="${Math.max(2,Math.min(400,c.period||20))}" min="2" max="400" step="1"
-          class="pot-ema-period" title="РџРµСЂРёРѕРґ EMA РґР»СЏ СѓСЃР»РѕРІРёСЏ EMA touch" style="width:68px;${c.field==='emaTouch'?'':'display:none;'}background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">вњ•</button>
+          class="pot-ema-period" title="Период EMA для условия EMA touch" style="width:68px;${c.field==='emaTouch'?'':'display:none;'}background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
+        <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">✕</button>
         <span style="display:none" class="pot-desc">${POT_FIELD_DESC[c.field]||''}</span>`;
       const sel=row.querySelector('select');
       sel.onchange=()=>{
@@ -6740,7 +6952,7 @@ function openPotPresetEditor(presetId){
 
     box.querySelector('#potAddCond').onclick=()=>{wCond.push({field:'ch24',min:null,max:null,abs:false,period:20});render();};
     box.querySelector('#potSaveBtn').onclick=()=>{
-      const name=box.querySelector('#potPresetName').value.trim()||'РџСЂРµСЃРµС‚';
+      const name=box.querySelector('#potPresetName').value.trim()||'Пресет';
       // read current input values
       box.querySelectorAll('#potCondList .pot-cond-row-data').forEach(()=>{});
       if(existing){
@@ -6764,15 +6976,15 @@ function openPotPresetEditor(presetId){
           renderPotentialPanel();buildGroupFilterBar();
         }
         tg.classList.toggle('on',existing.enabled);
-        tg.textContent=(existing.enabled?'в—Џ Р’РєР»':'в—‹ Р’С‹РєР»')+' Р°Р»РµСЂС‚С‹';
+        tg.textContent=(existing.enabled?'● Вкл':'○ Выкл')+' алерты';
       };
     }
     const del=box.querySelector('#potDeleteBtn');
     if(del&&existing){
       del.onclick=()=>{
-        showConfirmModal(`РЈРґР°Р»РёС‚СЊ РїСЂРµСЃРµС‚ "${existing.name}"?`,{
-          title:'РЈРґР°Р»РµРЅРёРµ РїСЂРµСЃРµС‚Р°',
-          okText:'РЈРґР°Р»РёС‚СЊ',
+        showConfirmModal(`Удалить пресет "${existing.name}"?`,{
+          title:'Удаление пресета',
+          okText:'Удалить',
           danger:true,
           onConfirm:()=>{deletePotPreset(existing.id);modal.remove();}
         });
@@ -6899,7 +7111,24 @@ function calcGridCoinScore(m){
 }
 
 function getGridSelectorRows(limit=20){
-  return getGridSelectorRowsUi(S.syms, S.mx, calcGridCoinScore, { limit });
+  const rows=[];
+  for(const sym of S.syms){
+    const m=S.mx[sym];
+    if(!m)continue;
+    const score=calcGridCoinScore(m);
+    if(score==null||!isFinite(score))continue;
+    rows.push({
+      sym,
+      score,
+      range24:m.r24||0,
+      natr:m.na14||0,
+      ch24:m.ch24||0,
+      vol24:m.vol24||0,
+      trd24:m.trd24||0,
+    });
+  }
+  rows.sort((a,b)=>b.score-a.score);
+  return rows.slice(0,Math.max(3,Math.min(60,limit|0)));
 }
 
 async function ensureBacktestCandles(sym,tf,bars){
@@ -6917,29 +7146,358 @@ async function ensureBacktestCandles(sym,tf,bars){
   return(store[sym]||[]).slice(-want);
 }
 
+const GRIDLAB_PREFS_KEY='cs_gridlab_prefs_v2';
+const GB_DEP_MIN=0.1;
+function gbDepositClamp(v,fallback=500){
+  const x=+v;
+  if(!isFinite(x))return Math.max(GB_DEP_MIN,+fallback||500);
+  return Math.max(GB_DEP_MIN,x);
+}
+/** % между соседними линиями сетки (от refPrice). */
+function gridAdjacentStepPcts(grid,refPrice){
+  if(!grid||grid.length<2)return{min:null,max:null,avg:null};
+  const ref=+refPrice>0?+refPrice:(+grid[0]+ +grid[grid.length-1])/2;
+  if(!(ref>0))return{min:null,max:null,avg:null};
+  const pcts=[];
+  for(let i=1;i<grid.length;i++){
+    const d=Math.abs(grid[i]-grid[i-1]);
+    if(d>0)pcts.push(d/ref*100);
+  }
+  if(!pcts.length)return{min:null,max:null,avg:null};
+  const sum=pcts.reduce((a,b)=>a+b,0);
+  return{min:Math.min(...pcts),max:Math.max(...pcts),avg:sum/pcts.length};
+}
+function resolveGridLevelsForCfg(cfg,lo,hi,levels){
+  const custom=cfg?.gridLevels;
+  if(Array.isArray(custom)&&custom.length>=2){
+    const grid=custom.map(x=>+x).filter(x=>isFinite(x)&&x>0).sort((a,b)=>a-b);
+    if(grid.length>=2)return{grid,levels:grid.length-1};
+  }
+  const grids=Math.max(2,levels|0);
+  const step=(hi-lo)/grids;
+  const grid=Array.from({length:grids+1},(_,i)=>lo+step*i);
+  return{grid,levels:grids};
+}
+/** Сетка вокруг anchor: longR:shortR по числу шагов, шаг ≈ avgStepPct % от anchor. */
+function buildRatioGridLevels(anchor,longRatio,shortRatio,avgStepPct,totalLevels){
+  const ax=+anchor;
+  if(!(ax>0))return null;
+  const lr=Math.max(0.1,+longRatio||1);
+  const sr=Math.max(0.1,+shortRatio||1);
+  const stepPct=Math.max(0.01,Math.min(50,+avgStepPct||0.5));
+  const stepFrac=stepPct/100;
+  const totalLv=Math.max(3,Math.min(60,totalLevels|0));
+  const sumR=lr+sr;
+  const upSteps=Math.max(1,Math.round(totalLv*lr/sumR));
+  const downSteps=Math.max(1,Math.round(totalLv*sr/sumR));
+  const pts=new Set();
+  pts.add(ax);
+  for(let i=1;i<=upSteps;i++)pts.add(ax*(1+stepFrac*i));
+  for(let i=1;i<=downSteps;i++){
+    const p=ax*(1-stepFrac*i);
+    if(p>0)pts.add(p);
+  }
+  const grid=[...pts].sort((a,b)=>a-b);
+  if(grid.length<2)return null;
+  return{gridLevels:grid,lower:grid[0],upper:grid[grid.length-1],levels:grid.length-1,upSteps,downSteps,stepPct};
+}
+function applyGbRatioGrid(body,gbPrefs){
+  const sym=String(body.querySelector('#gbSym')?.value||'').toUpperCase().trim();
+  if(!sym)return;
+  const lr=parseFloat(body.querySelector('#gbRatioLong')?.value||'');
+  const sr=parseFloat(body.querySelector('#gbRatioShort')?.value||'');
+  const sp=parseFloat(body.querySelector('#gbRatioStep')?.value||'');
+  if(!isFinite(lr)||!isFinite(sr)||!isFinite(sp))return;
+  const lvl=Math.max(3,Math.min(60,+body.querySelector('#gbLevels')?.value||12));
+  let anchor=gbPrefs.symbolBounds?.[sym]?.anchorPrice;
+  const merged=body._gbChartCtx?.merged;
+  if(anchor==null||!isFinite(+anchor)){
+    const last=merged?.length?+merged[merged.length-1].c:null;
+    anchor=isFinite(last)?last:null;
+  }
+  if(!(anchor>0))return;
+  const built=buildRatioGridLevels(anchor,lr,sr,sp,lvl);
+  if(!built)return;
+  if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+  gbPrefs.symbolBounds[sym]={
+    ...(gbPrefs.symbolBounds[sym]||{}),
+    lower:built.lower,
+    upper:built.upper,
+    gridLevels:built.gridLevels,
+  };
+  gbPrefs.global.ratioLong=lr;
+  gbPrefs.global.ratioShort=sr;
+  gbPrefs.global.ratioStepPct=sp;
+  saveGridLabPrefs(gbPrefs);
+  body.querySelector('#gbLow').value=String(built.lower);
+  body.querySelector('#gbHigh').value=String(built.upper);
+  body.querySelector('#gbLevels').value=String(built.levels);
+  scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
+}
+function loadGridLabPrefs(){
+  try{
+    const raw=localStorage.getItem(GRIDLAB_PREFS_KEY);
+    if(!raw)return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral',ratioLong:3,ratioShort:1,ratioStepPct:0.5},symbolBounds:{}};
+    const j=JSON.parse(raw);
+    return{
+      global:{
+        tf:['1m','5m','15m','1h'].includes(j?.global?.tf)?j.global.tf:'5m',
+        bars:Math.max(80,Math.min(1200,+(j?.global?.bars||360))),
+        levels:Math.max(3,Math.min(60,+(j?.global?.levels||12))),
+        leverage:Math.max(1,Math.min(25,+(j?.global?.leverage||3))),
+        deposit:gbDepositClamp(j?.global?.deposit,500),
+        gridMode:['neutral','long','short'].includes(j?.global?.gridMode)?j.global.gridMode:'neutral',
+        ratioLong:Math.max(0.1,+(j?.global?.ratioLong??3)),
+        ratioShort:Math.max(0.1,+(j?.global?.ratioShort??1)),
+        ratioStepPct:Math.max(0.01,Math.min(50,+(j?.global?.ratioStepPct??0.5))),
+      },
+      symbolBounds:(j?.symbolBounds&&typeof j.symbolBounds==='object')?j.symbolBounds:{},
+    };
+  }catch(e){
+    return{global:{tf:'5m',bars:360,levels:12,leverage:3,deposit:500,gridMode:'neutral',ratioLong:3,ratioShort:1,ratioStepPct:0.5},symbolBounds:{}};
+  }
+}
+function saveGridLabPrefs(prefs){
+  try{localStorage.setItem(GRIDLAB_PREFS_KEY,JSON.stringify(prefs||{}));}catch(e){}
+}
+/** Индекс якоря риск-сетки: neutral — первый уровень ≥ цены; long — последний ≤; short — первый ≥ (логика Binance). */
+function gridRiskAnchorIdx(grid,cur,step,mode,anchorOverridePx=null){
+  if(anchorOverridePx!=null&&isFinite(+anchorOverridePx)&&Array.isArray(grid)&&grid.length){
+    let bi=0,bd=Infinity;
+    for(let i=0;i<grid.length;i++){
+      const d=Math.abs(grid[i]-+anchorOverridePx);
+      if(d<bd){bd=d;bi=i;}
+    }
+    return bi;
+  }
+  const eps=Math.max(1e-10,(step||0)*1e-9);
+  if(String(mode||'neutral')==='long'){
+    let idx=-1;
+    for(let i=0;i<grid.length;i++){
+      if(grid[i]<=cur+eps)idx=i;
+    }
+    return idx<0?0:idx;
+  }
+  let j=grid.findIndex(p=>p>=cur-eps);
+  return j<0?grid.length-1:j;
+}
+function buildGridRiskRows(cfg){
+  const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
+  const grids=Math.max(2,+cfg.levels|0);
+  const lev=Math.max(1,+cfg.leverage||1);
+  const dep=gbDepositClamp(cfg.deposit,1);
+  if(!(hi>lo)||!(cur>0))return[];
+  const resolved=resolveGridLevelsForCfg(cfg,lo,hi,grids);
+  const grid=resolved.grid;
+  const step=resolved.levels>0?(grid[grid.length-1]-grid[0])/resolved.levels:0;
+  if(!(step>0))return[];
+  const perStepNotional=(dep*lev)/Math.max(1,resolved.levels);
+  const mode=String(cfg.gridMode||'neutral');
+  const anchorIdx=gridRiskAnchorIdx(grid,cur,step,mode,cfg.anchorPrice);
+  const anchorPx=grid[anchorIdx];
+  const upLevels=grid.slice(anchorIdx);
+  const downPrices=grid.slice(0,anchorIdx).reverse();
+  const maxDown=downPrices.length;
+  const maxUp=upLevels.length;
+  if(mode==='long'){
+    const rows=[];
+    // Стартовая позиция в long равна количеству уровней выше текущего узла (# сеток вверх).
+    const openK=Math.max(0,maxUp-1);
+    if(openK<=0)return rows;
+    const qtyOpen=perStepNotional/Math.max(anchorPx,1e-12);
+    for(let n=1;n<=maxDown;n++){
+      const pxNow=downPrices[n-1];
+      let downUsdt=openK*qtyOpen*(pxNow-anchorPx);
+      for(let j=1;j<=n;j++){
+        const ent=downPrices[j-1];
+        const q=perStepNotional/Math.max(ent,1e-12);
+        downUsdt+=q*(pxNow-ent);
+      }
+      rows.push({
+        step:n,
+        downUsdt,
+        upUsdt:0,
+        downPrice:pxNow,
+        upPrice:null,
+        downPct:(downUsdt/dep)*100,
+        upPct:0,
+      });
+    }
+    return rows;
+  }
+  if(mode==='short'){
+    const rows=[];
+    if(maxUp<=1)return rows;
+    // Для short стартовая позиция равна количеству уровней ниже текущего узла (# сеток вниз).
+    const openK=Math.max(0,maxDown);
+    if(openK<=0)return rows;
+    const basePx=upLevels[0];
+    const qtyOpen=perStepNotional/Math.max(basePx,1e-12);
+    for(let n=1;n<=maxUp-1;n++){
+      const pxNow=upLevels[n];
+      let upUsdt=openK*qtyOpen*(basePx-pxNow);
+      for(let j=1;j<=n;j++){
+        const ent=upLevels[j];
+        const q=perStepNotional/Math.max(ent,1e-12);
+        upUsdt+=q*(ent-pxNow);
+      }
+      rows.push({
+        step:n,
+        downUsdt:0,
+        upUsdt,
+        downPrice:null,
+        upPrice:pxNow,
+        downPct:0,
+        upPct:(upUsdt/dep)*100,
+      });
+    }
+    return rows;
+  }
+  const maxN=Math.max(maxDown,maxUp);
+  const tol=Math.max(1e-10,(step||0)*1e-9);
+  const rows=[];
+  for(let n=1;n<=maxN;n++){
+    let downUsdt=0,upUsdt=0;
+    let downPrice=null,upPrice=null;
+    if(n<=maxDown){
+      const pxNow=downPrices[n-1];
+      downPrice=pxNow;
+      // Нейтраль: на #0 позиции нет; первая сделка только на первой линии сетки → при достижении pxNow MTM от предыдущих = 0.
+      for(let i=0;i<n-1;i++){
+        const ent=downPrices[i];
+        const qty=perStepNotional/Math.max(ent,1e-12);
+        downUsdt+=qty*(pxNow-ent);
+      }
+    }
+    if(n<=maxUp){
+      const pxNow=upLevels[n-1];
+      if(Math.abs(pxNow-anchorPx)<=tol){
+        upPrice=null;
+        upUsdt=0;
+      }else{
+        upPrice=pxNow;
+        for(let j=1;j<n-1;j++){
+          const ent=upLevels[j];
+          const qty=perStepNotional/Math.max(ent,1e-12);
+          upUsdt+=qty*(ent-pxNow);
+        }
+      }
+    }
+    rows.push({
+      step:n,
+      downUsdt,
+      upUsdt,
+      downPrice,
+      upPrice,
+      downPct:(downUsdt/dep)*100,
+      upPct:(upUsdt/dep)*100,
+    });
+  }
+  return rows;
+}
+/** Прибыль по сетке в «нашу» сторону: long — рост к верхним линиям; short — падение к нижним. */
+function buildGridFavorableRows(cfg){
+  const lo=+cfg.lower,hi=+cfg.upper,cur=+cfg.currentPrice;
+  const grids=Math.max(2,+cfg.levels|0);
+  const lev=Math.max(1,+cfg.leverage||1);
+  const dep=gbDepositClamp(cfg.deposit,1);
+  if(!(hi>lo)||!(cur>0))return[];
+  const resolved=resolveGridLevelsForCfg(cfg,lo,hi,grids);
+  const grid=resolved.grid;
+  const step=resolved.levels>0?(grid[grid.length-1]-grid[0])/resolved.levels:0;
+  if(!(step>0))return[];
+  const perStepNotional=(dep*lev)/Math.max(1,resolved.levels);
+  const mode=String(cfg.gridMode||'neutral');
+  const anchorIdx=gridRiskAnchorIdx(grid,cur,step,mode,cfg.anchorPrice);
+  const anchorPx=grid[anchorIdx];
+  const upLevels=grid.slice(anchorIdx);
+  const downPrices=grid.slice(0,anchorIdx).reverse();
+  const rows=[];
+  if(mode==='long'){
+    const maxUp=upLevels.length;
+    for(let n=1;n<maxUp;n++){
+      const pxNow=upLevels[n];
+      let pnl=0;
+      for(let i=1;i<=n;i++){
+        const ent=upLevels[i-1];
+        const q=perStepNotional/Math.max(ent,1e-12);
+        pnl+=q*(pxNow-ent);
+      }
+      rows.push({step:n,price:pxNow,usdt:pnl,pct:(pnl/dep)*100});
+    }
+    return rows;
+  }
+  if(mode==='short'){
+    const maxDn=downPrices.length;
+    for(let n=1;n<=maxDn;n++){
+      const pxNow=downPrices[n-1];
+      let pnl=0;
+      for(let i=1;i<=n;i++){
+        const ent=i===1?anchorPx:downPrices[i-2];
+        const q=perStepNotional/Math.max(ent,1e-12);
+        pnl+=q*(ent-pxNow);
+      }
+      rows.push({step:n,price:pxNow,usdt:pnl,pct:(pnl/dep)*100});
+    }
+    return rows;
+  }
+  return [];
+}
+function captureGbLabViewport(lc,cs){
+  if(!lc||!cs)return null;
+  try{
+    const ts=lc.timeScale();
+    const ps=typeof cs.priceScale==='function'?cs.priceScale():null;
+    return{
+      log:(typeof ts.getVisibleLogicalRange==='function')?ts.getVisibleLogicalRange():null,
+      vt:(typeof ts.getVisibleRange==='function')?ts.getVisibleRange():null,
+      pr:(ps&&typeof ps.getVisibleRange==='function')?ps.getVisibleRange():null,
+    };
+  }catch(e){return null;}
+}
+function applyGbViewportFreeze(lc,cs,snap){
+  if(!lc||!cs||!snap)return;
+  try{
+    const ts=lc.timeScale();
+    if(snap.log&&typeof snap.log.from==='number'&&typeof snap.log.to==='number'&&typeof ts.setVisibleLogicalRange==='function')
+      ts.setVisibleLogicalRange(snap.log);
+    else if(snap.vt&&snap.vt.from!=null&&snap.vt.to!=null)ts.setVisibleRange(snap.vt);
+    const ps=typeof cs.priceScale==='function'?cs.priceScale():null;
+    if(snap.pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(snap.pr);
+  }catch(e){}
+}
 function pushGridLabBoundsUndo(body){
   const modal=document.getElementById('gridLabModal');
-  pushBoundsUndo(
-    modal,
-    () => body.querySelector('#gbLow')?.value || '',
-    () => body.querySelector('#gbHigh')?.value || '',
-  );
+  if(!modal||!body)return;
+  const lo=parseFloat(body.querySelector('#gbLow')?.value||'');
+  const hi=parseFloat(body.querySelector('#gbHigh')?.value||'');
+  if(!isFinite(lo)||!isFinite(hi))return;
+  if(!modal._gbBoundsUndo)modal._gbBoundsUndo=[];
+  if(!modal._gbBoundsRedo)modal._gbBoundsRedo=[];
+  const u=modal._gbBoundsUndo;
+  const last=u.length?u[u.length-1]:null;
+  if(last&&last.lo===lo&&last.hi===hi)return;
+  u.push({lo,hi});
+  modal._gbBoundsRedo.length=0;
+  if(u.length>50)u.shift();
 }
 function gridLabBoundsUndo(body,gbPrefs){
   const modal=document.getElementById('gridLabModal');
   if(!modal||!body)return;
-  const r = undoBounds(modal);
-  if(!r)return;
+  const u=modal._gbBoundsUndo||[];
+  const r=modal._gbBoundsRedo||[];
+  if(!u.length)return;
   const loEl=body.querySelector('#gbLow'),hiEl=body.querySelector('#gbHigh');
   const curLo=parseFloat(loEl?.value||''),curHi=parseFloat(hiEl?.value||'');
-  pushRedoFromCurrent(modal, curLo, curHi);
-  const prev=r.prev;
+  const prev=u.pop();
+  if(isFinite(curLo)&&isFinite(curHi))r.push({lo:curLo,hi:curHi});
   if(prev&&isFinite(prev.lo)&&isFinite(prev.hi)){
     loEl.value=String(prev.lo);
     hiEl.value=String(prev.hi);
     const sym=String(body.querySelector('#gbSym')?.value||'').toUpperCase().trim();
     if(sym){
-      applyBoundsToPrefs(gbPrefs, sym, prev.lo, prev.hi);
+      if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+      gbPrefs.symbolBounds[sym]={...gbPrefs.symbolBounds[sym],lower:prev.lo,upper:prev.hi};
       saveGridLabPrefs(gbPrefs);
     }
   }
@@ -6949,76 +7507,377 @@ function gridLabBoundsUndo(body,gbPrefs){
 function gridLabBoundsRedo(body,gbPrefs){
   const modal=document.getElementById('gridLabModal');
   if(!modal||!body)return;
-  const r = redoBounds(modal);
-  if(!r)return;
+  const u=modal._gbBoundsUndo||[];
+  const r=modal._gbBoundsRedo||[];
+  if(!r.length)return;
   const loEl=body.querySelector('#gbLow'),hiEl=body.querySelector('#gbHigh');
   const curLo=parseFloat(loEl?.value||''),curHi=parseFloat(hiEl?.value||'');
-  pushUndoFromCurrent(modal, curLo, curHi);
-  const nxt=r.next;
+  const nxt=r.pop();
+  if(isFinite(curLo)&&isFinite(curHi))u.push({lo:curLo,hi:curHi});
   if(nxt&&isFinite(nxt.lo)&&isFinite(nxt.hi)){
     loEl.value=String(nxt.lo);
     hiEl.value=String(nxt.hi);
     const sym=String(body.querySelector('#gbSym')?.value||'').toUpperCase().trim();
     if(sym){
-      applyBoundsToPrefs(gbPrefs, sym, nxt.lo, nxt.hi);
+      if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+      gbPrefs.symbolBounds[sym]={...gbPrefs.symbolBounds[sym],lower:nxt.lo,upper:nxt.hi};
       saveGridLabPrefs(gbPrefs);
     }
   }
   if(body._gbChartCtx?.lc)body._gbPendingViewport=captureGbLabViewport(body._gbChartCtx.lc,body._gbChartCtx.cs);
   scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
 }
-/** РџРѕРґРїРёСЃСЊ СѓСЂРѕРІРЅСЏ СЃРµС‚РєРё РЅР° РіСЂР°С„РёРєРµ (С‚РѕС‚ Р¶Рµ СЂРёСЃРє, С‡С‚Рѕ РІ РїР°РЅРµР»Рё). */
-// (gridRiskMetaForPrice + fmtGridLineTitle moved to ./gridLab.js)
-function renderGridRiskProfile(body, out, gbPrefs) {
-  const host = body.querySelector("#gbRisk");
-  if (!host) return;
-  if (!out || !out.ok) { host.innerHTML = ""; return; }
-  renderGridRiskProfileUi(host, body, out, gbPrefs, {
-    fn, fmtPrice,
-    scheduleGridLabSync,
-    captureGbLabViewport,
-    rCanvas,
-  });
-}
-
-
-/** DOM-РѕР±С‘СЂС‚РєР° РЅР°Рґ computeRatioGridUpdate: С‡РёС‚Р°РµС‚ РёРЅРїСѓС‚С‹, РїСЂРёРјРµРЅСЏРµС‚, РїРµСЂРµСЂРёСЃРѕРІС‹РІР°РµС‚. */
-function applyGbRatioGrid(body, gbPrefs) {
-  const sym = String(body.querySelector('#gbSym')?.value || '').toUpperCase().trim();
-  const ratioLong = parseFloat(body.querySelector('#gbRatioLong')?.value || '');
-  const ratioShort = parseFloat(body.querySelector('#gbRatioShort')?.value || '');
-  const ratioStep = parseFloat(body.querySelector('#gbRatioStep')?.value || '');
-  const totalLevels = +body.querySelector('#gbLevels')?.value || 12;
-  // resolve anchor: prefer explicit anchorPrice, fall back to last candle close
-  let anchor = gbPrefs.symbolBounds?.[sym]?.anchorPrice;
-  const merged = body._gbChartCtx?.merged;
-  if (anchor == null || !isFinite(+anchor)) {
-    const last = merged?.length ? +merged[merged.length - 1].c : null;
-    anchor = isFinite(last) ? last : null;
+/** Подпись уровня сетки на графике (тот же риск, что в панели). */
+function gridRiskMetaForPrice(price,anchorPx,step,riskRows,gridMode){
+  const tol=Math.max(1e-10,(step||0)*1e-7);
+  const gm=String(gridMode||'neutral');
+  if(Math.abs(price-anchorPx)<=tol)return{side:'anchor',usdt:0,pct:0};
+  if(price>anchorPx+tol){
+    if(gm==='long')return{side:'tp-up',usdt:0,pct:0}; // лимитные продажи / фикс — модель без убыточного MTM здесь
+    const r=riskRows.find(x=>x.upPrice!=null&&Math.abs(x.upPrice-price)<=tol);
+    if(r)return{side:'short',usdt:r.upUsdt,pct:r.upPct};
+  }else{
+    if(gm==='short')return{side:'tp-down',usdt:0,pct:0}; // ниже анкора — выкупы, не наш сценарий убытка
+    const r=riskRows.find(x=>x.downPrice!=null&&Math.abs(x.downPrice-price)<=tol);
+    if(r)return{side:'long',usdt:r.downUsdt,pct:r.downPct};
   }
-  const r = computeRatioGridUpdate(gbPrefs, sym, ratioLong, ratioShort, ratioStep, totalLevels, anchor);
-  if (!r.updated) return;
-  saveGridLabPrefs(gbPrefs);
-  body.querySelector('#gbLow').value = String(r.built.lower);
-  body.querySelector('#gbHigh').value = String(r.built.upper);
-  body.querySelector('#gbLevels').value = String(r.built.levels);
-  scheduleGridLabSync(body, gbPrefs, { reuseCandles: true });
+  return{side:'unknown',usdt:null,pct:null};
+}
+function fmtGridLineTitle(meta){
+  if(meta.side==='anchor')return'#0 · 0%, 0 USDT';
+  if(meta.side==='tp-up'||meta.side==='tp-down')return'0%, 0 USDT (фиксация)';
+  if(meta.usdt==null||meta.pct==null||!isFinite(meta.usdt)||!isFinite(meta.pct))return'';
+  return`${fn(meta.pct,2)}%, ${fn(meta.usdt,2)} USDT`;
+}
+function renderGridRiskProfile(body,out,gbPrefs){
+  const host=body.querySelector('#gbRisk');
+  if(!host){return;}
+  if(!out?.ok){host.innerHTML='';return;}
+  const gm=String(out.gridRiskMode||'neutral');
+  const rows=buildGridRiskRows({
+    lower:out.lower,upper:out.upper,currentPrice:out.candles?.[out.candles.length-1]?.c,
+    levels:out.levels,leverage:out.leverage,deposit:out.startEq,
+    gridMode:gm,
+    anchorPrice:out.anchorPrice,
+    gridLevels:out.gridLevels,
+  });
+  if(!rows.length){
+    host.innerHTML='<div style="padding:8px;font-size:9px;color:var(--text3)">Недостаточно данных для риск-профиля.</div>';
+    return;
+  }
+  const fmt=(v)=>`${v>=0?'+':''}${fn(v,2)}`;
+  const maxLoss=Math.max(...rows.map(r=>Math.max(Math.abs(r.downUsdt),Math.abs(r.upUsdt))),1e-9);
+  const lastC=+out.candles?.[out.candles.length-1]?.c;
+  const riskStep=(out.upper-out.lower)/Math.max(2,out.levels|0);
+  const riskGrid=(out.gridLevels&&out.gridLevels.length>=2)
+    ?out.gridLevels.slice()
+    :Array.from({length:(out.levels|0)+1},(_,i)=>out.lower+i*riskStep);
+  const ai=gridRiskAnchorIdx(riskGrid,lastC,riskStep,gm,out.anchorPrice);
+  const anchorLbl=fmtPrice(riskGrid[ai]??lastC);
+  const anchorPxUi=riskGrid[ai]??lastC;
+  const distUp=r=>Math.abs((r.upPrice??0)-anchorPxUi);
+  const distDn=r=>Math.abs((r.downPrice??0)-anchorPxUi);
+  const shortRows=rows
+    .filter(r=>r.upPrice!=null)
+    .sort((a,b)=>distUp(b)-distUp(a)||a.step-b.step);
+  const longRows=rows
+    .filter(r=>r.downPrice!=null)
+    .sort((a,b)=>distDn(a)-distDn(b)||a.step-b.step);
+  const favRows=buildGridFavorableRows({
+    lower:out.lower,upper:out.upper,currentPrice:lastC,
+    levels:out.levels,leverage:out.leverage,deposit:out.startEq,
+    gridMode:gm,anchorPrice:out.anchorPrice,
+    gridLevels:out.gridLevels,
+  });
+  const distFavPx=r=>Math.abs((r.price??0)-anchorPxUi);
+  const favSortedAsc=favRows.slice().sort((a,b)=>distFavPx(a)-distFavPx(b)||a.step-b.step);
+  const favSortedDesc=favRows.slice().sort((a,b)=>distFavPx(b)-distFavPx(a)||a.step-b.step);
+  const maxAbs=Math.max(maxLoss,...favRows.map(r=>Math.abs(r.usdt)),1e-9);
+  const mkBars=(list,fieldUsdt,fieldPct,fieldPrice,tone,barOpts)=>{
+    const numRev=barOpts?.numRev;
+    if(!list.length){
+      return '<div style="font-size:9px;color:var(--text3);padding:8px 0;text-align:center">Нет уровней</div>';
+    }
+    return list.map((r,idx)=>{
+      const val=r[fieldUsdt];
+      const pct=r[fieldPct];
+      const px=r[fieldPrice];
+      const w=Math.max(2,Math.round(Math.abs(val)/maxAbs*100));
+      const pxTxt=px!=null&&isFinite(px)?fmtPrice(px):'—';
+      const num=numRev?(list.length-idx):(idx+1);
+      return `<div style="display:flex;align-items:center;gap:6px;height:16px">
+        <div style="width:26px;text-align:right;color:var(--text2);font-size:9px">#${num}</div>
+        <div style="position:relative;flex:1;height:100%;background:${tone.bg};border:1px solid ${tone.bd};border-radius:4px;overflow:hidden">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:${tone.fill}"></span>
+          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmt(val)} USDT · ${fmt(pct)}% · ${pxTxt}</span>
+        </div>
+      </div>`;
+    }).join('');
+  };
+  const mkFavBars=(list,numRev,tone)=>{
+    if(!list.length){
+      return '<div style="font-size:9px;color:var(--text3);padding:8px 0;text-align:center">Нет уровней</div>';
+    }
+    return list.map((r,idx)=>{
+      const val=r.usdt;
+      const pct=r.pct;
+      const px=r.price;
+      const w=Math.max(2,Math.round(Math.abs(val)/maxAbs*100));
+      const pxTxt=px!=null&&isFinite(px)?fmtPrice(px):'—';
+      const num=numRev?(list.length-idx):(idx+1);
+      return `<div style="display:flex;align-items:center;gap:6px;height:16px">
+        <div style="width:26px;text-align:right;color:var(--text2);font-size:9px">#${num}</div>
+        <div style="position:relative;flex:1;height:100%;background:${tone.bg};border:1px solid ${tone.bd};border-radius:4px;overflow:hidden">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:${tone.fill}"></span>
+          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmt(val)} USDT · ${fmt(pct)}% · ${pxTxt}</span>
+        </div>
+      </div>`;
+    }).join('');
+  };
+  const toneLossUp={bg:'rgba(239,68,68,.08)',bd:'rgba(239,68,68,.2)',fill:'rgba(239,68,68,.45)',tx:'#fca5a5'};
+  const toneLossDn={bg:'rgba(34,197,94,.08)',bd:'rgba(34,197,94,.2)',fill:'rgba(34,197,94,.45)',tx:'#86efac'};
+  const toneFav={bg:'rgba(59,130,246,.1)',bd:'rgba(59,130,246,.28)',fill:'rgba(59,130,246,.5)',tx:'#93c5fd'};
+  const autoK=gm==='long'
+    ?Math.max(0,(out.levels|0)-ai)
+    :gm==='short'
+      ?Math.max(0,ai)
+      :0;
+  const modeTitle=gm==='long'?'Long grid':gm==='short'?'Short grid':'Neutral grid';
+  const modeHint=gm==='long'
+    ?`Стартовая long-позиция считается автоматически по числу верхних сеток: ${autoK}. Цена #0: ${anchorLbl}. Сверху — прибыль при росте по сетке; снизу — просадка при доборе вниз.`
+    :gm==='short'
+      ?`Стартовая short-позиция считается автоматически по числу нижних сеток: ${autoK}. Цена #0: ${anchorLbl}. Сверху — убыток при росте; снизу — прибыль при падении по сетке.`
+      :'#0 = первый уровень ≥ цены в neutral; симметричные сценарии вверх/вниз (как в отлаженной модели).';
+  let topBlock,bottomBlock;
+  if(gm==='long'){
+    topBlock=mkFavBars(favSortedDesc,true,toneFav);
+    bottomBlock=mkBars(longRows,'downUsdt','downPct','downPrice',toneLossDn,{numRev:false});
+  }else if(gm==='short'){
+    topBlock=mkBars(shortRows,'upUsdt','upPct','upPrice',toneLossUp,{numRev:true});
+    bottomBlock=mkFavBars(favSortedAsc,false,toneFav);
+  }else{
+    topBlock=mkBars(shortRows,'upUsdt','upPct','upPrice',toneLossUp,{numRev:true});
+    bottomBlock=mkBars(longRows,'downUsdt','downPct','downPrice',toneLossDn,{numRev:false});
+  }
+  host.innerHTML=`
+    <div style="font-size:10px;color:#fff;margin-bottom:6px">Риск-профиль · ${modeTitle}${gm!=='neutral'?` · старт: ${fn(autoK,0)} поз.`:''}</div>
+    <div style="font-size:9px;color:var(--text3);margin-bottom:6px;line-height:1.35">${modeHint}</div>
+    <div style="display:flex;flex-direction:column;height:100%;min-height:0;justify-content:center;gap:5px">
+      <div style="flex:0 0 auto;max-height:42%;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
+        ${topBlock}
+      </div>
+      <div data-gb-anchor-drag="1" style="display:flex;align-items:center;gap:6px;height:16px;cursor:ns-resize;flex-shrink:0" title="Потяните вверх/вниз — сменить уровень якоря #0">
+        <div style="width:26px;text-align:right;color:#fdba74;font-size:9px">#0</div>
+        <div style="position:relative;flex:1;height:100%;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.24);border-radius:4px;overflow:hidden">
+          <span style="position:absolute;left:0;top:0;bottom:0;width:2%;background:rgba(245,158,11,.55)"></span>
+          <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:#fdba74;display:inline-flex;align-items:center;flex-wrap:wrap;gap:4px">${anchorLbl} · 0.00 USDT · 0.00%<span class="gb-anchor-hint" style="font-size:8px;color:var(--text3);font-weight:400"></span></span>
+        </div>
+      </div>
+      <div style="flex:0 0 auto;max-height:42%;overflow:auto;display:flex;flex-direction:column;gap:4px;padding-right:2px">
+        ${bottomBlock}
+      </div>
+    </div>
+    <div style="font-size:8px;color:var(--text3);margin-top:8px;line-height:1.4">Neutral: на #0 позиции нет; <b>первая</b> строка с каждой стороны — цена только что коснулась первой линии сетки (MTM ≈ 0, комиссии в модели нет). Дальше — накопленный результат по уже набранным ордерам, когда цена на уровне строки.</div>`;
+  const zRow=host.querySelector('[data-gb-anchor-drag]');
+  if(zRow&&gbPrefs){
+    zRow.onmousedown=e=>{
+      e.preventDefault();e.stopPropagation();
+      const sym=String(out.symbol||'').toUpperCase().trim();
+      if(!sym||!riskGrid.length)return;
+      body._gbSuppressChartSync=true;
+      const startY=e.clientY;
+      const startAi=ai;
+      let curAi=startAi;
+      const hint=zRow.querySelector('.gb-anchor-hint');
+      const gctx=body._gbChartCtx;
+      if(gctx?.lc&&gctx?.cs)body._gbPendingViewport=captureGbLabViewport(gctx.lc,gctx.cs);
+      const setPreview=ix=>{
+        const p=riskGrid[ix];
+        if(gctx&&p!=null&&isFinite(p)){
+          gctx._gbAnchorPreviewPrice=p;
+          if(gctx.gbCh)rCanvas(gctx.gbCh);
+        }
+      };
+      setPreview(curAi);
+      const onMove=ev=>{
+        const dIdx=Math.round((startY-ev.clientY)/14);
+        const ni=Math.max(0,Math.min(riskGrid.length-1,startAi+dIdx));
+        if(ni===curAi)return;
+        curAi=ni;
+        setPreview(ni);
+        if(hint)hint.textContent=ni===startAi?'':`→ ${fmtPrice(riskGrid[ni])} (#${ni})`;
+      };
+      const onUp=()=>{
+        document.removeEventListener('mousemove',onMove);
+        document.removeEventListener('mouseup',onUp);
+        body._gbSuppressChartSync=false;
+        if(gctx){gctx._gbAnchorPreviewPrice=null;if(gctx.gbCh)rCanvas(gctx.gbCh);}
+        if(hint)hint.textContent='';
+        if(curAi!==startAi){
+          if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+          gbPrefs.symbolBounds[sym]={...gbPrefs.symbolBounds[sym],anchorPrice:riskGrid[curAi]};
+          saveGridLabPrefs(gbPrefs);
+          if(gctx?.lc&&gctx?.cs)body._gbPendingViewport=captureGbLabViewport(gctx.lc,gctx.cs);
+          scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
+        }
+      };
+      document.addEventListener('mousemove',onMove);
+      document.addEventListener('mouseup',onUp);
+    };
+  }
 }
 
+/** Сводка по сетке без симуляции сделок (PnL/maxDD скрыты). */
+function compileGridLabState(cfg){
+  const tf=String(cfg.tf||'5m');
+  const candles=cfg.candles||[];
+  if(candles.length<12)return{ok:false,msg:`Недостаточно ${tf} истории для сетки (нужно ≥12 баров)`};
+  const lowSeries=candles.map(c=>c.l);
+  const highSeries=candles.map(c=>c.h);
+  const lo=cfg.lower>0?cfg.lower:Math.min(...lowSeries);
+  const hi=cfg.upper>0?cfg.upper:Math.max(...highSeries);
+  if(!(hi>lo))return{ok:false,msg:'Неверный диапазон сетки'};
+  const levelsIn=Math.max(2,Math.min(60,cfg.levels|0));
+  const lev=Math.max(1,Math.min(25,cfg.leverage||1));
+  const dep=gbDepositClamp(cfg.deposit,500);
+  const resolved=resolveGridLevelsForCfg(cfg,lo,hi,levelsIn);
+  const grid=resolved.grid;
+  const levels=resolved.levels;
+  const step=levels>0?(grid[grid.length-1]-grid[0])/levels:0;
+  const lastC=+candles[candles.length-1]?.c||null;
+  const stepPcts=gridAdjacentStepPcts(grid,lastC);
+  let anchorPrice=cfg.anchorPrice;
+  if(anchorPrice!=null&&!isFinite(+anchorPrice))anchorPrice=null;
+  const gm=String(cfg.gridMode||'neutral');
+  return{
+    ok:true,
+    symbol:cfg.sym,
+    tf,
+    candles,
+    gridLevels:grid,
+    levels,
+    step,
+    stepPcts,
+    leverage:lev,
+    lower:lo,
+    upper:hi,
+    startEq:dep,
+    gridRiskMode:['neutral','long','short'].includes(gm)?gm:'neutral',
+    anchorPrice:anchorPrice!=null?+anchorPrice:null,
+    maxOneSideRun:0,
+  };
+}
+function runManualGridBacktest(cfg){
+  const tf=String(cfg.tf||'5m');
+  const candles=(cfg.candles||[]).slice(-Math.max(80,Math.min(1200,cfg.bars||360)));
+  if(candles.length<30)return{ok:false,msg:`Недостаточно ${tf} истории для теста`};
+  const closes=candles.map(c=>c.c);
+  const lowSeries=candles.map(c=>c.l);
+  const highSeries=candles.map(c=>c.h);
+  const lo=cfg.lower>0?cfg.lower:Math.min(...lowSeries);
+  const hi=cfg.upper>0?cfg.upper:Math.max(...highSeries);
+  if(!(hi>lo))return{ok:false,msg:'Неверный диапазон сетки'};
+  const levels=Math.max(2,Math.min(60,cfg.levels|0));
+  const lev=Math.max(1,Math.min(25,cfg.leverage||1));
+  const fee=Math.max(0,Math.min(0.01,cfg.fee||0.00055));
+  const dep=Math.max(1,cfg.deposit||500);
+  const step=(hi-lo)/levels;
+  const grid=Array.from({length:levels+1},(_,i)=>lo+step*i);
+  let cash=dep*0.5;
+  let asset=(dep*0.5)/closes[0];
+  const orderNotional=(dep*lev)/Math.max(8,levels);
+  let fees=0;
+  let fills=0;
+  const trades=[];
+  let buyRun=0,sellRun=0,maxOneSideRun=0;
+  const eq=[];
+  for(let i=1;i<candles.length;i++){
+    const c=candles[i];
+    for(const px of grid){
+      if(c.l<=px&&c.h>=px){
+        const qty=orderNotional/Math.max(px,1e-8);
+        const buyCost=qty*px*(1+fee);
+        if(c.o>=px&&cash>=buyCost){
+          cash-=buyCost;asset+=qty;fees+=qty*px*fee;fills++;
+          trades.push({time:toChartTime(c.t),price:px,side:'buy'});
+          buyRun++;sellRun=0;maxOneSideRun=Math.max(maxOneSideRun,buyRun);
+        }else if(asset>=qty){
+          const gain=qty*px*(1-fee);
+          asset-=qty;cash+=gain;fees+=qty*px*fee;fills++;
+          trades.push({time:toChartTime(c.t),price:px,side:'sell'});
+          sellRun++;buyRun=0;maxOneSideRun=Math.max(maxOneSideRun,sellRun);
+        }
+      }
+    }
+    eq.push(cash+asset*c.c);
+  }
+  const last=closes[closes.length-1];
+  const finalEq=cash+asset*last;
+  let peak=-Infinity,maxDd=0;
+  for(const v of eq){
+    if(v>peak)peak=v;
+    if(peak>0)maxDd=Math.max(maxDd,(peak-v)/peak*100);
+  }
+  return{
+    ok:true,
+    symbol:cfg.sym,
+    tf,
+    bars:candles.length,
+    candles,
+    gridLevels:grid,
+    trades,
+    levels,
+    step,
+    maxOneSideRun,
+    leverage:lev,
+    lower:lo,
+    upper:hi,
+    fills,
+    fees,
+    startEq:dep,
+    finalEq,
+    pnl:finalEq-dep,
+    roi:(finalEq/dep-1)*100,
+    maxDd,
+  };
+}
+
+function gbWantBarsFromVisible(lc,fallback){
+  try{
+    const r=lc?.timeScale?.()?.getVisibleLogicalRange?.();
+    if(r&&typeof r.from==='number'&&typeof r.to==='number'){
+      return Math.max(200,Math.min(1400,Math.ceil(r.to-r.from)+480));
+    }
+  }catch(e){}
+  return Math.max(300,Math.min(1200,+fallback||900));
+}
 function readGridLabInputs(body,gbPrefs,wantBars,mergedCand){
-  return readGridLabInputsUi(
-    {
-      sym: body.querySelector('#gbSym')?.value || '',
-      tf: body.querySelector('#gbTf')?.value || '5m',
-      levels: body.querySelector('#gbLevels')?.value || 12,
-      leverage: body.querySelector('#gbLev')?.value || 3,
-      deposit: body.querySelector('#gbDep')?.value || 500,
-      lower: body.querySelector('#gbLow')?.value || '',
-      upper: body.querySelector('#gbHigh')?.value || '',
-      gridMode: body.querySelector('#gbGridMode')?.value || 'neutral',
-    },
-    gbPrefs, wantBars, mergedCand,
-  );
+  const sym=String(body.querySelector('#gbSym')?.value||'').toUpperCase().trim();
+  const tf=String(body.querySelector('#gbTf')?.value||'5m');
+  const levI=body.querySelector('#gbLev');
+  const depI=body.querySelector('#gbDep');
+  const lvlI=body.querySelector('#gbLevels');
+  const lowI=body.querySelector('#gbLow');
+  const highI=body.querySelector('#gbHigh');
+  const modeI=body.querySelector('#gbGridMode');
+  const rawLo=parseFloat(lowI?.value||'');
+  const rawHi=parseFloat(highI?.value||'');
+  const anchorPrice=gbPrefs.symbolBounds?.[sym]?.anchorPrice;
+  const anchor=isFinite(+anchorPrice)?+anchorPrice:null;
+  return{
+    sym,
+    tf,
+    levels:Math.max(3,Math.min(60,+lvlI?.value||12)),
+    lower:isFinite(rawLo)?rawLo:0,
+    upper:isFinite(rawHi)?rawHi:0,
+    leverage:Math.max(1,Math.min(25,+levI?.value||3)),
+    deposit:gbDepositClamp(depI?.value,500),
+    gridMode:String(modeI?.value||'neutral'),
+    wantBars:Math.max(120,Math.min(1400,wantBars|0)),
+    candles:mergedCand||[],
+    anchorPrice:anchor,
+    gridLevels:gbPrefs.symbolBounds?.[sym]?.gridLevels||null,
+  };
 }
 async function prependGridLabHistory(body,sym,tf){
   const ctx=body._gbChartCtx;
@@ -7054,16 +7913,266 @@ async function prependGridLabHistory(body,sym,tf){
     }catch(e){}
   }catch(e){}finally{ctx._histLoading=false;}
 }
-function renderManualBacktestPreview(body, out, gbPrefs, viewOpts) {
-  renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, {
-    S, toChartTime, fmtPrice, getPriceMinMove, rCanvas,
-    getCoords, pushGridLabBoundsUndo, scheduleGridLabSync,
-    saveGridLabPrefs, captureGbLabViewport, applyGbViewportFreeze,
-    onRulerStart, onRulerMove, onRulerEnd, isNearRuler,
-    PRICE_AXIS_W, prependGridLabHistory, kickGridLabPricePoll,
+function renderManualBacktestPreview(body,out,gbPrefs,viewOpts){
+  viewOpts=viewOpts||{};
+  const wrap=body.querySelector('#gbChartWrap');
+  const host=body.querySelector('#gbChart');
+  if(!wrap||!host)return;
+  const prev=body._gbChartCtx;
+  let savedView=null;
+  if(body._gbPendingViewport){
+    savedView=body._gbPendingViewport;
+    body._gbPendingViewport=null;
+  }else if(viewOpts.keepViewport&&prev?.lc&&prev?.cs){
+    savedView=captureGbLabViewport(prev.lc,prev.cs);
+  }
+  if(prev?.gbLabSig)try{prev.gbLabSig.abort();}catch(e){}
+  if(prev?._pollTimer){clearInterval(prev._pollTimer);}
+  if(prev?.ro){try{prev.ro.disconnect();}catch(e){}}
+  if(prev?.lc){try{prev.lc.remove();}catch(e){}}
+  body._gbChartCtx={lc:null,cs:null,ro:null,gbCh:null,gbLabSig:null,merged:null,sym:null,tf:null,_gbManagedLines:[],_histLoading:false,_gbDrag:null,_gbVpLockUnsub:null};
+  host.innerHTML='';
+  let rulerCanvas=body.querySelector('#gbRulerCanvas');
+  if(!rulerCanvas){
+    rulerCanvas=document.createElement('canvas');
+    rulerCanvas.id='gbRulerCanvas';
+    rulerCanvas.style.cssText='position:absolute;inset:0;z-index:12;pointer-events:none';
+    wrap.appendChild(rulerCanvas);
+  }
+  if(!S.LC||!out?.ok||!Array.isArray(out.candles)||!out.candles.length)return;
+  const merged=out.candles;
+  body._gbChartCtx.sym=out.symbol;body._gbChartCtx.tf=out.tf;body._gbChartCtx.merged=merged;
+  const syncCanvasSize=()=>{
+    const ctx=body._gbChartCtx;const lcA=ctx.lc;if(!lcA)return;
+    const w=Math.max(1,wrap.clientWidth|0),h=Math.max(1,wrap.clientHeight|0);
+    try{lcA.applyOptions({width:w,height:h});}catch(e){}
+    rulerCanvas.width=w;rulerCanvas.height=h;
+    rulerCanvas.style.width=w+'px';rulerCanvas.style.height=h+'px';
+    if(ctx.gbCh)rCanvas(ctx.gbCh);
+  };
+  const lc=S.LC.createChart(host,{
+    width:wrap.clientWidth||400,
+    height:wrap.clientHeight||420,
+    layout:{background:{color:'#0a0a0b'},textColor:'#606070'},
+    grid:{vertLines:{color:'#141418'},horzLines:{color:'#141418'}},
+    crosshair:{
+      mode:0,
+      vertLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#252530',labelVisible:false},
+      horzLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#252530',labelVisible:false},
+    },
+    rightPriceScale:{borderColor:'#252530'},
+    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false,fixRightEdge:false},
+    handleScroll:{mouseWheel:true,pressedMouseMove:true},
+    handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
   });
+  const cs=lc.addCandlestickSeries({
+    upColor:S.upColor,downColor:'#e04040',borderUpColor:S.upColor,borderDownColor:'#e04040',
+    wickUpColor:S.upColor,wickDownColor:'#e04040',
+    priceFormat:{type:'custom',formatter:p=>fmtPrice(p),minMove:0.0000001},
+  });
+  body._gbChartCtx.lc=lc;body._gbChartCtx.cs=cs;
+  const lastCInit=+merged[merged.length-1]?.c||1;
+  try{cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastCInit)}});}catch(e){}
+  cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
+  if(savedView){
+    try{
+      if(savedView.log&&typeof savedView.log.from==='number'&&typeof savedView.log.to==='number'&&typeof lc.timeScale().setVisibleLogicalRange==='function'){
+        lc.timeScale().setVisibleLogicalRange(savedView.log);
+      }else if(savedView.vt&&savedView.vt.from!=null&&savedView.vt.to!=null){
+        lc.timeScale().setVisibleRange(savedView.vt);
+      }
+    }catch(e){}
+    try{
+      const ps=cs.priceScale();
+      if(savedView.pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(savedView.pr);
+    }catch(e){}
+    requestAnimationFrame(()=>{
+      try{
+        if(!savedView)return;
+        if(savedView.log&&typeof savedView.log.from==='number'&&typeof savedView.log.to==='number'&&typeof lc.timeScale().setVisibleLogicalRange==='function'){
+          lc.timeScale().setVisibleLogicalRange(savedView.log);
+        }else if(savedView.vt&&savedView.vt.from!=null&&savedView.vt.to!=null){
+          lc.timeScale().setVisibleRange(savedView.vt);
+        }
+        const ps=cs.priceScale();
+        if(savedView.pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(savedView.pr);
+      }catch(e){}
+    });
+  }else{try{lc.timeScale().fitContent();}catch(e){}}
+  const lastCForLines=+merged[merged.length-1]?.c;
+  const gm=String(out.gridRiskMode||'neutral');
+  const riskRowsGb=buildGridRiskRows({
+    lower:out.lower,upper:out.upper,currentPrice:lastCForLines,
+    levels:out.levels,leverage:out.leverage,deposit:out.startEq,
+    gridMode:gm,
+    anchorPrice:out.anchorPrice,
+    gridLevels:out.gridLevels,
+  });
+  const stepPf=out.step||0;
+  const gridLvPf=out.gridLevels||[];
+  const anchorIdxPf=gridRiskAnchorIdx(gridLvPf,lastCForLines,stepPf,gm,out.anchorPrice);
+  const anchorPxPf=gridLvPf[anchorIdxPf]??lastCForLines;
+  gridLvPf.forEach((p,i)=>{
+    const meta=gridRiskMetaForPrice(p,anchorPxPf,stepPf,riskRowsGb,gm);
+    let colorPf='#60a5fa';
+    if(meta.side==='short')colorPf='#ef4444';
+    else if(meta.side==='long')colorPf='#22c55e';
+    else if(meta.side==='anchor')colorPf='#f59e0b';
+    else if(meta.side==='tp-up'||meta.side==='tp-down')colorPf='#64748b';
+    const titlePf=fmtGridLineTitle(meta);
+    cs.createPriceLine({
+      price:p,color:colorPf,
+      lineWidth:i===0||i===gridLvPf.length-1?2:1,
+      lineStyle:2,
+      axisLabelVisible:true,
+      title:titlePf,
+    });
+  });
+  if(typeof cs.setMarkers==='function')cs.setMarkers([]);
+  const gbCh={
+    lc,cs,
+    sym:out.symbol||null,
+    candles:merged,
+    ruler:null,
+    canvas:rulerCanvas,
+    _gridLabChart:true,
+    drawings:[],
+    hoveredIdx:-1,
+    hoverX:0,
+    hoverY:0,
+  };
+  const gbLabSig=new AbortController();
+  const sig=gbLabSig.signal;
+  const hitPrice=(clientY)=>{
+    const r=host.getBoundingClientRect();
+    return cs.coordinateToPrice(clientY-r.top);
+  };
+  const hitNearPrice=(touchPx,targetPx)=>{
+    if(targetPx==null||!isFinite(+targetPx))return false;
+    const yT=cs.priceToCoordinate(+targetPx);
+    const yU=cs.priceToCoordinate(+touchPx);
+    if(yT!=null&&yU!=null)return Math.abs(yT-yU)<13;
+    return Math.abs(+touchPx-targetPx)/Math.max(Math.abs(+targetPx),1e-12)<0.006;
+  };
+  const gbInteractRestore={
+    handleScroll:{mouseWheel:true,pressedMouseMove:true},
+    handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
+  };
+  wrap.addEventListener('mousedown',e=>{
+    if(e.button!==0)return;
+    const{x}=getCoords(wrap,e.clientX,e.clientY);
+    if(x>=Math.max(1,wrap.clientWidth-PRICE_AXIS_W-2))return;
+    const pr=hitPrice(e.clientY);
+    if(pr==null)return;
+    const hi=+out.upper,lo=+out.lower;
+    const ctxB=body._gbChartCtx;
+    let drag=null;
+    if(hitNearPrice(pr,hi))drag={kind:'high',previewPrice:hi};
+    else if(hitNearPrice(pr,lo))drag={kind:'low',previewPrice:lo};
+    if(!drag)return;
+    e.preventDefault();e.stopPropagation();
+    body._gbSuppressChartSync=true;
+    pushGridLabBoundsUndo(body);
+    body._gbPendingViewport=captureGbLabViewport(lc,cs);
+    ctxB._gbDrag=drag;
+    try{
+      const snap=captureGbLabViewport(lc,cs);
+      ctxB._gbDragFrozenVp=snap;
+      if(typeof lc.timeScale().subscribeVisibleLogicalRangeChange==='function'){
+        if(ctxB._gbVpLockUnsub){try{ctxB._gbVpLockUnsub();}catch(e2){}ctxB._gbVpLockUnsub=null;}
+        ctxB._gbVpLockUnsub=lc.timeScale().subscribeVisibleLogicalRangeChange(()=>{
+          if(body._gbChartCtx?._gbDrag&&body._gbChartCtx._gbDragFrozenVp)
+            applyGbViewportFreeze(lc,cs,body._gbChartCtx._gbDragFrozenVp);
+        });
+      }
+    }catch(e){}
+    try{
+      lc.applyOptions({
+        handleScroll:{mouseWheel:true,pressedMouseMove:false},
+        handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:false},
+      });
+    }catch(err){}
+    const onDocUp=()=>{
+      document.removeEventListener('mouseup',onDocUp,true);
+      body._gbSuppressChartSync=false;
+      const c2=body._gbChartCtx;
+      if(c2?._gbVpLockUnsub){try{c2._gbVpLockUnsub();}catch(e3){}c2._gbVpLockUnsub=null;}
+      if(c2)delete c2._gbDragFrozenVp;
+      try{lc.applyOptions(gbInteractRestore);}catch(e){}
+    };
+    document.addEventListener('mouseup',onDocUp,true);
+  },{signal:sig,capture:true});
+  wrap.addEventListener('mousemove',e=>{
+    const ctxB=body._gbChartCtx;if(!ctxB?.gbCh)return;
+    const pr=hitPrice(e.clientY);
+    if(ctxB._gbDrag&&pr!=null){
+      ctxB._gbDrag.previewPrice=pr;
+      if(ctxB._gbDrag.kind==='high')body.querySelector('#gbHigh').value=String(+pr.toFixed(8));
+      if(ctxB._gbDrag.kind==='low')body.querySelector('#gbLow').value=String(+pr.toFixed(8));
+      if(ctxB._gbDragFrozenVp)applyGbViewportFreeze(lc,cs,ctxB._gbDragFrozenVp);
+      rCanvas(ctxB.gbCh);
+      return;
+    }
+    const{x,y}=getCoords(wrap,e.clientX,e.clientY);
+    ctxB.gbCh.hoverX=x;ctxB.gbCh.hoverY=y;
+    rCanvas(ctxB.gbCh);
+  },{signal:sig,capture:true});
+  wrap.addEventListener('mouseleave',()=>{
+    const ctxB=body._gbChartCtx;if(!ctxB?.gbCh)return;
+    ctxB.gbCh.hoverX=0;ctxB.gbCh.hoverY=0;rCanvas(ctxB.gbCh);
+  },{signal:sig});
+  wrap.addEventListener('mouseup',e=>{
+    const ctxB=body._gbChartCtx;const dg=ctxB._gbDrag;
+    if(dg&&e.button===0){
+      if(ctxB._gbVpLockUnsub){try{ctxB._gbVpLockUnsub();}catch(err){}ctxB._gbVpLockUnsub=null;}
+      delete ctxB._gbDragFrozenVp;
+      try{lc.applyOptions(gbInteractRestore);}catch(err){}
+      body._gbSuppressChartSync=false;
+    }
+    ctxB._gbDrag=null;if(!dg||e.button!==0)return;
+    if(ctxB.gbCh)rCanvas(ctxB.gbCh);
+    const symI=body.querySelector('#gbSym');
+    const sym=String(symI?.value||'').toUpperCase().trim();
+    if(dg.kind==='high'||dg.kind==='low'){
+      if(sym){
+        const lo=parseFloat(body.querySelector('#gbLow').value)||null;
+        const hi=parseFloat(body.querySelector('#gbHigh').value)||null;
+        if(!gbPrefs.symbolBounds)gbPrefs.symbolBounds={};
+        gbPrefs.symbolBounds[sym]={...gbPrefs.symbolBounds[sym],lower:lo,upper:hi};
+        saveGridLabPrefs(gbPrefs);
+      }
+    }
+    if(ctxB.lc&&ctxB.cs)body._gbPendingViewport=captureGbLabViewport(ctxB.lc,ctxB.cs);
+    scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
+  },{signal:sig,capture:true});
+  try{
+    lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
+      if(range&&typeof range.from==='number'&&range.from<40){
+        clearTimeout(body._gbPrepT);
+        body._gbPrepT=setTimeout(()=>prependGridLabHistory(body,out.symbol,out.tf),220);
+      }
+    });
+  }catch(e){}
+  wrap.addEventListener('mousedown',e=>{if(e.button===1){e.preventDefault();onRulerStart(gbCh,e,wrap);}},{capture:true,signal:sig});
+  wrap.addEventListener('mousemove',e=>{if(gbCh.ruler?.active)onRulerMove(gbCh,e,wrap);},{capture:true,signal:sig});
+  wrap.addEventListener('mouseup',e=>{if(e.button===1&&gbCh.ruler?.active)onRulerEnd(gbCh,e);},{capture:true,signal:sig});
+  wrap.addEventListener('contextmenu',e=>{
+    e.preventDefault();
+    if(gbCh.ruler?.p1&&gbCh.ruler?.p2){
+      const{x,y}=getCoords(wrap,e.clientX,e.clientY);
+      if(isNearRuler(gbCh,x,y)){
+        gbCh.ruler=null;
+        document.getElementById('rulerTooltip').style.display='none';
+        rCanvas(gbCh);
+      }
+    }
+  },{signal:sig});
+  const ro=new ResizeObserver(()=>syncCanvasSize());
+  ro.observe(wrap);
+  requestAnimationFrame(syncCanvasSize);
+  kickGridLabPricePoll(out.symbol);
+  body._gbChartCtx={...body._gbChartCtx,ro,gbCh,gbLabSig};
 }
-
 
 async function runGridLabSync(body,gbPrefs,opt={}){
   const reuse=!!opt.reuseCandles;
@@ -7119,9 +8228,9 @@ async function runGridLabSync(body,gbPrefs,opt={}){
   }
   const sp=out.stepPcts||{};
   const pctTxt=(sp.min!=null&&sp.max!=null)
-    ?` В· РјРµР¶РґСѓ СЃРµС‚РєР°РјРё: <b style="color:#e2e8f0">${fn(sp.min,2)}%</b> вЂ“ <b style="color:#e2e8f0">${fn(sp.max,2)}%</b>${sp.avg!=null?` (СЃСЂ. ${fn(sp.avg,2)}%)`:''}`
+    ?` · между сетками: <b style="color:#e2e8f0">${fn(sp.min,2)}%</b> – <b style="color:#e2e8f0">${fn(sp.max,2)}%</b>${sp.avg!=null?` (ср. ${fn(sp.avg,2)}%)`:''}`
     :'';
-  if(el)el.innerHTML=`<span style="color:var(--text3)">${out.symbol.replace(/USDT$/,'')} В· ${out.tf} В· ${out.candles.length} Р±Р°СЂРѕРІ В· С€Р°Рі ${fmtPrice(out.step)}${pctTxt} вЂ” РІРµСЂС…/РЅРёР·: С‚СЏРЅСѓС‚СЊ РЅР° РіСЂР°С„РёРєРµ В· #0: С‚СЏРЅСѓС‚СЊ РІ РїР°РЅРµР»Рё В«Р РёСЃРє-РїСЂРѕС„РёР»СЊВ».</span>`;
+  if(el)el.innerHTML=`<span style="color:var(--text3)">${out.symbol.replace(/USDT$/,'')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)}${pctTxt} — верх/низ: тянуть на графике · #0: тянуть в панели «Риск-профиль».</span>`;
   const keepVp=!!(reuse&&lcRef&&body._gbChartCtx?.merged?.length);
   renderManualBacktestPreview(body,out,gbPrefs,{keepViewport:keepVp});
   const lcA=body._gbChartCtx?.lc,csA=body._gbChartCtx?.cs;
@@ -7140,7 +8249,7 @@ function scheduleGridLabSync(body,gbPrefs,opt={}){
   body._gridLabUiTimer=setTimeout(()=>{void runGridLabSync(body,gbPrefs,opt);},opt.immediate?0:95);
 }
 
-function renderGridLabModal(defSymOpt){
+function renderGridLabModal(){
   const old=document.getElementById('gridLabModal');if(old)old.remove();
   const modal=document.createElement('div');
   modal.id='gridLabModal';
@@ -7149,10 +8258,10 @@ function renderGridLabModal(defSymOpt){
   box.style.cssText='width:min(1220px,98vw);height:min(860px,94vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
   box.innerHTML=`
     <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)">
-      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab В· РЎРµС‚РєР° + Coin Selector</span>
-      <button class="tbtn on" id="gridTabBacktest">РЎРµС‚РєР°</button>
+      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Сетка + Coin Selector</span>
+      <button class="tbtn on" id="gridTabBacktest">Сетка</button>
       <button class="tbtn" id="gridTabSelector">Coin Selector</button>
-      <button class="tbtn" id="gridCloseBtn">Р—Р°РєСЂС‹С‚СЊ</button>
+      <button class="tbtn" id="gridCloseBtn">Закрыть</button>
     </div>
     <div id="gridLabBody" style="flex:1;min-height:0;overflow:auto;padding:12px"></div>
   `;
@@ -7183,22 +8292,22 @@ function renderGridLabModal(defSymOpt){
     if(tab==='selector'){
       const rows=getGridSelectorRows(24);
       body.innerHTML=`
-      <div style="font-size:10px;color:var(--text3);margin-bottom:8px">РўРѕРї РјРѕРЅРµС‚ РїРѕ РїСЂРёРіРѕРґРЅРѕСЃС‚Рё Рє grid (Р»РёРєРІРёРґРЅРѕСЃС‚СЊ, СЂРµРЅР¶, mean-reversion, Р°РєС‚РёРІРЅРѕСЃС‚СЊ).</div>
+      <div style="font-size:10px;color:var(--text3);margin-bottom:8px">Топ монет по пригодности к grid (ликвидность, ренж, mean-reversion, активность).</div>
       <div style="font-size:9px;color:var(--text3);line-height:1.4;margin:0 0 9px 0">
-        GridScore = 24% СЂРµРЅР¶ Р·Р° 24С‡ + 20% NATR (5m) + 22% mean-reversion (РјРµРЅСЊС€Рµ РЅР°РїСЂР°РІР»РµРЅРЅРѕРіРѕ С‚СЂРµРЅРґР° Р·Р° 24С‡) + 22% Р»РёРєРІРёРґРЅРѕСЃС‚СЊ (РѕР±СЉС‘Рј) + 12% Р°РєС‚РёРІРЅРѕСЃС‚СЊ (СЃРґРµР»РєРё). Р§РµРј РІС‹С€Рµ score, С‚РµРј РѕР±С‹С‡РЅРѕ СЃС‚Р°Р±РёР»СЊРЅРµРµ Рё "СЂР°Р±РѕС‡РµРµ" РїРѕРІРµРґРµРЅРёРµ РґР»СЏ СЃРµС‚РєРё.
+        GridScore = 24% ренж за 24ч + 20% NATR (5m) + 22% mean-reversion (меньше направленного тренда за 24ч) + 22% ликвидность (объём) + 12% активность (сделки). Чем выше score, тем обычно стабильнее и "рабочее" поведение для сетки.
       </div>
         <div style="display:grid;grid-template-columns:110px repeat(6,1fr);gap:6px;font-size:9px">
-          <div style="color:var(--text3)">РЎРёРјРІРѕР»</div><div style="color:var(--text3)">GridScore</div><div style="color:var(--text3)">Р РµРЅР¶24</div><div style="color:var(--text3)">NATR5m</div><div style="color:var(--text3)">РР—Рњ24</div><div style="color:var(--text3)">РћР±СЉС‘Рј24</div><div style="color:var(--text3)">РЎРґРµР»РєРё24</div>
+          <div style="color:var(--text3)">Символ</div><div style="color:var(--text3)">GridScore</div><div style="color:var(--text3)">Ренж24</div><div style="color:var(--text3)">NATR5m</div><div style="color:var(--text3)">ИЗМ24</div><div style="color:var(--text3)">Объём24</div><div style="color:var(--text3)">Сделки24</div>
           ${rows.map(r=>`<div style="font-weight:600;color:#fff;cursor:pointer" onclick="openFullscreenBySym('${r.sym}')">${r.sym.replace(/USDT$/,'')}</div><div>${fn(r.score,1)}</div><div>${fn(r.range24,2)}%</div><div>${fn(r.natr,2)}%</div><div class="${r.ch24>=0?'p':'n'}">${r.ch24>=0?'+':''}${fn(r.ch24,2)}%</div><div>${fk(r.vol24)}</div><div>${fk(r.trd24)}</div>`).join('')}
         </div>`;
       return;
     }
-    const defSym = defSymOpt || (S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
+    const defSym=(S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
     const sb=(gbPrefs.symbolBounds&&gbPrefs.symbolBounds[defSym])||{};
     body.innerHTML=`
       <div style="display:flex;flex-direction:column;gap:8px;min-height:min(72vh,720px)">
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0;flex-shrink:0">
-        <label style="font-size:9px;color:var(--text3)">РЎРёРјРІРѕР»</label>
+        <label style="font-size:9px;color:var(--text3)">Символ</label>
         <input id="gbSym" value="${defSym}" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">TF</label>
         <select id="gbTf" style="width:62px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
@@ -7207,31 +8316,31 @@ function renderGridLabModal(defSymOpt){
           <option value="15m"${gbPrefs.global.tf==='15m'?' selected':''}>15m</option>
           <option value="1h"${gbPrefs.global.tf==='1h'?' selected':''}>1h</option>
         </select>
-        <label style="font-size:9px;color:var(--text3)">РЈСЂРѕРІРЅРё</label>
+        <label style="font-size:9px;color:var(--text3)">Уровни</label>
         <input id="gbLevels" type="number" value="${gbPrefs.global.levels}" min="3" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">РќРёР·</label>
+        <label style="font-size:9px;color:var(--text3)">Низ</label>
         <input id="gbLow" type="number" step="any" value="${sb.lower||''}" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Р’РµСЂС…</label>
+        <label style="font-size:9px;color:var(--text3)">Верх</label>
         <input id="gbHigh" type="number" step="any" value="${sb.upper||''}" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">РџР»РµС‡Рѕ</label>
+        <label style="font-size:9px;color:var(--text3)">Плечо</label>
         <input id="gbLev" type="number" value="${gbPrefs.global.leverage}" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Р”РµРїРѕ</label>
+        <label style="font-size:9px;color:var(--text3)">Депо</label>
         <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="0.1" step="0.1" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <span style="font-size:9px;color:var(--text3)">РЎРѕРѕС‚РЅ.</span>
-        <input id="gbRatioLong" type="number" value="${gbPrefs.global.ratioLong}" min="0.1" step="0.1" title="Р›РѕРЅРі-С‡Р°СЃС‚СЊ (РЅР°РїСЂ. 3)" style="width:42px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
+        <span style="font-size:9px;color:var(--text3)">Соотн.</span>
+        <input id="gbRatioLong" type="number" value="${gbPrefs.global.ratioLong}" min="0.1" step="0.1" title="Лонг-часть (напр. 3)" style="width:42px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
         <span style="font-size:9px;color:var(--text3)">:</span>
-        <input id="gbRatioShort" type="number" value="${gbPrefs.global.ratioShort}" min="0.1" step="0.1" title="РЁРѕСЂС‚-С‡Р°СЃС‚СЊ (РЅР°РїСЂ. 1)" style="width:42px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
-        <input id="gbRatioStep" type="number" value="${gbPrefs.global.ratioStepPct}" min="0.01" step="0.01" title="РЎСЂРµРґРЅРёР№ % РјРµР¶РґСѓ СЃРµС‚РєР°РјРё" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
-        <span style="font-size:9px;color:var(--text3)">% С€Р°Рі</span>
-        <button type="button" class="tbtn" id="gbRatioApply" title="Р’С‹СЃС‚Р°РІРёС‚СЊ РіСЂР°РЅРёС†С‹ Рё СЃРµС‚РєСѓ РїРѕ СЃРѕРѕС‚РЅРѕС€РµРЅРёСЋ">в†» РЎРµС‚РєР°</button>
-        <label style="font-size:9px;color:var(--text3)">Р РёСЃРє-СЃРµС‚РєРё</label>
+        <input id="gbRatioShort" type="number" value="${gbPrefs.global.ratioShort}" min="0.1" step="0.1" title="Шорт-часть (напр. 1)" style="width:42px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
+        <input id="gbRatioStep" type="number" value="${gbPrefs.global.ratioStepPct}" min="0.01" step="0.01" title="Средний % между сетками" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
+        <span style="font-size:9px;color:var(--text3)">% шаг</span>
+        <button type="button" class="tbtn" id="gbRatioApply" title="Выставить границы и сетку по соотношению">↻ Сетка</button>
+        <label style="font-size:9px;color:var(--text3)">Риск-сетки</label>
         <select id="gbGridMode" style="width:132px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
           <option value="neutral"${gbPrefs.global.gridMode==='neutral'?' selected':''}>Neutral</option>
           <option value="long"${gbPrefs.global.gridMode==='long'?' selected':''}>Long</option>
           <option value="short"${gbPrefs.global.gridMode==='short'?' selected':''}>Short</option>
         </select>
       </div>
-      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Р—Р°РіСЂСѓР·РєР° СЃРµС‚РєРё...</div>
+      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Загрузка сетки...</div>
       <div style="display:flex;gap:8px;flex:1;min-height:min(60vh,620px);align-items:stretch">
         <div id="gbChartWrap" style="position:relative;flex:1 1 auto;min-width:0;min-height:min(60vh,620px);height:min(60vh,620px);border:1px solid var(--border2);border-radius:6px;overflow:hidden">
           <div id="gbChart" style="position:absolute;inset:0"></div>
@@ -7289,47 +8398,6 @@ function toggleGridLab(){
   renderGridLabModal();
 }
 
-/**
- * Open Grid Lab with a pre-filled payload from a screener row.
- * Does NOT close the calling screener modal вЂ” Grid Lab opens on top (z 820 vs 825).
- */
-function openGridLabFromRow(row, source, closeSelf){
-  const payload = buildGridLabPayload(row, source);
-  if(!payload || !payload.sym) return;
-  const prefs = loadGridLabPrefs();
-  // Apply suggested lower/upper and grid levels from screener.
-  // Existing user overrides win if present (but caller may have set them intentionally).
-  if(!prefs.symbolBounds || typeof prefs.symbolBounds !== 'object') prefs.symbolBounds = {};
-  const existing = prefs.symbolBounds[payload.sym] || {};
-  prefs.symbolBounds[payload.sym] = {
-    ...existing,
-    lower: payload.lower,
-    upper: payload.upper,
-  };
-  if(payload.levels != null) prefs.symbolBounds[payload.sym].gridLevels = payload.levels;
-  // Also push levels into global вЂ” that's where the form input reads them from.
-  if(payload.levels != null) prefs.global = { ...(prefs.global || {}), levels: payload.levels };
-  // Apply direction from Smart screener в†’ gridMode (LONG/SHORT/NEUTRAL).
-  if(payload.direction === 'LONG' || payload.direction === 'SHORT' || payload.direction === 'NEUTRAL'){
-    prefs.global = { ...(prefs.global || {}), gridMode: payload.direction.toLowerCase() };
-  }
-  // Also push the suggested TF into globals so the modal opens on the right timeframe.
-  if(payload.tf) prefs.global = { ...(prefs.global || {}), tf: payload.tf };
-  saveGridLabPrefs(prefs);
-  // Close the calling screener modal ONLY if requested (Swing/Intra/Pick close themselves,
-  // Smart stays open so the user can compare several rows back-to-back).
-  if(typeof closeSelf === 'function'){
-    try { closeSelf(); } catch(e) { /* ignore */ }
-  }
-  // If Grid Lab is already open, just refresh its inputs (cheap sync) instead of stacking.
-  const existingModal = document.getElementById('gridLabModal');
-  if(existingModal){
-    existingModal.remove();
-  }
-  // Pass payload.sym so the form opens on the right symbol and pulls the suggested bounds.
-  renderGridLabModal(payload.sym);
-}
-
 function setBrushColor(col,el){
   _brushColor=col;
   document.querySelectorAll('.brush-color').forEach(d=>d.classList.remove('active'));
@@ -7366,7 +8434,6 @@ registerGridBotScreeners({
   fn,
   fmtPrice,
   openFullscreenBySym,
-  openGridLabFromRow,
   bollingerOnTail,
   calcATR,
   GROUP_COLORS,
@@ -7376,23 +8443,8 @@ registerGridBotScreeners({
   },
 });
 
-registerGridSmartScreener({
-  S,
-  BACKEND,
-  fj,
-  batchKlines,
-  fn,
-  fmtPrice,
-  openFullscreenBySym,
-  openGridLabFromRow,
-  GROUP_COLORS,
-  tagScreenerGroup: (sym, g) => {
-    if (sym && g > 0) setSymGroup(sym, g);
-  },
-});
-
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ═══════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════
 window.rCanvas            = rCanvas;
 window.setDensityMult     = setDensityMult;
 window.setTf              = setTf;

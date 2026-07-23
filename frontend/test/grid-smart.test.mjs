@@ -17,6 +17,12 @@ import {
   ouGridBounds,
   optimalLevelsForHalfLife,
   computeSmartRow,
+  filterSmartRows,
+  sortSmartRows,
+  smartBandColor,
+  smartDirectionColor,
+  smartEmptyMessage,
+  smartSkeletonRows,
 } from '../src/gridSmart.js';
 
 // ─── Synthetic series builders ─────────────────────────────────
@@ -361,10 +367,22 @@ test('ouGridBounds: optimalLevelsForHalfLife — boundary values', () => {
   assert.equal(optimalLevelsForHalfLife(100), 8);    // HL ≥ 100 → 8
   assert.equal(optimalLevelsForHalfLife(200), 8);
   assert.equal(optimalLevelsForHalfLife(55), 16);    // HL=55 → mid range (24 - 45*16/90 = 16)
-  // Null/garbage
+  // Null/garbage → safe middle default 12
   assert.equal(optimalLevelsForHalfLife(0), 12);
-  assert.equal(optimalLevelsForHalfLife(NaN), 12);
   assert.equal(optimalLevelsForHalfLife(-5), 12);
+  assert.equal(optimalLevelsForHalfLife(NaN), 12);
+  assert.equal(optimalLevelsForHalfLife(null), 12);
+  assert.equal(optimalLevelsForHalfLife(Infinity), 12);
+});
+
+test('ouGridBounds: optimalLevelsForHalfLife — never crashes on garbage', () => {
+  // Property test: any input → finite integer in [8, 24]
+  const garbage = [undefined, null, NaN, -1, 0, 1e10, -1e10, Infinity, -Infinity, 1.5, 1e-10];
+  for (const x of garbage) {
+    const n = optimalLevelsForHalfLife(x);
+    assert.ok(Number.isInteger(n), `expected integer for ${x}, got ${n}`);
+    assert.ok(n >= 8 && n <= 24, `expected [8,24] for ${x}, got ${n}`);
+  }
 });
 
 test('ouGridBounds: optimalLevelsForHalfLife is monotonic', () => {
@@ -420,6 +438,196 @@ test('computeSmartRow: with context TF computes confluence', () => {
 });
 
 test('computeSmartRow: insufficient bars → null', () => {
-  const r = computeSmartRow('X', [{ c: 1 }], null, null, () => 0);
+  // generate a short series; computeSmartRow should bail out gracefully
+  const tiny = klinesFromCloses([100, 101, 102, 101, 100]);
+  const r = computeSmartRow('XUSDT', tiny, null, new Map(), () => 0);
   assert.equal(r, null);
+});
+
+// ═══════════════════════════════════════════════════════════════
+//  Pure UI helpers
+// ═══════════════════════════════════════════════════════════════
+
+const sampleRows = [
+  { sym: 'BTCUSDT', score: 11, band: 'green', direction: 'LONG', confidence: 85, mr: 4, fit: 5, raw: { gkPct: 0.8 } },
+  { sym: 'ETHUSDT', score: 8,  band: 'yellow', direction: 'SHORT', confidence: 70, mr: 3, fit: 4, raw: { gkPct: 1.2 } },
+  { sym: 'XRPUSDT', score: 5,  band: 'red', direction: 'NEUTRAL', confidence: 50, mr: 2, fit: 3, raw: { gkPct: 2.5 } },
+  { sym: 'ADAUSDT', score: 9,  band: 'yellow', direction: 'LONG', confidence: 75, mr: 3, fit: 4, raw: { gkPct: null } },
+  { sym: 'BNBUSDT', score: 7,  band: 'yellow', direction: 'SHORT', confidence: 55, mr: 3, fit: 3, raw: { gkPct: 1.8 } },
+];
+
+// ── filterSmartRows ────────────────────────────────────────────
+
+test('filterSmartRows: empty input / non-array → []', () => {
+  assert.deepEqual(filterSmartRows(null), []);
+  assert.deepEqual(filterSmartRows(undefined), []);
+  assert.deepEqual(filterSmartRows('foo'), []);
+});
+
+test('filterSmartRows: defaults pass everything with score', () => {
+  const out = filterSmartRows(sampleRows);
+  assert.equal(out.length, 5);
+});
+
+test('filterSmartRows: minScore filters out low scores', () => {
+  const out = filterSmartRows(sampleRows, { minScore: 8 });
+  assert.equal(out.length, 3);
+  assert.ok(out.every(r => r.score >= 8));
+});
+
+test('filterSmartRows: directions as Set → restricts', () => {
+  const out = filterSmartRows(sampleRows, { directions: new Set(['LONG']) });
+  assert.equal(out.length, 2);
+  assert.ok(out.every(r => r.direction === 'LONG'));
+});
+
+test('filterSmartRows: directions as Array → restricts', () => {
+  const out = filterSmartRows(sampleRows, { directions: ['SHORT', 'NEUTRAL'] });
+  assert.equal(out.length, 3);
+});
+
+test('filterSmartRows: minConfidence 60+ drops low-conf rows', () => {
+  const out = filterSmartRows(sampleRows, { minConfidence: 60 });
+  // Sample has 85, 70, 50, 75, 55 → 85/70/75 pass → 3 rows
+  assert.equal(out.length, 3);
+});
+
+test('filterSmartRows: null confidence → treated as 0', () => {
+  const rows = [{ sym: 'X', score: 10, direction: 'LONG', confidence: null }];
+  const out = filterSmartRows(rows, { minConfidence: 60 });
+  assert.equal(out.length, 0);
+});
+
+test('filterSmartRows: combined filters', () => {
+  const out = filterSmartRows(sampleRows, {
+    minScore: 8,
+    directions: new Set(['LONG']),
+    minConfidence: 60,
+  });
+  // BTC(85), ADA(75) → 2
+  assert.equal(out.length, 2);
+});
+
+test('filterSmartRows: does not mutate input', () => {
+  const before = sampleRows.slice();
+  filterSmartRows(sampleRows, { minScore: 9 });
+  assert.deepEqual(sampleRows, before);
+});
+
+test('filterSmartRows: skips rows with null score', () => {
+  const rows = [
+    { sym: 'X', score: null, direction: 'LONG' },
+    { sym: 'Y', score: 5, direction: 'LONG' },
+  ];
+  assert.equal(filterSmartRows(rows).length, 1);
+});
+
+// ── sortSmartRows ──────────────────────────────────────────────
+
+test('sortSmartRows: numeric desc by default', () => {
+  const out = sortSmartRows(sampleRows, 'score');
+  assert.equal(out[0].sym, 'BTCUSDT');
+  assert.equal(out[out.length - 1].sym, 'XRPUSDT');
+});
+
+test('sortSmartRows: numeric asc', () => {
+  const out = sortSmartRows(sampleRows, 'score', 'asc');
+  assert.equal(out[0].sym, 'XRPUSDT');
+  assert.equal(out[out.length - 1].sym, 'BTCUSDT');
+});
+
+test('sortSmartRows: sym uses localeCompare', () => {
+  const out = sortSmartRows(sampleRows, 'sym', 'asc');
+  assert.deepEqual(out.map(r => r.sym), ['ADAUSDT', 'BNBUSDT', 'BTCUSDT', 'ETHUSDT', 'XRPUSDT']);
+});
+
+test('sortSmartRows: dir uses localeCompare (LONG < NEUTRAL < SHORT)', () => {
+  const out = sortSmartRows(sampleRows, 'dir', 'asc');
+  // Sample has LONG(2), SHORT(2), NEUTRAL(1)
+  // First should be LONGs, then NEUTRAL, then SHORTs (alphabetical)
+  const dirs = out.map(r => r.direction);
+  assert.equal(dirs[0], 'LONG');
+  assert.equal(dirs[dirs.length - 1], 'SHORT');
+});
+
+test('sortSmartRows: gkh reads from raw.gkPct; nulls last on desc', () => {
+  const out = sortSmartRows(sampleRows, 'gkh', 'desc');
+  // 2.5, 1.8, 1.2, 0.8, null
+  assert.equal(out[0].sym, 'XRPUSDT');
+  assert.equal(out[out.length - 1].sym, 'ADAUSDT');
+});
+
+test('sortSmartRows: empty input → []', () => {
+  assert.deepEqual(sortSmartRows([], 'score'), []);
+  assert.deepEqual(sortSmartRows(null, 'score'), []);
+});
+
+test('sortSmartRows: does not mutate input', () => {
+  const before = sampleRows.map(r => r.sym);
+  sortSmartRows(sampleRows, 'sym');
+  assert.deepEqual(sampleRows.map(r => r.sym), before);
+});
+
+// ── smartBandColor / smartDirectionColor ──────────────────────
+
+test('smartBandColor: maps bands', () => {
+  assert.equal(smartBandColor('green'), '#22c55e');
+  assert.equal(smartBandColor('yellow'), '#eab308');
+  assert.equal(smartBandColor('red'), '#ef4444');
+  assert.equal(smartBandColor('nonsense'), '#94a3b8');
+  assert.equal(smartBandColor(undefined), '#94a3b8');
+});
+
+test('smartDirectionColor: maps directions', () => {
+  assert.equal(smartDirectionColor('LONG'), '#22c55e');
+  assert.equal(smartDirectionColor('SHORT'), '#ef4444');
+  assert.equal(smartDirectionColor('NEUTRAL'), '#94a3b8');
+  assert.equal(smartDirectionColor(undefined), '#94a3b8');
+});
+
+// ── smartEmptyMessage ──────────────────────────────────────────
+
+test('smartEmptyMessage: loading wins over error', () => {
+  assert.equal(smartEmptyMessage({ loading: true, error: 'boom' }), 'Загрузка…');
+});
+
+test('smartEmptyMessage: error wins over default', () => {
+  assert.equal(smartEmptyMessage({ loading: false, error: 'нет монет' }), 'нет монет');
+});
+
+test('smartEmptyMessage: hasFilters hint', () => {
+  assert.equal(smartEmptyMessage({ hasFilters: true }), 'Нет результатов (проверь фильтры).');
+});
+
+test('smartEmptyMessage: default no-results', () => {
+  assert.equal(smartEmptyMessage({}), 'Нет результатов.');
+});
+
+// ── smartSkeletonRows ──────────────────────────────────────────
+
+test('smartSkeletonRows: default count 8', () => {
+  const html = smartSkeletonRows();
+  // 8 rows × 1 <tr> each
+  const rows = html.match(/<tr>/g);
+  assert.equal(rows?.length, 8);
+});
+
+test('smartSkeletonRows: respects count, clamps to [1, 20]', () => {
+  assert.equal((smartSkeletonRows(3).match(/<tr>/g) || []).length, 3);
+  assert.equal((smartSkeletonRows(25).match(/<tr>/g) || []).length, 20, 'clamped to 20');
+  assert.equal((smartSkeletonRows(0).match(/<tr>/g) || []).length, 1, 'bumped to 1');
+  assert.equal((smartSkeletonRows(-5).match(/<tr>/g) || []).length, 1, 'negative → 1');
+});
+
+test('smartSkeletonRows: HTML contains the expected CSS classes', () => {
+  const html = smartSkeletonRows(1);
+  assert.match(html, /gbs-skeleton/);
+  assert.match(html, /gbs-skeleton-bar/);
+  assert.match(html, /gbs-skeleton-bar--w12/);
+  assert.match(html, /gbs-skeleton-bar--w70/);
+  assert.match(html, /colspan="9"/);
+});
+
+test('smartSkeletonRows: returns a string (no DOM deps)', () => {
+  assert.equal(typeof smartSkeletonRows(), 'string');
 });

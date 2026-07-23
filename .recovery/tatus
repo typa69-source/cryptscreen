@@ -1,0 +1,17 @@
+[33mcommit 3c3703625fdf7babf27182e599e71b3a1e5f64ee[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32m2026-04-22-t13g[m[33m, [m[1;31morigin/2026-04-22-t13g[m[33m)[m
+Author: typa69-source <typa69-source@users.noreply.github.com>
+Date:   Wed Apr 22 22:12:52 2026 +0300
+
+    Enhance chart performance by throttling hover hit-testing during panning and adding timestamp tracking for hover checks
+
+[33mcommit 52a364d567bed730e0e0ab2c8ff0ff1a521f2666[m
+Author: typa69-source <typa69-source@users.noreply.github.com>
+Date:   Wed Apr 22 21:56:58 2026 +0300
+
+    update
+
+[33mcommit afbe64372d9564237c3e807d7991400c5c593455[m
+Author: typa69-source <typa69-source@users.noreply.github.com>
+Date:   Wed Apr 22 21:49:45 2026 +0300
+
+    Refactor chart initialization and rendering for improved UI responsiveness

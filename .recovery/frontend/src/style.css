@@ -302,7 +302,6 @@ html,body{
 .srow{display:flex;align-items:stretch;height:26px;border-bottom:1px solid rgba(37,37,48,.6);
   cursor:pointer;transition:background .06s}
 .srow:hover{background:rgba(255,255,255,.022)}
-.srow.search-hidden{opacity:.12;pointer-events:none}
 .srow.inchart{background:rgba(224,48,48,.06)}
 .srow.inchart .rtick{background:rgba(224,48,48,.1)}
 .rtick{width:84px;min-width:84px;flex-shrink:0;display:flex;align-items:center;padding:0 6px;
@@ -361,7 +360,7 @@ html,body{
 }
 .mc.p{color:var(--green)}.mc.n{color:var(--red)}.mc.y{color:var(--yellow);font-weight:600}
 .mc.d{color:var(--text3)}.mc.w{color:var(--text)}
-.hv0{background:rgba(31,168,145,.03)}.hv1{background:rgba(31,168,145,.07)}.hv2{background:rgba(31,168,145,.13)}.hv3{background:rgba(31,168,145,.22)}
+.hv1{background:rgba(31,168,145,.05)}.hv2{background:rgba(31,168,145,.12)}.hv3{background:rgba(31,168,145,.2)}
 .hr1{background:rgba(224,64,64,.05)}.hr2{background:rgba(224,64,64,.12)}.hr3{background:rgba(224,64,64,.2)}
 .srow.infullscreen{background:rgba(224,48,48,.1)!important;outline:1px solid rgba(224,48,48,.35);outline-offset:-1px}
 .srow.infullscreen .rtick{background:rgba(224,48,48,.15)!important}
@@ -596,20 +595,3 @@ html,body{
 .gbs-table th{text-align:left;padding:6px 8px;background:var(--bg3);color:var(--text3);position:sticky;top:0;z-index:1;cursor:pointer;user-select:none}
 .gbs-table td{padding:5px 8px;border-bottom:1px solid rgba(37,37,48,.6);vertical-align:top}
 .gbs-tag{display:inline-block;margin:1px 4px 1px 0;padding:1px 5px;border-radius:3px;background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.35);font-size:8px;color:var(--text2)}
-/* Smart screener badges (replaces inline `style="background:#22c55e;..."`) */
-.gbs-badge{display:inline-block;padding:2px 6px;border-radius:4px;color:#0a0a0b;font-weight:700}
-.gbs-badge--green{background:#22c55e}
-.gbs-badge--yellow{background:#eab308}
-.gbs-badge--red{background:#ef4444}
-.gbs-badge--long{background:#22c55e;font-size:9px}
-.gbs-badge--short{background:#ef4444;font-size:9px}
-.gbs-badge--neutral{background:#94a3b8;font-size:9px}
-.gbs-badge--muted{background:#94a3b8}
-/* Intra screener signal-stage chip ("S1✓") */
-.gbs-stage{display:inline-block;padding:1px 5px;border-radius:3px;font-size:9px;background:#166534;color:#fff}
-/* Skeleton loading rows */
-@keyframes gbs-shimmer{0%{opacity:.55}50%{opacity:1}100%{opacity:.55}}
-.gbs-skeleton{display:flex;align-items:center;gap:6px;height:16px;margin:4px 0;animation:gbs-shimmer 1.2s ease-in-out infinite}
-.gbs-skeleton-bar{height:8px;border-radius:3px;background:linear-gradient(90deg,rgba(124,58,237,.12),rgba(124,58,237,.28),rgba(124,58,237,.12))}
-.gbs-skeleton-bar--w12{flex:0 0 26px}
-.gbs-skeleton-bar--w70{flex:1}
