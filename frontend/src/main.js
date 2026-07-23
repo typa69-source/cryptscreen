@@ -333,11 +333,11 @@ function lineColorForType(type){
   return(typeof c==='string'&&c.startsWith('#'))?c:null;
 }
 
-/** После setData: отступ справа + В«зумВ» по числу видимых свечей */
+/** После setData: отступ справа + «зум» по числу видимых свечей */
 function applyDefaultChartView(ch){
   if(!ch?.lc||!ch.candles?.length)return;
   const len=ch.candles.length;
-  // Мало баров • только fit, без В«логического зумаВ» на 32+ пустых слотов
+  // Мало баров • только fit, без «логического зума» на 32+ пустых слотов
   if(len<MIN_CHART_CANDLES){
     try{ch.lc.timeScale().fitContent();}catch(e){}
     return;
@@ -3796,7 +3796,7 @@ function tfMs(tf){
   return 300000;
 }
 
-/** Обновить текущую (формирующуюся) свечу по В«живойВ» цене (book mid / last trade). */
+/** Обновить текущую (формирующуюся) свечу по «живой» цене (book mid / last trade). */
 function applyLivePriceToCandle(ch,tfStr,price,tsMs){
   if(!ch?.candles?.length)return false;
   if(price==null||!isFinite(price))return false;
@@ -4452,7 +4452,7 @@ function buildScreenerHeader(hdrEl){
 
 function sortedRows(){
   let rows=Object.values(S.mx);
-  // Подмешиваем монеты без записи в mx (гонка calcAll / partial tk) • иначе пустые слоты и В«•В».
+  // Подмешиваем монеты без записи в mx (гонка calcAll / partial tk) • иначе пустые слоты и «•».
   if(S.syms.length){
     const have=new Set(rows.map(r=>r.sym));
     for(const sym of S.syms){
@@ -4718,7 +4718,7 @@ function renderTable(){
   updatePagination(rows.length);
   // Keep mini-charts in sync with live-sorted rows.
   // Without this, when sorting by a live-updating metric (e.g. РЗМ24ч),
-  // the table changes but the 3Г—3 grid can stay on stale symbols.
+  // the table changes but the 3×3 grid can stay on stale symbols.
   maybeSyncChartsToTopRows(rows);
 }
 
@@ -4934,7 +4934,7 @@ function syncChartSyncBtnUi(){
   b.classList.toggle('on',S.chartAutoSync);
   b.textContent=S.chartAutoSync?'Графы·авто':'Графы·стоп';
   b.title=S.chartAutoSync
-    ?'Вкл: мини-графики 3Г—3 подстраиваются под текущий топ страницы при живой сортировке. Список всегда обновляется.'
+    ?'Вкл: мини-графики 3×3 подстраиваются под текущий топ страницы при живой сортировке. Список всегда обновляется.'
     :'Выкл: список обновляется, но символы в сетке графиков не меняются сами • пока не перелистнёте страницу или не смените сортировку вручную.';
 }
 function syncOiChartBtnUi(){
@@ -5050,19 +5050,19 @@ function renderSettingsDensity(body){
   ${sym?`
   <div style="font-size:9px;color:var(--text2);margin:10px 0 4px">Пороги для: <b style="color:#fff">${sym.replace(/USDT$/,'')}</b></div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Крупная (Г—Пѓ)</span>
+    <span class="smodal-lbl">Крупная (×π)</span>
     <input id="dLarge" type="number" step="0.1" min="0.5" max="20" value="${ds.largeMult}"
       oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'largeMult',this.value)"
       style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Средняя (Г—Пѓ)</span>
+    <span class="smodal-lbl">Средняя (×π)</span>
     <input id="dMed" type="number" step="0.1" min="0.5" max="20" value="${ds.medMult}"
       oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'medMult',this.value)"
       style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
   </div>
   <div class="smodal-row">
-    <span class="smodal-lbl">Малая (Г—Пѓ)</span>
+    <span class="smodal-lbl">Малая (×π)</span>
     <input id="dSmall" type="number" step="0.1" min="0.1" max="20" value="${ds.smallMult}"
       oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'smallMult',this.value)"
       style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
@@ -5578,7 +5578,7 @@ function renderSettingsGen(body){
   const fsPresetLabel=(
     S.fsLayoutPreset==='two_horizontal'?'2 графика (горизонтально)':
     S.fsLayoutPreset==='two_vertical'?'2 графика (вертикально)':
-    S.fsLayoutPreset==='four_grid'?'4 графика (2Г—2)':
+    S.fsLayoutPreset==='four_grid'?'4 графика (2×2)':
     '3 графика (широкий сверху)'
   );
   body.innerHTML=`
@@ -5605,7 +5605,7 @@ function renderSettingsGen(body){
         ${tbtnHtml('fspH2','2 гориз',"setFsLayoutPreset('two_horizontal')",S.fsLayoutPreset==='two_horizontal')}
         ${tbtnHtml('fspV2','2 вертик',"setFsLayoutPreset('two_vertical')",S.fsLayoutPreset==='two_vertical')}
         ${tbtnHtml('fsp3','3 (шир+2)',"setFsLayoutPreset('three_top_wide')",S.fsLayoutPreset==='three_top_wide')}
-        ${tbtnHtml('fsp4','2Г—2',"setFsLayoutPreset('four_grid')",S.fsLayoutPreset==='four_grid')}
+        ${tbtnHtml('fsp4','2×2',"setFsLayoutPreset('four_grid')",S.fsLayoutPreset==='four_grid')}
       </div>
       <div style="font-size:9px;color:var(--text3)">Активный: ${fsPresetLabel}</div>
     </div>
@@ -5660,7 +5660,7 @@ function renderSettingsGen(body){
     </div>
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:0">
-    <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">На полноэкранных графиках масштаб и отступ справа подстраиваются по ширине окна: показывается больше свечей, В«пустыеВ» бары справа слегка ужимаются • чтобы крупный график не казался чрезмерно В«растянутымВ».</span>
+    <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">На полноэкранных графиках масштаб и отступ справа подстраиваются по ширине окна: показывается больше свечей, «пустые» бары справа слегка ужимаются • чтобы крупный график не казался чрезмерно «растянутым».</span>
   </div>
   <div class="smodal-row">
     <span class="smodal-lbl">Автосмена монет в сетке графиков</span>
@@ -5685,7 +5685,7 @@ function renderSettingsGen(body){
     </div>
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:0">
-    <span class="smodal-lbl" style="flex:1;font-size:8px;color:var(--text3);line-height:1.45;font-weight:400">Границы в UTC (как у глобальных рынков). Пересечения: приоритет NY → Лондон → Азия; вне зон • приглушённая полоса В«мёртвое времяВ».</span>
+    <span class="smodal-lbl" style="flex:1;font-size:8px;color:var(--text3);line-height:1.45;font-weight:400">Границы в UTC (как у глобальных рынков). Пересечения: приоритет NY → Лондон → Азия; вне зон • приглушённая полоса «мёртвое время».</span>
   </div>
   <div class="smodal-ver">CryptScreen v1.4 · Binance Futures</div>`;
 }
@@ -5720,7 +5720,7 @@ function toggleSessionBand(which){
 }
 
 function renderSettingsChartHead(body){
-  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка В«РндикаторыВ»). Перетащите порядок, вњ“ • показать/скрыть.</div>';
+  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Рндикаторы»). Перетащите порядок, вњ“ • показать/скрыть.</div>';
   const list=document.createElement('div');list.className='ind-list';list.id='chartHeadList';
   S.chartHeadOrder.forEach(id=>{
     const def=CHART_HEAD_DEFS.find(d=>d.id===id);if(!def)return;
@@ -6498,10 +6498,10 @@ const POT_FIELDS=[
   {id:'bbBreak',label:'BB Breakout',unit:'',   step:1},
   {id:'volImpulse',label:'Volume impulse',unit:'',step:1},
   {id:'emaTouch',label:'EMA touch', unit:'',   step:1},
-  {id:'vr5',    label:'ОБ* 5м',     unit:'Г—',  step:0.1},
-  {id:'vr1h',   label:'ОБ* 1ч',     unit:'Г—',  step:0.1},
-  {id:'tr5',    label:'СД* 5м',     unit:'Г—',  step:0.1},
-  {id:'tr1h',   label:'СД* 1ч',     unit:'Г—',  step:0.1},
+  {id:'vr5',    label:'ОБ* 5м',     unit:'×',  step:0.1},
+  {id:'vr1h',   label:'ОБ* 1ч',     unit:'×',  step:0.1},
+  {id:'tr5',    label:'СД* 5м',     unit:'×',  step:0.1},
+  {id:'tr1h',   label:'СД* 1ч',     unit:'×',  step:0.1},
   {id:'na14',   label:'NATR 5м',    unit:'%',  step:0.01},
   {id:'na30',   label:'NATR 1м',    unit:'%',  step:0.01},
   {id:'trd24',  label:'Сделки 24ч', unit:'',   step:50},
