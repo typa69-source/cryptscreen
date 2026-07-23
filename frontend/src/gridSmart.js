@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Grid Smart Screener — statistically-grounded mean-reversion / grid-fitness model.
  *
  * Public API:
@@ -27,13 +27,13 @@ import { hurstExponentRS } from './gridBotScreeners.js';
 //  Pure stats — all inputs are plain arrays, outputs plain numbers
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 
-/** AR(1) on log-closes; returns half-life in bars, or null if Оё в‰Ґ 0 or too few bars. */
+/** AR(1) on log-closes; returns half-life in bars, or null if θ ≥ 0 or too few bars. */
 export function ouHalfLife(closes) {
   if (!closes || closes.length < 30) return null;
   const x = closes.filter((c) => isFinite(c) && c > 0);
   if (x.length < 30) return null;
-  // Δln(p_t) = α + ОёВ·(ln(p_{t-1}) − μ) + ε
-  // Equivalently: regress Δln(p_t) on ln(p_{t-1}) (intercept captures α − ОёВ·μ).
+  // Δln(p_t) = α + θ·(ln(p_{t-1}) − μ) + ε
+  // Equivalently: regress Δln(p_t) on ln(p_{t-1}) (intercept captures α − θ·μ).
   const ys = [];
   const xs = [];
   for (let i = 1; i < x.length; i++) {
@@ -66,7 +66,7 @@ export function garmanKlassVol(klines) {
     if (!(isFinite(o) && isFinite(h) && isFinite(l) && isFinite(c))) continue;
     if (o <= 0 || h <= 0 || l <= 0 || c <= 0) continue;
     if (l > h) continue;
-    // GK: 0.5В·ln(H/L)^2 − (2В·ln(2)−1)В·ln(C/O)^2
+    // GK: 0.5·ln(H/L)^2 − (2·ln(2)−1)·ln(C/O)^2
     const hl = Math.log(h / l);
     const co = Math.log(c / o);
     const v = 0.5 * hl * hl - (2 * Math.LN2 - 1) * co * co;
@@ -111,7 +111,7 @@ export function varianceRatio(closes, k = 4) {
 }
 
 /** Augmented Dickey-Fuller with 1 lag. Returns {gamma, stat} or null.
- *  Test regression: Δy_t = α + γВ·y_{t-1} + ОґВ·Δy_{t-1} + ε
+ *  Test regression: Δy_t = α + γ·y_{t-1} + δ·Δy_{t-1} + ε
  *  t-stat on γ is the ADF stat; γ < 0 means mean-reverting. */
 export function adfTest(closes) {
   if (!closes || closes.length < 30) return null;
@@ -154,14 +154,14 @@ export function adfTest(closes) {
   // Invert 3x3 by cofactor (small enough for direct inverse)
   const inv = invert3x3(XtX);
   if (!inv) return null;
-  // β = inv В· Xty
+  // β = inv · Xty
   const beta = [
     inv[0][0] * Xty[0] + inv[0][1] * Xty[1] + inv[0][2] * Xty[2],
     inv[1][0] * Xty[0] + inv[1][1] * Xty[1] + inv[1][2] * Xty[2],
     inv[2][0] * Xty[0] + inv[2][1] * Xty[1] + inv[2][2] * Xty[2],
   ];
   const gamma = beta[1]; // coefficient on y_{t-1}
-  // t-stat: β_j / sqrt(inv[j][j] В· σ^2)
+  // t-stat: β_j / sqrt(inv[j][j] · σ^2)
   // σ^2 = SSR / (n - k)  (k = 3)
   let ssr = 0;
   for (let i = 0; i < m; i++) {
@@ -289,7 +289,7 @@ export function scoreSmart(klines, mcapMap, sym, vol24For) {
   } else {
     mrComponents.hurst = { pts: 0, label: 'N/A' };
   }
-  mrComponents.hurst.tip = 'Hurst в€€ [0.30, 0.50] → цена возвращается к средней (mean-reverting). <0.30 — слишком шумно, >0.50 — тренд.';
+  mrComponents.hurst.tip = 'Hurst ∈ [0.30, 0.50] → цена возвращается к средней (mean-reverting). <0.30 — слишком шумно, >0.50 — тренд.';
   if (vr != null) {
     if (vr < 0.7) { mr += 2; mrComponents.vr = { pts: 2, label: vr.toFixed(3) }; }
     else { mrComponents.vr = { pts: 0, label: vr.toFixed(3) }; }
@@ -351,7 +351,7 @@ export function scoreSmart(klines, mcapMap, sym, vol24For) {
   dirComponents.adfSlope.tip = 'ADF (стационарность) и slope (наклон) согласны по знаку → направление подтверждено двумя независимыми тестами.';
   if (hurst != null && hurst > 0.55 && slopeSign !== 0) {
     dir += 1;
-    dirComponents.hurstTrend = { pts: 1, label: `H=${hurst.toFixed(3)}>0.55, slopeв‰ 0` };
+dirComponents.hurstTrend = { pts: 1, label: `H=${hurst.toFixed(3)}>0.55, slope≠ 0` };
   } else {
     dirComponents.hurstTrend = { pts: 0, label: hurst != null ? `H=${hurst.toFixed(3)}` : 'N/A' };
   }
@@ -416,7 +416,7 @@ export function classifyDirection(row, universeScores) {
  *    - Long HL (> 100 bars): slow reversion → few levels (8) so each step survives.
  *    - Linear interpolation in between, clamped to [8, 24].
  *
- *  Step size: target = GK_vol В· в€љ(T / N), so the grid accumulates a full σ_T move
+ *  Step size: target = GK_vol · √(T / N), so the grid accumulates a full σ_T move
  *  over the half-life, with N intervals catching the move progressively. */
 export function ouGridBounds(closes, klines) {
   if (!closes || closes.length < 30) return null;
@@ -438,7 +438,7 @@ export function ouGridBounds(closes, klines) {
   const logPrices = x.map((v) => Math.log(v));
   const logMu = logPrices.reduce((a, b) => a + b, 0) / logPrices.length;
 
-  // Span: В±1.5 σ_T (covers ~87% of expected distribution over one half-life)
+  // Span: ±1.5 σ_T (covers ~87% of expected distribution over one half-life)
   const sigmaT = gk * Math.sqrt(hlUsed);
   const lower = Math.exp(logMu - 1.5 * sigmaT);
   const upper = Math.exp(logMu + 1.5 * sigmaT);
@@ -809,7 +809,7 @@ export function registerGridSmartScreener(deps) {
             ${SUPPORTED_TFS.map(t => `<option value="${t}"${ui.tf === t ? ' selected' : ''}>${t}</option>`).join('')}
           </select>
         </label>
-        <label title="Минимальный итоговый score (0–13). Банд: в‰Ґ10 зелёный, в‰Ґ7 жёлтый, <7 красный." style="cursor:help;border-bottom:1px dotted var(--text3)">Мин. score <input type="range" id="gbsSmartMinSc" min="0" max="13" value="${ui.minScore}" style="width:100px;vertical-align:middle"></label>
+        <label title="Минимальный итоговый score (0–13). Банд: ≥10 зелёный, ≥7 жёлтый, <7 красный." style="cursor:help;border-bottom:1px dotted var(--text3)">Мин. score <input type="range" id="gbsSmartMinSc" min="0" max="13" value="${ui.minScore}" style="width:100px;vertical-align:middle"></label>
         <span id="gbsSmartMinScV">${ui.minScore}</span>
         <label title="Показывать только ряды с направлением LONG (slope вверх + ADF/slope согласованы)" style="cursor:help"><input type="checkbox" id="gbsSmartLong"${ui.showLong ? ' checked' : ''}> LONG</label>
         <label title="Показывать только ряды с направлением SHORT (slope вниз + ADF/slope согласованы)" style="cursor:help"><input type="checkbox" id="gbsSmartShort"${ui.showShort ? ' checked' : ''}> SHORT</label>
@@ -819,16 +819,16 @@ export function registerGridSmartScreener(deps) {
         <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsSmartLu">—</span></span>
       </div>
       <div style="padding:4px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text3);line-height:1.4">
-        Score: mean-reversion (0–5) + grid fitness (0–5) + directional confidence (0–3). Направление адаптивное: порог = медиана |dirScore| по выборке. Границы: μ В± 1.5σ_T, где σ_T = GKВ·в€љ(half-life). Уровни: 8–24, больше — при коротком half-life.
+        Score: mean-reversion (0–5) + grid fitness (0–5) + directional confidence (0–3). Направление адаптивное: порог = медиана |dirScore| по выборке. Границы: μ ± 1.5σ_T, где σ_T = GK·√(half-life). Уровни: 8–24, больше — при коротком half-life.
       </div>
       <div style="flex:1;min-height:0;overflow:auto">
         <table class="gbs-table" style="width:100%;border-collapse:collapse;font-size:10px">
           <thead><tr>
             <th class="gbs-th" data-k="sym" title="Символ Binance. Клик — открыть график; 🎬 — открыть в Grid Lab с предложенными границами">Тикер</th>
-            <th class="gbs-th" data-k="score" title="Итоговый score 0–13: 5 — mean-reversion, 5 — grid fitness, 3 — directional confidence. в‰Ґ10 зелёный, в‰Ґ7 жёлтый, <7 красный">Score</th>
+            <th class="gbs-th" data-k="score" title="Итоговый score 0–13: 5 — mean-reversion, 5 — grid fitness, 3 — directional confidence. ≥10 зелёный, ≥7 жёлтый, <7 красный">Score</th>
             <th class="gbs-th" data-k="dir" title="Направление сетки: LONG (slope вверх), SHORT (slope вниз), NEUTRAL (без направления). Порог адаптивный по выборке">Dir</th>
             <th class="gbs-th" data-k="conf" title="Уверенность направления: насколько единогласны тесты ADF + slope + Hurst + VWAP. 0–100%">Конф</th>
-            <th class="gbs-th" data-k="mr" title="Mean-reversion quality: Hurst в€€ [0.30,0.50], VR <0.7, OU half-life в€€ [10,50]. Чем выше — тем надёжнее возврат к средней">MR</th>
+            <th class="gbs-th" data-k="mr" title="Mean-reversion quality: Hurst ∈ [0.30,0.50], VR <0.7, OU half-life ∈ [10,50]. Чем выше — тем надёжнее возврат к средней">MR</th>
             <th class="gbs-th" data-k="fit" title="Grid fitness: GK vol 1–5%, vol/mcap >0.05, спред <2%. Чем выше — тем пригоднее для сетки">fit</th>
             <th class="gbs-th" data-k="gkh" title="GK vol / price за один бар, в %. Используется для оценки плотности сетки">ΔH/L</th>
             <th title="Конфлюэнс со старшим TF: вњ“ — наклон согласен по знаку, · — против, — — данных нет">${ui.showConfluence ? 'старш.' : '—'}</th>
@@ -919,7 +919,7 @@ export function registerGridSmartScreener(deps) {
           if (uiRef.applyFiltersAndRender) uiRef.applyFiltersAndRender();
           return;
         }
-        uiRef.diag = `universe ${syms.length}/${baseAll.length || 0} В· mcap…`;
+        uiRef.diag = `universe ${syms.length}/${baseAll.length || 0} · mcap…`;
         if (uiRef.renderMeta) uiRef.renderMeta();
         const mcapMap = await getMcapMap();
         if (isStale()) return;
@@ -927,18 +927,18 @@ export function registerGridSmartScreener(deps) {
         const tfCtx = CONTEXT_TF[tf] || tf;
         const bars = TF_BARS[tf] || 200;
         const barsCtx = tfCtx === tf ? 0 : (TF_BARS[tfCtx] || 100);
-        uiRef.diag = `universe ${syms.length} В· mcap ${mcapMap?.size || 0} В· ${tf}…`;
+        uiRef.diag = `universe ${syms.length} · mcap ${mcapMap?.size || 0} · ${tf}…`;
         if (uiRef.renderMeta) uiRef.renderMeta();
         const kl = await klineCache.batchCached(syms, tf, bars, null, null, 8);
         if (isStale()) return;
         let klCtx = null;
         if (barsCtx > 0) {
-          uiRef.diag = `universe ${syms.length} В· mcap ${mcapMap?.size || 0} В· ${tf} ${Object.keys(kl || {}).length} В· ${tfCtx}…`;
+          uiRef.diag = `universe ${syms.length} · mcap ${mcapMap?.size || 0} · ${tf} ${Object.keys(kl || {}).length} · ${tfCtx}…`;
           if (uiRef.renderMeta) uiRef.renderMeta();
           klCtx = await klineCache.batchCached(syms, tfCtx, barsCtx, null, null, 8);
           if (isStale()) return;
         }
-        uiRef.diag = `universe ${syms.length} В· ${tf} ${Object.keys(kl || {}).length} В· ${tfCtx} ${Object.keys(klCtx || {}).length} В· scoring…`;
+        uiRef.diag = `universe ${syms.length} · ${tf} ${Object.keys(kl || {}).length} · ${tfCtx} ${Object.keys(klCtx || {}).length} · scoring…`;
         if (uiRef.renderMeta) uiRef.renderMeta();
 
         // First pass: compute rows
@@ -967,7 +967,7 @@ export function registerGridSmartScreener(deps) {
 
         uiRef.lastRows = rawRows;
         uiRef.lastRun = Date.now();
-        uiRef.diag = `rows ${rawRows.length}/${syms.length} В· last ${new Date(uiRef.lastRun).toLocaleTimeString()}`;
+        uiRef.diag = `rows ${rawRows.length}/${syms.length} · last ${new Date(uiRef.lastRun).toLocaleTimeString()}`;
         if (!rawRows.length) {
           uiRef.error = 'Список пуст: не удалось получить klines. Возможен rate-limit Binance.';
         }

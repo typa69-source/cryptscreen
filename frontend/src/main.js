@@ -1649,7 +1649,7 @@ function updateChartHeader(slot,sym){
   }
   const corVal=m.corr14??m.corr;
   const elCorr=document.getElementById(`chs${slot}-corr`);
-  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">в€ї</span>${fn(corVal,2)}`:'';
+  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∞</span>${fn(corVal,2)}`:'';
   const dot=document.getElementById(`cgd${slot}`);
   if(dot)styleGroupDot(dot,sym);
   // If stats wrap into two lines, tighten spacing to avoid clipping.
@@ -1771,7 +1771,7 @@ function pixelToPoint(ch,x,y){
   return{time,price};
 }
 
-/** Last / ticker price for Ctrl+snap (OHLC в€Є live). */
+/** Last / ticker price for Ctrl+snap (OHLC ≈ live). */
 function chartLivePriceForSnap(ch){
   const sym=ch.sym||S.fsSym;
   if(sym&&S.tk&&S.tk[sym]!=null&&isFinite(+S.tk[sym].p))return+S.tk[sym].p;
@@ -2135,7 +2135,7 @@ function computeDensities(ch){
   let pMin=Infinity,pMax=-Infinity;
   if(ch.candles.length>0){
     const cp=ch.candles[ch.candles.length-1].c;
-    pMin=cp*0.7;pMax=cp*1.3; // В±30% from current price • narrower, more relevant
+    pMin=cp*0.7;pMax=cp*1.3; // ±30% from current price • narrower, more relevant
   }else{all.forEach(([p])=>{pMin=Math.min(pMin,p);pMax=Math.max(pMax,p);});}
   const relevant=all.filter(([p])=>p>=pMin&&p<=pMax);
   if(relevant.length<3)return[];
@@ -2586,7 +2586,7 @@ function drawAlertRay(ctx,ch,d,W,hov){
   ctx.moveTo(xs,y);ctx.lineTo(W,y);ctx.stroke();ctx.setLineDash([]);
   ctx.fillStyle=col;ctx.font='9px JetBrains Mono,monospace';
   ctx.textAlign='right';
-  const pctLabel=d.alertPct!=null?` В±${d.alertPct}%`:'';
+  const pctLabel=d.alertPct!=null?` ±${d.alertPct}%`:'';
   ctx.fillText(fmtPrice(d.p1.price)+pctLabel,W-3,y-3);
   ctx.textAlign='left';
   ctx.beginPath();ctx.arc(xs,y,3,0,Math.PI*2);ctx.fill();
@@ -2603,7 +2603,7 @@ function drawAlertTLine(ctx,ch,d,hov){
   const col=drawingLineColor(d);
   ctx.save();
   if(hov){ctx.shadowColor=col;ctx.shadowBlur=6;}
-  // #7: Draw В±alertPct% band
+  // #7: Draw ±alertPct% band
   if(d.alertPct!=null&&d.alertPct>0){
     const factor=d.alertPct/100;
     // Upper band points (prices * (1+factor))
@@ -2632,7 +2632,7 @@ function drawAlertTLine(ctx,ch,d,hov){
   if(d.alertPct!=null){
     const mx=(x1+x2)/2,my=(y1+y2)/2;
     ctx.font='bold 9px JetBrains Mono,monospace';ctx.fillStyle=col;ctx.textAlign='center';
-    ctx.fillText(`В±${d.alertPct}%`,mx,my-6);
+    ctx.fillText(`±${d.alertPct}%`,mx,my-6);
   }
   ctx.restore();
 }
@@ -2744,7 +2744,7 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   ctx.fillStyle=slCol;
   ctx.fillText(`SL ${fmtPrice(slPrice)} (${pctSl>=0?'+':''}${pctSl.toFixed(2)}%)`,rx+4,ySl+3);
   ctx.fillStyle='#ffffff88';ctx.font='9px JetBrains Mono,monospace';
-  ctx.fillText(`Вход ${fmtPrice(entryPrice)} В· R:R ${rr.toFixed(1)}:1`,lx+3,yEntry-4);
+  ctx.fillText(`Вход ${fmtPrice(entryPrice)} · R:R ${rr.toFixed(1)}:1`,lx+3,yEntry-4);
   ctx.fillStyle=dirCol;ctx.font='bold 10px JetBrains Mono,monospace';ctx.textAlign='center';
   ctx.fillText(isLong?'в–І ЛОНГ':'в–ј ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
   ctx.globalAlpha=1;ctx.restore();
@@ -2876,7 +2876,7 @@ function checkEMACrossovers(ch){
       const lastAlert=_emaCrossAlerted[key]||0;
       if(now-lastAlert<60000)continue; // 1 min cooldown
       _emaCrossAlerted[key]=now;
-      const dir=isAbove?'в†‘':'в†“';
+      const dir=isAbove?'↑':'↓';
       const label=isAbove?'Бычье пересечение':'Медвежье пересечение';
       if(S.emaCrossSound)playAlert(isAbove?880:440);
       S.alertLog.unshift({ts:now,sym,curPrice:a1,linePrice:b1,distPct:0,
@@ -2964,12 +2964,12 @@ function renderAlertLog(){
         <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(a.curPrice)}</span>
       </div>`;
     }
-    const dir=a.curPrice>=a.linePrice?'в†‘':'в†“';
+    const dir=a.curPrice>=a.linePrice?'↑':'↓';
     return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="Открыть ${symShort}">
       <span style="color:var(--text3);font-size:9px">${tStr}</span>
       <span style="color:#fff;font-weight:600;margin:0 5px">${symShort}</span>
       <span style="color:#a855f7">${dir} ${fmtPrice(a.curPrice)}</span>
-      <span style="color:var(--text3);font-size:9px;margin-left:auto">в‰€уровень ${fmtPrice(a.linePrice)}</span>
+      <span style="color:var(--text3);font-size:9px;margin-left:auto">≈уровень ${fmtPrice(a.linePrice)}</span>
     </div>`;
   }).join('');
 }
@@ -3007,7 +3007,7 @@ function showAlertPctInput(ch,drawing,container){
   wrap.style.cssText=`position:fixed;z-index:500;left:${r.left+px}px;top:${r.top+py-14}px;
     background:var(--bg3);border:1px solid #a855f7;border-radius:4px;padding:3px 6px;
     display:flex;align-items:center;gap:4px;font-size:10px;color:#a855f7;font-family:inherit;`;
-  wrap.innerHTML=`<span>В±</span>
+  wrap.innerHTML=`<span>±</span>
     <input id="alertPctInp" type="number" min="0.01" max="99" step="0.1" placeholder="0.5"
       style="width:46px;background:transparent;border:none;outline:none;color:#a855f7;font:inherit;font-size:10px">
     <span>%</span>`;
@@ -3431,7 +3431,7 @@ function ensureQuickFindUI(){
     <input id="qfInput" type="text" autocomplete="off" spellcheck="false" placeholder="Начните вводить тикервЂ¦"
       style="width:100%;box-sizing:border-box;background:#161619;border:1px solid #252530;border-radius:4px;padding:8px 10px;color:#e2e8f0;font:inherit;font-size:12px;outline:none">
     <div id="qfList" style="max-height:240px;overflow:auto;margin-top:8px;font-size:11px"></div>
-    <div style="font-size:9px;color:#454555;margin-top:8px">Enter • выбрать первую В· Esc • закрыть</div>
+    <div style="font-size:9px;color:#454555;margin-top:8px">Enter • выбрать первую · Esc • закрыть</div>
   </div></div>`;
   document.body.appendChild(d);
   d.addEventListener('mousedown',ev=>{if(ev.target===d)closeQuickFind();});
@@ -4409,7 +4409,7 @@ function updateFsHeaderValues(){
   }
   const corVal=m.corr14??m.corr;
   const elCorr=document.getElementById('fsStat-corr');
-  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">в€ї</span>${fn(corVal,2)}`:'';
+  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∞</span>${fn(corVal,2)}`:'';
 }
 
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
@@ -4914,7 +4914,7 @@ function updateHeaderStreamStatus(){
     return;
   }
   const s=Math.round(worst/1000);
-  hs.textContent=s<=1?'Поток ок':'Поток ок В· '+s+'с';
+  hs.textContent=s<=1?'Поток ок':'Поток ок · '+s+'с';
   _setHeaderLiveDot('');
 }
 
@@ -4931,7 +4931,7 @@ function syncChartSyncBtnUi(){
   const b=document.getElementById('chartSyncBtn');
   if(!b)return;
   b.classList.toggle('on',S.chartAutoSync);
-  b.textContent=S.chartAutoSync?'ГрафыВ·авто':'ГрафыВ·стоп';
+  b.textContent=S.chartAutoSync?'Графы·авто':'Графы·стоп';
   b.title=S.chartAutoSync
     ?'Вкл: мини-графики 3Г—3 подстраиваются под текущий топ страницы при живой сортировке. Список всегда обновляется.'
     :'Выкл: список обновляется, но символы в сетке графиков не меняются сами • пока не перелистнёте страницу или не смените сортировку вручную.';
@@ -5285,7 +5285,7 @@ function buildGroupFilterBar(){
         btn.style.background=GROUP_COLORS[g];
         btn.textContent='';
       }
-      btn.title=`${g===FAVORITE_GROUP_ID?'Рзбранное':`Группа ${g}`} (${cnt} монет). ЛКМ • фильтр В· ПКМ • очистить группу`;
+      btn.title=`${g===FAVORITE_GROUP_ID?'Рзбранное':`Группа ${g}`} (${cnt} монет). ЛКМ • фильтр · ПКМ • очистить группу`;
       btn.onclick=()=>{
         const next=S.activeGroupFilter===g?0:g;
         S.activeGroupFilter=next;
@@ -5389,7 +5389,7 @@ function showQuickGroupChanger(sym,anchorEl){
     const dot=document.createElement('div');dot.className='cg-dot';
     dot.style.background=GROUP_COLORS[g];
     if(getSymGroup(sym)===g)dot.style.outline='2px solid #fff';
-    dot.title=`Группа ${g} В· нажмите чтобы установить`;
+    dot.title=`Группа ${g} · нажмите чтобы установить`;
     dot.onclick=()=>{S.lastGroupUsed=g;setSymGroup(sym,g);pick.remove();syncAllGroupDots(sym);};
     row.appendChild(dot);
   }
@@ -5397,7 +5397,7 @@ function showQuickGroupChanger(sym,anchorEl){
   const fav=document.createElement('div');
   fav.className='cg-dot cg-fav-dot';
   fav.textContent='в…';
-  fav.title='Рзбранное В· нажмите чтобы добавить/убрать';
+  fav.title='Рзбранное · нажмите чтобы добавить/убрать';
   if(favOn)fav.style.outline='2px solid #fff';
   fav.onclick=()=>{setSymFavorite(sym,!favOn);pick.remove();syncAllGroupDots(sym);};
   row.appendChild(fav);
@@ -5628,7 +5628,7 @@ function renderSettingsGen(body){
     <div style="font-size:9px;color:var(--text3);line-height:1.45">Пивоты + касания свечей. Поддержка • по минимумам, сопротивление • по максимумам.</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px">
       <label>Пивот (бар) <input type="number" min="2" max="8" value="${S.autoTrend.pivotBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('pivotBars',+this.value)"></label>
-      <label>Касания в‰Ґ <input type="number" min="2" max="8" value="${S.autoTrend.minTouches}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('minTouches',+this.value)"></label>
+      <label>Касания ≥ <input type="number" min="2" max="8" value="${S.autoTrend.minTouches}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('minTouches',+this.value)"></label>
       <label>Допуск % <input type="number" min="0.05" max="2" step="0.05" value="${S.autoTrend.touchPct}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('touchPct',+this.value)"></label>
       <label>Макс. линий <input type="number" min="1" max="10" value="${S.autoTrend.maxLines}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('maxLines',+this.value)"></label>
       <label>Окно баров <input type="number" min="60" max="400" value="${S.autoTrend.lookback}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('lookback',+this.value)"></label>
@@ -5686,7 +5686,7 @@ function renderSettingsGen(body){
   <div class="smodal-row" style="border-bottom:none;padding-top:0">
     <span class="smodal-lbl" style="flex:1;font-size:8px;color:var(--text3);line-height:1.45;font-weight:400">Границы в UTC (как у глобальных рынков). Пересечения: приоритет NY → Лондон → Азия; вне зон • приглушённая полоса В«мёртвое времяВ».</span>
   </div>
-  <div class="smodal-ver">CryptScreen v1.4 В· Binance Futures</div>`;
+  <div class="smodal-ver">CryptScreen v1.4 · Binance Futures</div>`;
 }
 
 function setChartAutoSyncOpt(on){
@@ -6602,8 +6602,8 @@ function renderPotentialPanel(){
       const parts=[];
       if(c.field==='emaTouch')parts.push(`period=${Math.max(2,Math.min(400,c.period||20))}`);
       else{
-        if(c.min!=null)parts.push(`в‰Ґ${c.min}${f?.unit||''}`);
-        if(c.max!=null)parts.push(`в‰¤${c.max}${f?.unit||''}`);
+        if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
+        if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
       }
       const absTxt=c.abs&&['ch24','ch7d','cday','bbBreak'].includes(c.field)?'|.| ':'';
       return`<span class="pot-cond-tag">${absTxt}${f?.label||c.field} ${parts.join(' ')}</span>`;
@@ -6637,9 +6637,9 @@ function renderPotentialPanel(){
         if(c.field==='emaTouch')val=calcEmaTouchSignal(sym,c.period||20);
         let fmt;
         if(c.field==='vol24'||c.field==='trd24')fmt=fk(val);
-        else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'вњ“':'В·';
-        else if(c.field==='bbBreak')fmt=val>0?'в†‘':val<0?'в†“':'В·';
-        else if(c.field==='emaTouch')fmt=val>=1?`вњ“(${Math.max(2,Math.min(400,c.period||20))})`:`В·(${Math.max(2,Math.min(400,c.period||20))})`;
+        else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'вњ“':'·';
+        else if(c.field==='bbBreak')fmt=val>0?'↑':val<0?'↓':'·';
+        else if(c.field==='emaTouch')fmt=val>=1?`вњ“(${Math.max(2,Math.min(400,c.period||20))})`:`·(${Math.max(2,Math.min(400,c.period||20))})`;
         else fmt=val!=null?fn(val,2):'•';
         const absTxt=c.abs&&['ch24','ch7d','cday','bbBreak'].includes(c.field)?'|.| ':'';
         return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit?f.unit:''}</span>`;
