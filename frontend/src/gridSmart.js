@@ -430,9 +430,11 @@ export function ouGridBounds(closes, klines) {
   const hlUsed = hlRaw != null ? Math.max(5, Math.min(200, hlRaw)) : 50;
 
   // Adaptive level count: short HL → many levels, long HL → few.
+  // The cap scales up with lookback size so denser grids are allowed when
+  // we have a long enough history for the HL estimate to be reliable.
   const levels = hlRaw == null
     ? 12                                // trending fallback
-    : optimalLevelsForHalfLife(hlRaw);
+    : optimalLevelsForHalfLife(hlRaw, x.length);
 
   // μ = geometric mean of closes (= exp(mean(log(closes))))
   const logPrices = x.map((v) => Math.log(v));
@@ -450,17 +452,34 @@ export function ouGridBounds(closes, klines) {
   return { lower, upper, step, levels, sigmaT, hl: hlRaw };
 }
 
-/** Optimal grid level count based on half-life.
+/** Max level count for a given lookback size.
+ *  We can fit more grid levels when we have a longer history — the HL
+ *  estimate is more stable, so a finer grid is justified. Caps:
+ *    nBars < 60       → 20 (sparse data; coarser grid)
+ *    60 ≤ nBars < 120 → 24 (default)
+ *    120 ≤ nBars < 200 → 28 (enough history for finer grid)
+ *    nBars ≥ 200      → 32 (long lookback; precise HL allows dense grid)
+ *  Minimum cap is always 8. */
+export function adaptiveLevelCap(nBars) {
+  if (!isFinite(nBars) || nBars < 60) return 20;
+  if (nBars < 120) return 24;
+  if (nBars < 200) return 28;
+  return 32;
+}
+
+/** Optimal grid level count based on half-life and lookback size.
  *  Empirical: HL 20 → 24 levels; HL 100 → 8 levels; linear in between.
- *  HL < 10 → 24 (very fast reversion); HL > 200 → 8 (very slow).
- *  null/NaN/non-positive → 12 (safe middle default for trending series). */
-export function optimalLevelsForHalfLife(hl) {
+ *  HL < 10 → maxLevels (very fast reversion); HL > 200 → 8 (very slow).
+ *  null/NaN/non-positive → 12 (safe middle default for trending series).
+ *  `nBars` (optional) widens the upper cap when more data is available. */
+export function optimalLevelsForHalfLife(hl, nBars) {
+  const cap = adaptiveLevelCap(nBars);
   if (hl == null || !isFinite(hl) || hl <= 0) return 12;
-  if (hl <= 10) return 24;
+  if (hl <= 10) return cap;
   if (hl >= 100) return 8;
-  // Linear interpolation: 24 - (hl - 10) * (24 - 8) / (100 - 10)
-  const n = 24 - (hl - 10) * 16 / 90;
-  return Math.max(8, Math.min(24, Math.round(n)));
+  // Linear interpolation: cap - (hl - 10) * (cap - 8) / (100 - 10)
+  const n = cap - (hl - 10) * (cap - 8) / 90;
+  return Math.max(8, Math.min(cap, Math.round(n)));
 }
 
 /** Compute the full row for one symbol. `kl` is the working-TF klines,
