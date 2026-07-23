@@ -7092,7 +7092,7 @@ function renderGridLabModal(defSymOpt){
   box.style.cssText='width:min(1220px,98vw);height:min(860px,94vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
   box.innerHTML=`
     <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)">
-      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab В· Сетка + Coin Selector</span>
+      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Сетка + Coin Selector</span>
       <button class="tbtn on" id="gridTabBacktest">Сетка</button>
       <button class="tbtn" id="gridTabSelector">Coin Selector</button>
       <button class="tbtn" id="gridCloseBtn">Закрыть</button>

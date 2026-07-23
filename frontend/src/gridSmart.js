@@ -797,7 +797,7 @@ export function registerGridSmartScreener(deps) {
 
     box.innerHTML = `
       <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
-        <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Smart В· OU-фильтр</span>
+        <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Smart · OU-фильтр</span>
         <span id="gbsSmartSk" style="font-size:10px;color:var(--text3);display:none">Обновление…</span>
         <span id="gbsSmartDiag" style="font-size:9px;color:var(--text3)"></span>
         <button class="tbtn" id="gbsSmartRf">Обновить</button>
