@@ -33,6 +33,10 @@ import {
   getGridSelectorRows as getGridSelectorRowsUi,
   renderGridRiskProfile as renderGridRiskProfileUi,
   renderManualBacktestPreviewUi,
+  scheduleGridLabSync as scheduleGridLabSyncUi,
+  runGridLabSync as runGridLabSyncUi,
+  collectGridLabFields,
+  detectBoundsChanges,
 } from './gridLab-ui.js'
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
@@ -7065,79 +7069,18 @@ function renderManualBacktestPreview(body, out, gbPrefs, viewOpts) {
 }
 
 
-async function runGridLabSync(body,gbPrefs,opt={}){
-  const reuse=!!opt.reuseCandles;
-  const lcRef=body._gbChartCtx?.lc;
-  const want=reuse&&lcRef?gbWantBarsFromVisible(lcRef,940):Math.max(400,Math.min(1200,+(gbPrefs.global?.bars||940)));
-  const cfg=readGridLabInputs(body,gbPrefs,want,reuse&&body._gbChartCtx?.merged?.length?body._gbChartCtx.merged:[]);
-  cfg.sym=String(cfg.sym||'').trim();
-  if(!cfg.sym)return;
-  cfg.gridMode=['neutral','long','short'].includes(cfg.gridMode)?cfg.gridMode:'neutral';
-  let candles=[];
-  if(reuse&&body._gbChartCtx?.merged?.length)candles=body._gbChartCtx.merged;
-  else{
-    candles=await ensureBacktestCandles(cfg.sym,cfg.tf,want);
-    if(candles.length>want)candles=candles.slice(-want);
-  }
-  cfg.candles=candles;
-  gbPrefs.global.tf=cfg.tf;
-  gbPrefs.global.levels=cfg.levels;
-  gbPrefs.global.leverage=cfg.leverage;
-  gbPrefs.global.deposit=cfg.deposit;
-  gbPrefs.global.gridMode=cfg.gridMode;
-  const rL=parseFloat(body.querySelector('#gbRatioLong')?.value||'');
-  const rS=parseFloat(body.querySelector('#gbRatioShort')?.value||'');
-  const rP=parseFloat(body.querySelector('#gbRatioStep')?.value||'');
-  if(isFinite(rL))gbPrefs.global.ratioLong=rL;
-  if(isFinite(rS))gbPrefs.global.ratioShort=rS;
-  if(isFinite(rP))gbPrefs.global.ratioStepPct=rP;
-  if(!gbPrefs.symbolBounds||typeof gbPrefs.symbolBounds!=='object')gbPrefs.symbolBounds={};
-  const loP=body.querySelector('#gbLow')?.value;
-  const hiP=body.querySelector('#gbHigh')?.value;
-  const loNv=parseFloat(loP||'');
-  const hiNv=parseFloat(hiP||'');
-  const prevB=gbPrefs.symbolBounds[cfg.sym]||{};
-  const loCh=loP!=null&&String(loP).trim()!==''&&isFinite(loNv)&&prevB.lower!==loNv;
-  const hiCh=hiP!=null&&String(hiP).trim()!==''&&isFinite(hiNv)&&prevB.upper!==hiNv;
-  const lvlCh=prevB.levels!=null&&prevB.levels!==cfg.levels;
-  gbPrefs.symbolBounds[cfg.sym]={
-    ...prevB,
-    lower:(loP!=null&&String(loP).trim()!==''&&isFinite(loNv))?loNv:null,
-    upper:(hiP!=null&&String(hiP).trim()!==''&&isFinite(hiNv))?hiNv:null,
-    levels:cfg.levels,
-  };
-  if(loCh||hiCh||lvlCh)delete gbPrefs.symbolBounds[cfg.sym].gridLevels;
-  saveGridLabPrefs(gbPrefs);
-  cfg.anchorPrice=gbPrefs.symbolBounds[cfg.sym]?.anchorPrice;
-  cfg.gridLevels=gbPrefs.symbolBounds[cfg.sym]?.gridLevels||null;
-  const out=compileGridLabState(cfg);
-  out.gridRiskMode=cfg.gridMode;
-  const el=body.querySelector('#gbOut');
-  if(!out.ok){
-    if(el)el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;
-    renderManualBacktestPreview(body,null,gbPrefs,{});renderGridRiskProfile(body,null);return;
-  }
-  const sp=out.stepPcts||{};
-  const pctTxt=(sp.min!=null&&sp.max!=null)
-    ?` В· между сетками: <b style="color:#e2e8f0">${fn(sp.min,2)}%</b> — <b style="color:#e2e8f0">${fn(sp.max,2)}%</b>${sp.avg!=null?` (ср. ${fn(sp.avg,2)}%)`:''}`
-    :'';
-  if(el)el.innerHTML=`<span style="color:var(--text3)">${out.symbol.replace(/USDT$/,'')} В· ${out.tf} В· ${out.candles.length} баров В· шаг ${fmtPrice(out.step)}${pctTxt} • верх/низ: тянуть на графике В· #0: тянуть в панели В«Риск-профильВ».</span>`;
-  const keepVp=!!(reuse&&lcRef&&body._gbChartCtx?.merged?.length);
-  renderManualBacktestPreview(body,out,gbPrefs,{keepViewport:keepVp});
-  const lcA=body._gbChartCtx?.lc,csA=body._gbChartCtx?.cs;
-  if(keepVp&&lcA&&csA&&body._gbPendingViewport){
-    const snap=body._gbPendingViewport;
-    requestAnimationFrame(()=>{
-      try{applyGbViewportFreeze(lcA,csA,snap);}catch(e){}
-      requestAnimationFrame(()=>{try{applyGbViewportFreeze(lcA,csA,snap);}catch(e){}});
-    });
-  }
-  renderGridRiskProfile(body,out,gbPrefs);
+function scheduleGridLabSync(body, gbPrefs, opt = {}) {
+  scheduleGridLabSyncUi(body, gbPrefs, opt);
 }
-function scheduleGridLabSync(body,gbPrefs,opt={}){
-  if(body._gbSuppressChartSync)return;
-  if(body._gridLabUiTimer)clearTimeout(body._gridLabUiTimer);
-  body._gridLabUiTimer=setTimeout(()=>{void runGridLabSync(body,gbPrefs,opt);},opt.immediate?0:95);
+
+function runGridLabSync(body, gbPrefs, opt = {}) {
+  return runGridLabSyncUi(body, gbPrefs, opt, {
+    fn, fmtPrice,
+    ensureBacktestCandles,
+    readGridLabInputsFn: readGridLabInputs,
+    renderPreviewFn: renderManualBacktestPreview,
+    renderRiskFn: renderGridRiskProfile,
+  });
 }
 
 function renderGridLabModal(defSymOpt){

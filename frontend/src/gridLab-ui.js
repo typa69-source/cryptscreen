@@ -15,6 +15,8 @@ import {
   applyGbViewportFreeze,
   gridRiskMetaForPrice,
   fmtGridLineTitle,
+  gbWantBarsFromVisible,
+  compileGridLabState,
 } from './gridLab.js';
 
 const MAX_UNDO = 50;
@@ -399,6 +401,171 @@ export function renderGridRiskProfile(host, body, out, gbPrefs, deps) {
   }
 }
 
+
+
+/* ═══════════════════════════════════════════════════════════════
+ *  Grid Lab sync orchestration (Step 3B.4)
+ *  Async flow: read inputs → fetch candles → compile → render.
+ *  Re-exported at top to avoid circular deps in main.js.
+ * ═══════════════════════════════════════════════════════════════ */
+
+/**
+ * Debounced scheduler. Avoids spamming backtest runs while user drags inputs.
+ * Honours body._gbSuppressChartSync (set during drag operations).
+ */
+export function scheduleGridLabSync(body, gbPrefs, opt = {}) {
+  if (body._gbSuppressChartSync) return;
+  if (body._gridLabUiTimer) clearTimeout(body._gridLabUiTimer);
+  const delay = opt.immediate ? 0 : 95;
+  body._gridLabUiTimer = setTimeout(() => { void runGridLabSync(body, gbPrefs, opt); }, delay);
+}
+
+/**
+ * Async orchestrator for a single Grid Lab backtest cycle.
+ * Dependencies are injected (runGridLabSync calls back into this module's
+ * siblings via explicit deps, no self-import).
+ */
+export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
+  const reuse = !!opt.reuseCandles;
+  const lcRef = body._gbChartCtx?.lc;
+  const want = reuse && lcRef
+    ? gbWantBarsFromVisible(lcRef, 940)
+    : Math.max(400, Math.min(1200, +(gbPrefs.global?.bars || 940)));
+
+  // Resolve deps: caller's injected fns > local fallbacks.
+  const ensureBacktestCandles = deps.ensureBacktestCandles;
+  if (typeof ensureBacktestCandles !== 'function') {
+    // Defer to caller via global if not injected — for backward compat.
+    throw new Error('runGridLabSync: deps.ensureBacktestCandles is required');
+  }
+  const readGridLabInputsFn = deps.readGridLabInputsFn || readGridLabInputsUi;
+  const renderPreviewFn = deps.renderPreviewFn || renderManualBacktestPreviewUi;
+  const renderRiskFn = deps.renderRiskFn || renderGridRiskProfileUi;
+  const fn = deps.fn || ((v, d) => String(v));
+  const fmtPrice = deps.fmtPrice || ((p) => String(p));
+
+  const fields = collectGridLabFields(body);
+  const cfg = readGridLabInputsFn(fields, gbPrefs, want,
+    reuse && body._gbChartCtx?.merged?.length ? body._gbChartCtx.merged : []);
+  cfg.sym = String(cfg.sym || '').trim();
+  if (!cfg.sym) return;
+  cfg.gridMode = ['neutral', 'long', 'short'].includes(cfg.gridMode) ? cfg.gridMode : 'neutral';
+
+  let candles = [];
+  if (reuse && body._gbChartCtx?.merged?.length) {
+    candles = body._gbChartCtx.merged;
+  } else {
+    candles = await ensureBacktestCandles(cfg.sym, cfg.tf, want);
+    if (candles.length > want) candles = candles.slice(-want);
+  }
+  cfg.candles = candles;
+
+  // Persist resolved settings
+  gbPrefs.global.tf = cfg.tf;
+  gbPrefs.global.levels = cfg.levels;
+  gbPrefs.global.leverage = cfg.leverage;
+  gbPrefs.global.deposit = cfg.deposit;
+  gbPrefs.global.gridMode = cfg.gridMode;
+
+  const rL = parseFloat(body.querySelector('#gbRatioLong')?.value || '');
+  const rS = parseFloat(body.querySelector('#gbRatioShort')?.value || '');
+  const rP = parseFloat(body.querySelector('#gbRatioStep')?.value || '');
+  if (isFinite(rL)) gbPrefs.global.ratioLong = rL;
+  if (isFinite(rS)) gbPrefs.global.ratioShort = rS;
+  if (isFinite(rP)) gbPrefs.global.ratioStepPct = rP;
+
+  if (!gbPrefs.symbolBounds || typeof gbPrefs.symbolBounds !== 'object') {
+    gbPrefs.symbolBounds = {};
+  }
+  const loP = body.querySelector('#gbLow')?.value;
+  const hiP = body.querySelector('#gbHigh')?.value;
+  const loNv = parseFloat(loP || '');
+  const hiNv = parseFloat(hiP || '');
+  const prevB = gbPrefs.symbolBounds[cfg.sym] || {};
+  const loCh = loP != null && String(loP).trim() !== '' && isFinite(loNv) && prevB.lower !== loNv;
+  const hiCh = hiP != null && String(hiP).trim() !== '' && isFinite(hiNv) && prevB.upper !== hiNv;
+  const lvlCh = prevB.levels != null && prevB.levels !== cfg.levels;
+  gbPrefs.symbolBounds[cfg.sym] = {
+    ...prevB,
+    lower: (loP != null && String(loP).trim() !== '' && isFinite(loNv)) ? loNv : null,
+    upper: (hiP != null && String(hiP).trim() !== '' && isFinite(hiNv)) ? hiNv : null,
+    levels: cfg.levels,
+  };
+  if (loCh || hiCh || lvlCh) delete gbPrefs.symbolBounds[cfg.sym].gridLevels;
+  saveGridLabPrefs(gbPrefs);
+
+  cfg.anchorPrice = gbPrefs.symbolBounds[cfg.sym]?.anchorPrice;
+  cfg.gridLevels = gbPrefs.symbolBounds[cfg.sym]?.gridLevels || null;
+
+  const out = compileGridLabState(cfg);
+  out.gridRiskMode = cfg.gridMode;
+
+  const el = body.querySelector('#gbOut');
+  if (!out.ok) {
+    if (el) el.innerHTML = `<span style="color:#ef4444">${out.msg}</span>`;
+    renderManualBacktestPreviewUi(body, null, gbPrefs, {});
+    renderGridRiskProfileUi(body, null, gbPrefs, null);
+    return;
+  }
+
+  const sp = out.stepPcts || {};
+  const pctTxt = (sp.min != null && sp.max != null)
+    ? ` · между сетками: <b style="color:#e2e8f0">${fn(sp.min, 2)}%</b> — <b style="color:#e2e8f0">${fn(sp.max, 2)}%</b>${sp.avg != null ? ` (ср. ${fn(sp.avg, 2)}%)` : ''}`
+    : '';
+  if (el) {
+    el.innerHTML = `<span style="color:var(--text3)">${out.symbol.replace(/USDT$/, '')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)}${pctTxt} • верх/низ: тянуть на графике · #0: тянуть в панели «Риск-профиль».</span>`;
+  }
+
+  const keepVp = !!(reuse && lcRef && body._gbChartCtx?.merged?.length);
+  renderManualBacktestPreviewUi(body, out, gbPrefs, { keepViewport: keepVp });
+
+  if (keepVp) {
+    const lcA = body._gbChartCtx?.lc;
+    const csA = body._gbChartCtx?.cs;
+    if (lcA && csA && body._gbPendingViewport) {
+      const snap = body._gbPendingViewport;
+      requestAnimationFrame(() => {
+        try { applyGbViewportFreeze(lcA, csA, snap); } catch (e) { /* ignore */ }
+        requestAnimationFrame(() => {
+          try { applyGbViewportFreeze(lcA, csA, snap); } catch (e) { /* ignore */ }
+        });
+      });
+    }
+  }
+
+  renderGridRiskProfileUi(body, out, gbPrefs, null);
+}
+
+/**
+ * Collect raw field values from the Grid Lab form into a plain object.
+ * Pure-ish: reads DOM but returns plain values, no transformation.
+ */
+export function collectGridLabFields(body) {
+  return {
+    sym: body.querySelector('#gbSym')?.value,
+    tf: body.querySelector('#gbTf')?.value,
+    upper: body.querySelector('#gbHigh')?.value,
+    lower: body.querySelector('#gbLow')?.value,
+    levels: body.querySelector('#gbLevels')?.value,
+    leverage: body.querySelector('#gbLev')?.value,
+    deposit: body.querySelector('#gbDep')?.value,
+    gridMode: body.querySelector('#gbMode')?.value,
+    anchorPrice: body.querySelector('#gbAnchor')?.value,
+  };
+}
+
+/**
+ * Detect changes between current form values and previously-saved bounds.
+ * Pure: returns {loCh, hiCh, lvlCh}.
+ */
+export function detectBoundsChanges(formLo, formHi, formLevels, prevB) {
+  const loNv = parseFloat(formLo || '');
+  const hiNv = parseFloat(formHi || '');
+  const loCh = formLo != null && String(formLo).trim() !== '' && isFinite(loNv) && prevB.lower !== loNv;
+  const hiCh = formHi != null && String(formHi).trim() !== '' && isFinite(hiNv) && prevB.upper !== hiNv;
+  const lvlCh = prevB.levels != null && prevB.levels !== formLevels;
+  return { loCh, hiCh, lvlCh };
+}
 
 // ═══════════════════════════════════════════════════════════════
 //  Manual backtest preview helpers (Step 3B.3)
