@@ -37,6 +37,7 @@ import {
   runGridLabSync as runGridLabSyncUi,
   collectGridLabFields,
   detectBoundsChanges,
+  renderGridLabModal as renderGridLabModalUi,
 } from './gridLab-ui.js'
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
@@ -7083,148 +7084,18 @@ function runGridLabSync(body, gbPrefs, opt = {}) {
   });
 }
 
-function renderGridLabModal(defSymOpt){
-  const old=document.getElementById('gridLabModal');if(old)old.remove();
-  const modal=document.createElement('div');
-  modal.id='gridLabModal';
-  modal.style.cssText='position:fixed;inset:0;z-index:820;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;';
-  const box=document.createElement('div');
-  box.style.cssText='width:min(1220px,98vw);height:min(860px,94vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
-  box.innerHTML=`
-    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)">
-      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Сетка + Coin Selector</span>
-      <button class="tbtn on" id="gridTabBacktest">Сетка</button>
-      <button class="tbtn" id="gridTabSelector">Coin Selector</button>
-      <button class="tbtn" id="gridCloseBtn">Закрыть</button>
-    </div>
-    <div id="gridLabBody" style="flex:1;min-height:0;overflow:auto;padding:12px"></div>
-  `;
-  modal.appendChild(box);
-  document.body.appendChild(modal);
-  const body=box.querySelector('#gridLabBody');
-  const btnSel=box.querySelector('#gridTabSelector');
-  const btnBt=box.querySelector('#gridTabBacktest');
-  const gbPrefs=loadGridLabPrefs();
-  modal._gbBoundsUndo=[];
-  modal._gbBoundsRedo=[];
-  const gbKeydown=e=>{
-    if(e.defaultPrevented)return;
-    if(!document.getElementById('gridLabModal')){document.removeEventListener('keydown',gbKeydown,true);return;}
-    const ae=document.activeElement;
-    if(ae&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'||ae.tagName==='SELECT'))return;
-    if(!e.ctrlKey||e.altKey||e.metaKey)return;
-    if(e.key!=='z'&&e.key!=='Z')return;
-    if(!body.querySelector('#gbChartWrap'))return;
-    if(e.shiftKey)gridLabBoundsRedo(body,gbPrefs);
-    else gridLabBoundsUndo(body,gbPrefs);
-    e.preventDefault();
-  };
-  document.addEventListener('keydown',gbKeydown,true);
-  const setTab=(tab)=>{
-    btnBt.classList.toggle('on',tab==='backtest');
-    btnSel.classList.toggle('on',tab==='selector');
-    if(tab==='selector'){
-      const rows=getGridSelectorRows(24);
-      body.innerHTML=`
-      <div style="font-size:10px;color:var(--text3);margin-bottom:8px">Топ монет по пригодности к grid (ликвидность, ренж, mean-reversion, активность).</div>
-      <div style="font-size:9px;color:var(--text3);line-height:1.4;margin:0 0 9px 0">
-        GridScore = 24% ренж за 24ч + 20% NATR (5m) + 22% mean-reversion (меньше направленного тренда за 24ч) + 22% ликвидность (объём) + 12% активность (сделки). Чем выше score, тем обычно стабильнее и "рабочее" поведение для сетки.
-      </div>
-        <div style="display:grid;grid-template-columns:110px repeat(6,1fr);gap:6px;font-size:9px">
-          <div style="color:var(--text3)">Символ</div><div style="color:var(--text3)">GridScore</div><div style="color:var(--text3)">Ренж24</div><div style="color:var(--text3)">NATR5m</div><div style="color:var(--text3)">РЗМ24</div><div style="color:var(--text3)">Объём24</div><div style="color:var(--text3)">Сделки24</div>
-          ${rows.map(r=>`<div style="font-weight:600;color:#fff;cursor:pointer" onclick="openFullscreenBySym('${r.sym}')">${r.sym.replace(/USDT$/,'')}</div><div>${fn(r.score,1)}</div><div>${fn(r.range24,2)}%</div><div>${fn(r.natr,2)}%</div><div class="${r.ch24>=0?'p':'n'}">${r.ch24>=0?'+':''}${fn(r.ch24,2)}%</div><div>${fk(r.vol24)}</div><div>${fk(r.trd24)}</div>`).join('')}
-        </div>`;
-      return;
-    }
-    const defSym = defSymOpt || (S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
-    const sb=(gbPrefs.symbolBounds&&gbPrefs.symbolBounds[defSym])||{};
-    body.innerHTML=`
-      <div style="display:flex;flex-direction:column;gap:8px;min-height:min(72vh,720px)">
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:0;flex-shrink:0">
-        <label style="font-size:9px;color:var(--text3)">Символ</label>
-        <input id="gbSym" value="${defSym}" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">TF</label>
-        <select id="gbTf" style="width:62px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-          <option value="1m"${gbPrefs.global.tf==='1m'?' selected':''}>1m</option>
-          <option value="5m"${gbPrefs.global.tf==='5m'?' selected':''}>5m</option>
-          <option value="15m"${gbPrefs.global.tf==='15m'?' selected':''}>15m</option>
-          <option value="1h"${gbPrefs.global.tf==='1h'?' selected':''}>1h</option>
-        </select>
-        <label style="font-size:9px;color:var(--text3)">Уровни</label>
-        <input id="gbLevels" type="number" value="${gbPrefs.global.levels}" min="3" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Низ</label>
-        <input id="gbLow" type="number" step="any" value="${sb.lower||''}" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Верх</label>
-        <input id="gbHigh" type="number" step="any" value="${sb.upper||''}" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Плечо</label>
-        <input id="gbLev" type="number" value="${gbPrefs.global.leverage}" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Депо</label>
-        <input id="gbDep" type="number" value="${gbPrefs.global.deposit}" min="0.1" step="0.1" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <span style="font-size:9px;color:var(--text3)">Соотн.</span>
-        <input id="gbRatioLong" type="number" value="${gbPrefs.global.ratioLong}" min="0.1" step="0.1" title="Лонг-часть (напр. 3)" style="width:42px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
-        <span style="font-size:9px;color:var(--text3)">:</span>
-        <input id="gbRatioShort" type="number" value="${gbPrefs.global.ratioShort}" min="0.1" step="0.1" title="Шорт-часть (напр. 1)" style="width:42px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
-        <input id="gbRatioStep" type="number" value="${gbPrefs.global.ratioStepPct}" min="0.01" step="0.01" title="Средний % между сетками" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 4px">
-        <span style="font-size:9px;color:var(--text3)">% шаг</span>
-        <button type="button" class="tbtn" id="gbRatioApply" title="Выставить границы и сетку по соотношению">в†» Сетка</button>
-        <label style="font-size:9px;color:var(--text3)">Риск-сетки</label>
-        <select id="gbGridMode" style="width:132px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-          <option value="neutral"${gbPrefs.global.gridMode==='neutral'?' selected':''}>Neutral</option>
-          <option value="long"${gbPrefs.global.gridMode==='long'?' selected':''}>Long</option>
-          <option value="short"${gbPrefs.global.gridMode==='short'?' selected':''}>Short</option>
-        </select>
-      </div>
-      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Загрузка сетки...</div>
-      <div style="display:flex;gap:8px;flex:1;min-height:min(60vh,620px);align-items:stretch">
-        <div id="gbChartWrap" style="position:relative;flex:1 1 auto;min-width:0;min-height:min(60vh,620px);height:min(60vh,620px);border:1px solid var(--border2);border-radius:6px;overflow:hidden">
-          <div id="gbChart" style="position:absolute;inset:0"></div>
-          <canvas id="gbRulerCanvas" width="400" height="400" style="position:absolute;inset:0;z-index:12;pointer-events:none"></canvas>
-        </div>
-        <div id="gbRisk" style="width:min(340px,34%);min-width:260px;border:1px solid var(--border2);border-radius:6px;padding:8px 8px 10px;background:rgba(255,255,255,.01);display:flex;flex-direction:column;min-height:min(60vh,620px)"></div>
-      </div>
-      </div>`;
-    const bindGbInput=(id,reuseOnly)=>{
-      const el=body.querySelector(id);if(!el)return;
-      el.addEventListener('input',()=>scheduleGridLabSync(body,gbPrefs,{reuseCandles:reuseOnly}));
-      el.addEventListener('change',()=>scheduleGridLabSync(body,gbPrefs,{reuseCandles:reuseOnly}));
-    };
-    bindGbInput('#gbLevels',true);
-    bindGbInput('#gbLow',true);
-    bindGbInput('#gbHigh',true);
-    bindGbInput('#gbLev',true);
-    bindGbInput('#gbDep',true);
-    bindGbInput('#gbGridMode',true);
-    const ratioApply=body.querySelector('#gbRatioApply');
-    if(ratioApply)ratioApply.onclick=()=>applyGbRatioGrid(body,gbPrefs);
-    const symEl=body.querySelector('#gbSym');
-    const syncSymBounds=()=>{
-      const sym=String(symEl.value||'').toUpperCase().trim();
-      const bnd=gbPrefs.symbolBounds?.[sym]||{};
-      body.querySelector('#gbLow').value=bnd.lower??'';
-      body.querySelector('#gbHigh').value=bnd.upper??'';
-    };
-    symEl.addEventListener('change',()=>{syncSymBounds();scheduleGridLabSync(body,gbPrefs,{reuseCandles:false});});
-    body.querySelector('#gbTf').addEventListener('change',()=>scheduleGridLabSync(body,gbPrefs,{reuseCandles:false}));
-    scheduleGridLabSync(body,gbPrefs,{immediate:true});
-  };
-  btnSel.onclick=()=>setTab('selector');
-  btnBt.onclick=()=>setTab('backtest');
-  const closeModal=()=>{
-    document.removeEventListener('keydown',gbKeydown,true);
-    if(body._gridLabUiTimer)clearTimeout(body._gridLabUiTimer);
-    if(body._gbPrepT)clearTimeout(body._gbPrepT);
-    const ctx=body._gbChartCtx;
-    if(ctx?._gbVpLockUnsub){try{ctx._gbVpLockUnsub();}catch(e){}ctx._gbVpLockUnsub=null;}
-    if(ctx?._pollTimer){clearInterval(ctx._pollTimer);ctx._pollTimer=null;}
-    if(ctx?.gbLabSig)try{ctx.gbLabSig.abort();}catch(e){}
-    if(ctx?.ro){try{ctx.ro.disconnect();}catch(e){}}
-    if(ctx?.lc){try{ctx.lc.remove();}catch(e){}}
-    modal.remove();
-  };
-  box.querySelector('#gridCloseBtn').onclick=closeModal;
-  modal.addEventListener('mousedown',e=>{if(e.target===modal)closeModal();});
-  setTab('backtest');
+function renderGridLabModal(defSymOpt) {
+  return renderGridLabModalUi(defSymOpt, {
+    S,
+    fn, fk,
+    openFullscreenBySym,
+    scheduleGridLabSync,
+    applyGbRatioGrid,
+    gridLabBoundsUndo,
+    gridLabBoundsRedo,
+  });
 }
+
 
 function toggleGridLab(){
   const old=document.getElementById('gridLabModal');
