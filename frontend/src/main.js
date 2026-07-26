@@ -2,6 +2,24 @@ import './style.css'
 import { registerGridBotScreeners, buildGridLabPayload } from './gridBotScreeners.js'
 import { registerGridSmartScreener } from './gridSmart.js'
 import {
+  cloneDrawings as cloneDrawingsUi,
+  drawingLineColor as drawingLineColorUi,
+  getTradeParams as getTradeParamsUi,
+  timeToCoordX as timeToCoordXUi,
+  pixelToPoint as pixelToPointUi,
+  inferBarChartSec as inferBarChartSecUi,
+  chartLivePriceForSnap as chartLivePriceForSnapUi,
+  inferOhlcAnchor as inferOhlcAnchorUi,
+  snapPoint as snapPointUi,
+  resolveDrawPoint as resolveDrawPointUi,
+  drawingDist as drawingDistUi,
+  findDrawingNear as findDrawingNearUi,
+  findPivots as findPivotsUi,
+  trendLineTouches as trendLineTouchesUi,
+  detectAutoTrendlines as detectAutoTrendlinesUi,
+  makeDrawingCtx,
+} from './chartDrawing.js'
+import {
   gbDepositClamp,
   gridAdjacentStepPcts,
   resolveGridLevelsForCfg,
@@ -1342,10 +1360,7 @@ function getSymDrawings(sym){
   if(!S.symDrawings[sym])S.symDrawings[sym]=[];
   return S.symDrawings[sym];
 }
-function cloneDrawings(drawings){
-  if(typeof structuredClone==='function')return structuredClone(drawings||[]);
-  return JSON.parse(JSON.stringify(drawings||[]));
-}
+function cloneDrawings(drawings){ return cloneDrawingsUi(drawings); }
 
 let _persistSettingsTimer=null;
 let _drawPersistTimer=null;
@@ -1730,251 +1745,23 @@ async function loadMoreHistory(slot){
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 function getCoords(container,cx,cy){const r=container.getBoundingClientRect();return{x:cx-r.left,y:cy-r.top};}
 
-// Convert chart time → canvas X, extrapolating beyond last candle
-function timeToCoordX(ch,time){
-  if(!ch.lc)return null;
-  const ts=ch.lc.timeScale();
-  const x=ts.timeToCoordinate(time);
-  if(x!=null)return x;
-  // Extrapolate using spacing between last two candles
-  if(ch.candles.length>=2){
-    const last=ch.candles[ch.candles.length-1];
-    const prev=ch.candles[ch.candles.length-2];
-    const t2=toChartTime(last.t),t1=toChartTime(prev.t);
-    const x2=ts.timeToCoordinate(t2),x1=ts.timeToCoordinate(t1);
-    if(x2!=null&&x1!=null&&t2!==t1){
-      return x2+(time-t2)*(x2-x1)/(t2-t1);
-    }
-    // fallback: use last known x
-    if(x2!=null)return x2+50;
-  }
-  return null;
-}
+function timeToCoordX(ch,time){ return timeToCoordXUi(ch,time); }
 
-function pixelToPoint(ch,x,y){
-  if(!ch.lc||!ch.cs)return null;
-  let time=ch.lc.timeScale().coordinateToTime(x);
-  const price=ch.cs.coordinateToPrice(y);
-  if(price==null)return null;
-  // Extrapolate time if cursor is to the right of the last candle
-  if(time==null&&ch.candles.length>=2){
-    const ts=ch.lc.timeScale();
-    const last=ch.candles[ch.candles.length-1];
-    const prev=ch.candles[ch.candles.length-2];
-    const t1=toChartTime(prev.t),t2=toChartTime(last.t);
-    const x1=ts.timeToCoordinate(t1),x2=ts.timeToCoordinate(t2);
-    if(x1!=null&&x2!=null&&Math.abs(x2-x1)>0){
-      const secPerPx=(t2-t1)/(x2-x1);
-      time=Math.round(t2+(x-x2)*secPerPx);
-    }
-  }
-  if(time==null)return null;
-  return{time,price};
-}
+function pixelToPoint(ch,x,y){ return pixelToPointUi(ch,x,y); }
 
-/** Last / ticker price for Ctrl+snap (OHLC ≈ live). */
-function chartLivePriceForSnap(ch){
-  const sym=ch.sym||S.fsSym;
-  if(sym&&S.tk&&S.tk[sym]!=null&&isFinite(+S.tk[sym].p))return+S.tk[sym].p;
-  if(ch.candles?.length)return+ch.candles[ch.candles.length-1].c;
-  return null;
-}
+function chartLivePriceForSnap(ch){ const __dctx = makeDrawingCtx({ tk: S.tk, fsSym: S.fsSym, fsCharts: S.fsCharts||[], tf: S.tf, lineColors: S.lineColors||{} }); return chartLivePriceForSnapUi(ch, __dctx); }
 
-/** Ширина бара в секундах (график-тайм), для снапа правее последней свечи. */
-function inferBarChartSec(ch){
-  if(ch?.candles?.length>=2){
-    const t1=toChartTime(ch.candles[ch.candles.length-2].t);
-    const t2=toChartTime(ch.candles[ch.candles.length-1].t);
-    return Math.max(1,t2-t1);
-  }
-  const tf=S.fsCharts.includes(ch)?ch.tf:S.tf;
-  return Math.max(1,Math.floor(tfMs(tf)/1000));
-}
+function inferBarChartSec(ch){ const __dctx = makeDrawingCtx({ tk: S.tk, fsSym: S.fsSym, fsCharts: S.fsCharts||[], tf: S.tf, lineColors: S.lineColors||{} }); return inferBarChartSecUi(ch, __dctx); }
 
-/**
- * ctrl=true: X/Y магнит к свече/OHLC.
- * ctrl=false: свободное размещение, только виртуальная сетка баров правее последней свечи.
- */
-function snapPoint(ch,x,y,ctrl){
-  const raw=pixelToPoint(ch,x,y);if(!raw)return null;
-  if(!ch.candles?.length||!ch.cs||!ch.lc)return raw;
-  const ts=ch.lc.timeScale();
-  const barSec=inferBarChartSec(ch);
-  const last=ch.candles[ch.candles.length-1];
-  const tLast=toChartTime(last.t);
-  let tSnapped;
-  if(raw.time>tLast){
-    const k=Math.round((raw.time-tLast)/barSec);
-    tSnapped=tLast+k*barSec;
-  }else{
-    if(!ctrl){
-      // Free placement within data range
-      return{time:raw.time,price:raw.price,tMs:(raw.time-TZ_OFFSET_S)*1000,anchor:'c'};
-    }
-    let bestC=null,bestDx=Infinity;
-    for(const c of ch.candles){
-      const bx=ts.timeToCoordinate(toChartTime(c.t));
-      if(bx==null)continue;
-      const d=Math.abs(bx-x);
-      if(d<bestDx){bestDx=d;bestC=c;}
-    }
-    if(!bestC)return raw;
-    tSnapped=toChartTime(bestC.t);
-  }
-  if(!ctrl){
-    // Allow free placement beyond last candle too, snapping only time to the virtual bar grid
-    return{time:tSnapped,price:raw.price,tMs:(tSnapped-TZ_OFFSET_S)*1000,anchor:'c'};
-  }
-  let ohlcCandle=last;
-  if(!(raw.time>tLast)){
-    let bestC=null,bestDx=Infinity;
-    for(const c of ch.candles){
-      const bx=ts.timeToCoordinate(toChartTime(c.t));
-      if(bx==null)continue;
-      const d=Math.abs(bx-x);
-      if(d<bestDx){bestDx=d;bestC=c;}
-    }
-    if(!bestC)return{time:tSnapped,price:raw.price};
-    ohlcCandle=bestC;
-  }
-  const ohlc=[ohlcCandle.o,ohlcCandle.h,ohlcCandle.l,ohlcCandle.c];
-  const live=chartLivePriceForSnap(ch);
-  const candidates=live!=null&&isFinite(live)?[...ohlc,live]:ohlc;
-  const anchors=['o','h','l','c'];
-  if(live!=null&&isFinite(live))anchors.push('live');
-  let bestP=candidates[0],bestDist=Infinity,anchor='c';
-  for(let i=0;i<candidates.length;i++){
-    const p=candidates[i];
-    if(p==null||!isFinite(p))continue;
-    const d=Math.abs(p-raw.price);
-    if(d<bestDist){bestDist=d;bestP=p;anchor=anchors[i]||'c';}
-  }
-  const anchorCandle=ohlcCandle||last;
-  if(anchor==='live')anchor='c';
-  return{time:tSnapped,price:bestP,tMs:anchorCandle.t,anchor};
-}
+function snapPoint(ch,x,y,ctrl){ const __dctx = makeDrawingCtx({ tk: S.tk, fsSym: S.fsSym, fsCharts: S.fsCharts||[], tf: S.tf, lineColors: S.lineColors||{} }); return snapPointUi(ch,x,y,ctrl,__dctx); }
 
-function _inferOhlcAnchor(candle,price){
-  if(!candle||price==null||!isFinite(price))return 'c';
-  const map={o:candle.o,h:candle.h,l:candle.l,c:candle.c};
-  let best='c',bestD=Infinity;
-  for(const [k,v] of Object.entries(map)){
-    if(v==null||!isFinite(v))continue;
-    const d=Math.abs(v-price);
-    if(d<bestD){bestD=d;best=k;}
-  }
-  return best;
-}
+function _inferOhlcAnchor(candle,price){ return inferOhlcAnchorUi(candle,price); }
 
-/** Привязка точки рисунка к свече текущего ТФ (фикс луча/линий между ТФ).
- *  Только если точка была создана с магнитом (anchor !== 'c' иначе сохраняем price как есть).
- *  Точки ВНЕ диапазона данных (правее последней свечи или левее первой) сохраняют
- *  экстраполированное время — иначе пользователь не сможет нарисовать проекцию.
- */
-function resolveDrawPoint(ch,pt){
-  if(!pt||!ch?.candles?.length)return pt;
-  let tMs=pt.tMs;
-  if(tMs==null&&pt.time!=null&&isFinite(pt.time))tMs=(pt.time-TZ_OFFSET_S)*1000;
-  if(tMs==null)return pt;
-  let best=ch.candles[0],bestD=Infinity;
-  for(const c of ch.candles){
-    const d=Math.abs(c.t-tMs);
-    if(d<bestD){bestD=d;best=c;}
-  }
-  // Если pt.time выходит за пределы диапазона данных — сохраняем экстраполированное
-  // время, чтобы луч/линия начинались там, где кликнул пользователь, а не на
-  // ближайшей реальной свече.
-  const lastC=ch.candles[ch.candles.length-1];
-  const firstC=ch.candles[0];
-  let time=toChartTime(best.t);
-  if(pt.time!=null&&isFinite(pt.time)){
-    const tLast=toChartTime(lastC.t),tFirst=toChartTime(firstC.t);
-    if(pt.time>tLast||pt.time<tFirst)time=pt.time;
-  }
-  const anchor=pt.anchor||'c';
-  // Freehand points (anchor='c' and not explicitly OHLC-snapped) keep original price
-  if(anchor==='c'){
-    return{time,price:pt.price,tMs:best.t,anchor:'c'};
-  }
-  const byAnchor={o:best.o,h:best.h,l:best.l,c:best.c};
-  let price=byAnchor[anchor];
-  if(price==null||!isFinite(price))price=pt.price;
-  return{time,price,tMs:best.t,anchor};
-}
+function resolveDrawPoint(ch,pt){ return resolveDrawPointUi(ch,pt); }
 
-function _findPivots(candles,lb){
-  const highs=[],lows=[];
-  for(let i=lb;i<candles.length-lb;i++){
-    let isH=true,isL=true;
-    for(let j=1;j<=lb;j++){
-      if(candles[i-j].h>=candles[i].h||candles[i+j].h>candles[i].h)isH=false;
-      if(candles[i-j].l<=candles[i].l||candles[i+j].l<candles[i].l)isL=false;
-    }
-    if(isH)highs.push({i,t:candles[i].t,p:candles[i].h});
-    if(isL)lows.push({i,t:candles[i].t,p:candles[i].l});
-  }
-  return{highs,lows};
-}
-function _trendLineTouches(candles,i0,p0,i1,p1,touchPct,side){
-  const a=Math.min(i0,i1),b=Math.max(i0,i1);
-  if(b-a<4)return 0;
-  let touches=0;
-  for(let i=a;i<=b;i++){
-    const expected=p0+(p1-p0)*(i-i0)/(i1-i0);
-    const tol=Math.max(Math.abs(expected)*touchPct/100,1e-12);
-    const c=candles[i];
-    if(side==='support'){
-      if(Math.abs(c.l-expected)<=tol)touches++;
-    }else if(Math.abs(c.h-expected)<=tol)touches++;
-  }
-  return touches;
-}
-function detectAutoTrendlines(candles,opt){
-  if(!candles||candles.length<20)return [];
-  const o={...S.autoTrend,...opt};
-  const lb=Math.max(2,Math.min(8,o.pivotBars|0));
-  const look=Math.max(40,Math.min(candles.length,o.lookback|0));
-  const slice=candles.slice(-look);
-  const off=candles.length-slice.length;
-  const{highs,lows}=_findPivots(slice,lb);
-  const raw=[];
-  const tryPairs=(pts,side)=>{
-    for(let a=0;a<pts.length;a++){
-      for(let b=a+1;b<pts.length;b++){
-        const i0=pts[a].i+off,i1=pts[b].i+off;
-        const touches=_trendLineTouches(candles,i0,pts[a].p,i1,pts[b].p,o.touchPct,side);
-        if(touches<(o.minTouches|0))continue;
-        const span=i1-i0;
-        const slope=(pts[b].p-pts[a].p)/span;
-        if(side==='support'&&slope<-1e-12)continue;
-        if(side==='resistance'&&slope>1e-12)continue;
-        raw.push({side,i0,i1,p0:pts[a].p,p1:pts[b].p,touches,score:touches*12+span});
-      }
-    }
-  };
-  tryPairs(lows,'support');
-  tryPairs(highs,'resistance');
-  raw.sort((a,b)=>b.score-a.score);
-  const picked=[];
-  for(const ln of raw){
-    if(picked.some(p=>Math.abs(p.i0-ln.i0)<=lb*2&&Math.abs(p.i1-ln.i1)<=lb*3))continue;
-    picked.push(ln);
-    if(picked.length>=(o.maxLines|0))break;
-  }
-  const ext=Math.max(0,o.extendBars|0);
-  const lastI=candles.length-1;
-  return picked.map(ln=>{
-    const iEnd=Math.min(lastI,ln.i1+ext);
-    const iStart=Math.max(0,ln.i0-Math.floor(ext*0.35));
-    const pEnd=ln.p0+(ln.p1-ln.p0)*(iEnd-ln.i0)/(ln.i1-ln.i0);
-    const pStart=ln.p0+(ln.p1-ln.p0)*(iStart-ln.i0)/(ln.i1-ln.i0);
-    return{
-      side:ln.side,
-      p1:{time:toChartTime(candles[iStart].t),price:pStart,tMs:candles[iStart].t},
-      p2:{time:toChartTime(candles[iEnd].t),price:pEnd,tMs:candles[iEnd].t},
-    };
-  });
-}
+function _findPivots(candles,lb){ return findPivotsUi(candles,lb); }
+function _trendLineTouches(candles,i0,p0,i1,p1,touchPct,side){ return trendLineTouchesUi(candles,i0,p0,i1,p1,touchPct,side); }
+function detectAutoTrendlines(candles,opt){ return detectAutoTrendlinesUi(candles, { ...S.autoTrend, ...(opt||{}) }); }
 function applyAutoTrendlinesToChart(ch,replace=false){
   if(!ch?.candles?.length)return 0;
   const sym=getChartSym(ch);
@@ -2016,74 +1803,9 @@ function setAutoTrendSetting(key,val){
 }
 
 // Distance from point to drawing (screen pixels)
-function drawingDist(ch,d,px,py){
-  if(!ch.cs||!ch.lc)return Infinity;
-  if(d.type==='hray'||d.type==='aray'){
-    const p1=resolveDrawPoint(ch,d.p1);
-    const y=ch.cs.priceToCoordinate(p1.price);
-    if(y===null)return Infinity;
-    const x0=timeToCoordX(ch,p1.time)??0;
-    if(px<x0-4)return Infinity;
-    // Include alert band for aray so hover works over the whole visible ray
-    if(d.type==='aray'&&d.alertPct!=null&&d.alertPct>0){
-      const bandH=Math.abs((ch.cs.priceToCoordinate(p1.price*(1-d.alertPct/100))??y)-y);
-      return Math.max(Math.abs(py-y)-bandH,0);
-    }
-    return Math.abs(py-y);
-  }
-  if(d.type==='tline'||d.type==='atline'){
-    const p1=resolveDrawPoint(ch,d.p1),p2=resolveDrawPoint(ch,d.p2);
-    const x1=timeToCoordX(ch,p1.time);
-    const y1=ch.cs.priceToCoordinate(p1.price);
-    const x2=timeToCoordX(ch,p2.time);
-    const y2=ch.cs.priceToCoordinate(p2.price);
-    if(x1===null||y1===null||x2===null||y2===null)return Infinity;
-    const dx=x2-x1,dy=y2-y1,len2=dx*dx+dy*dy;
-    if(len2===0)return Math.hypot(px-x1,py-y1);
-    // For alert trendlines (atline) extend hit-test beyond segment so RMB deletion works reliably
-    const t=d.type==='atline'?((px-x1)*dx+(py-y1)*dy)/len2:Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/len2));
-    return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
-  }
-  if(d.type==='brush'){
-    // Check distance to any segment of the stroke
-    if(!d.pts||d.pts.length<2)return Infinity;
-    let best=Infinity;
-    for(let i=1;i<d.pts.length;i++){
-      const ax=timeToCoordX(ch,d.pts[i-1].time),ay=ch.cs.priceToCoordinate(d.pts[i-1].price);
-      const bx=timeToCoordX(ch,d.pts[i].time),by=ch.cs.priceToCoordinate(d.pts[i].price);
-      if(ax==null||ay==null||bx==null||by==null)continue;
-      const dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy;
-      let dist;
-      if(len2===0){dist=Math.hypot(px-ax,py-ay);}
-      else{const t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/len2));dist=Math.hypot(px-(ax+t*dx),py-(ay+t*dy));}
-      if(dist<best)best=dist;
-    }
-    return best;
-  }
-  if(d.type==='long'||d.type==='short'){
-    if(!d.p1||!d.p2||!ch.cs||!ch.lc)return Infinity;
-    const{entryPrice,tpPrice,slPrice}=getTradeParams(d);
-    const lrx1=timeToCoordX(ch,d.p1.time),lrx2=timeToCoordX(ch,d.p2.time);
-    if(lrx1==null||lrx2==null)return Infinity;
-    const yE=ch.cs.priceToCoordinate(entryPrice);
-    const yT=ch.cs.priceToCoordinate(tpPrice);
-    const yS=ch.cs.priceToCoordinate(slPrice);
-    if(yE==null||yT==null||yS==null)return Infinity;
-    const lx=Math.min(lrx1,lrx2),rx=Math.max(lrx1,lrx2);
-    if(px<lx-8||px>rx+8)return Infinity;
-    return Math.min(Math.abs(py-yE),Math.abs(py-yT),Math.abs(py-yS));
-  }
-  return Infinity;
-}
+function drawingDist(ch,d,px,py){ return drawingDistUi(ch,d,px,py); }
 
-function findDrawingNear(ch,px,py){
-  let bestIdx=-1,bestDist=DRAW_HIT;
-  for(let i=0;i<ch.drawings.length;i++){
-    const d=drawingDist(ch,ch.drawings[i],px,py);
-    if(d<bestDist){bestDist=d;bestIdx=i;}
-  }
-  return bestIdx;
-}
+function findDrawingNear(ch,px,py){ return findDrawingNearUi(ch,px,py,window.__drawHit||DRAW_HIT); }
 
 function isNearRuler(ch,px,py){
   const r=ch.ruler;if(!r?.p1||!r?.p2||!ch.cs||!ch.lc)return false;
@@ -2487,12 +2209,7 @@ function drawCustomCrosshair(ctx,ch,W,H){
   ctx.restore();
 }
 
-function drawingLineColor(d){
-  if(d?.color&&typeof d.color==='string'&&d.color.startsWith('#'))return d.color;
-  const k=d.type==='hray'?'hray':d.type==='tline'?'tline':d.type==='aray'?'aray':d.type==='atline'?'atline':null;
-  if(k){const c=lineColorForType(k);if(c)return c;}
-  return'#888888';
-}
+function drawingLineColor(d){ const __dctx = makeDrawingCtx({ tk: S.tk, fsSym: S.fsSym, fsCharts: S.fsCharts||[], tf: S.tf, lineColors: S.lineColors||{} }); return drawingLineColorUi(d, __dctx); }
 
 function emaHoverTip(period){
   return`EMA ${period} • экспоненциальная скользящая средняя по ${period} закрытиям свечи. Сглаживает ценовой шум и показывает локальный тренд; расхождение и пересечение нескольких EMA помогают оценить силу движения.`;
@@ -2678,17 +2395,7 @@ let _brushWidth=2;
 
 // в”Ђв”Ђ Trade helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Returns entry/tp/sl as absolute prices (migrates old rr-based format)
-function getTradeParams(d){
-  const isLong=d.type==='long';
-  const entryPrice=d.p1.price;
-  if(d.slPrice==null){
-    const slDist=Math.abs(entryPrice-(d.p2?.price??entryPrice));
-    const rr=d.rr??2;
-    d.slPrice=isLong?entryPrice-slDist:entryPrice+slDist;
-    d.tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
-  }
-  return{isLong,entryPrice,tpPrice:d.tpPrice,slPrice:d.slPrice};
-}
+function getTradeParams(d){ return getTradeParamsUi(d); }
 // Seconds per canvas pixel (for horizontal time drag)
 function getTimePerPx(ch){
   if(!ch.lc||ch.candles.length<2)return 60;
