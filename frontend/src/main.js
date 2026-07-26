@@ -871,7 +871,7 @@ function buildChartGrid(){
           <span class="cprc" id="cp${i}"></span>
           <div class="chead-stats" id="chs${i}"></div>
           <span class="chead-gap"></span>
-          <button class="fs-open-btn" onclick="openFullscreen(${i})" title="На весь экран">в¤Ў</button>
+          <button class="fs-open-btn" onclick="openFullscreen(${i})" title="На весь экран">⛶</button>
         </div>
         <div class="cbody" id="cb${i}">
           <div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">ожидание</span></div>
@@ -1640,9 +1640,9 @@ function updateChartHeader(slot,sym){
     }else{elChg.textContent='';elChg.className='cchg';}
   }
   const elVol=document.getElementById(`chs${slot}-vol`);
-  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">в—€</span>${fk(t.qv)}`:'';
+  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◼</span>${fk(t.qv)}`:'';
   const elTrd=document.getElementById(`chs${slot}-trd`);
-  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">вљЎ</span>${fk(t.tr)}`:'';
+  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const elNatr=document.getElementById(`chs${slot}-natr`);
   if(elNatr){
     const na=m.na14;
@@ -1868,6 +1868,8 @@ function _inferOhlcAnchor(candle,price){
 
 /** Привязка точки рисунка к свече текущего ТФ (фикс луча/линий между ТФ).
  *  Только если точка была создана с магнитом (anchor !== 'c' иначе сохраняем price как есть).
+ *  Точки ВНЕ диапазона данных (правее последней свечи или левее первой) сохраняют
+ *  экстраполированное время — иначе пользователь не сможет нарисовать проекцию.
  */
 function resolveDrawPoint(ch,pt){
   if(!pt||!ch?.candles?.length)return pt;
@@ -1879,7 +1881,16 @@ function resolveDrawPoint(ch,pt){
     const d=Math.abs(c.t-tMs);
     if(d<bestD){bestD=d;best=c;}
   }
-  const time=toChartTime(best.t);
+  // Если pt.time выходит за пределы диапазона данных — сохраняем экстраполированное
+  // время, чтобы луч/линия начинались там, где кликнул пользователь, а не на
+  // ближайшей реальной свече.
+  const lastC=ch.candles[ch.candles.length-1];
+  const firstC=ch.candles[0];
+  let time=toChartTime(best.t);
+  if(pt.time!=null&&isFinite(pt.time)){
+    const tLast=toChartTime(lastC.t),tFirst=toChartTime(firstC.t);
+    if(pt.time>tLast||pt.time<tFirst)time=pt.time;
+  }
   const anchor=pt.anchor||'c';
   // Freehand points (anchor='c' and not explicitly OHLC-snapped) keep original price
   if(anchor==='c'){
@@ -2951,7 +2962,7 @@ function renderAlertLog(){
     if(a.type==='potential'){
       return`<div class="alert-log-row" onclick="openFullscreenBySym('${a.sym}')" title="Открыть ${symShort}">
         <span style="color:var(--text3);font-size:9px">${tStr}</span>
-        <span style="color:#f97316;font-size:9px;margin:0 4px">вљЎ</span>
+        <span style="color:#f97316;font-size:9px;margin:0 4px">⚡</span>
         <span style="color:#fff;font-weight:600;margin-right:5px">${symShort}</span>
         <span style="color:#f97316;font-size:9px">${a.presetName||'Потенциал'}</span>
         <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(a.curPrice)}</span>
@@ -3191,7 +3202,7 @@ function openEMAEditor(mode='auto'){
         <div id="emaPairsList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
       </div>
       <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
-        <button class="tbtn" style="flex:1" id="addEmaBtn">пј‹ Добавить EMA</button>
+        <button class="tbtn" style="flex:1" id="addEmaBtn">＋ Добавить EMA</button>
         <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">✓ Готово</button>
       </div>`;
 
@@ -3234,7 +3245,7 @@ function openEMAEditor(mode='auto'){
     });
 
     if(!_activeSettings.length){
-      list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">Нет EMA линий. Нажми пј‹ чтобы добавить.</div>';
+      list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">Нет EMA линий. Нажми ＋ чтобы добавить.</div>';
     }
     const pairsEl=box.querySelector('#emaPairsList');
     const visiblePeriods=[...new Set(_activeSettings.filter(c=>c.visible).map(c=>c.period))].sort((a,b)=>a-b);
@@ -4400,9 +4411,9 @@ function updateFsHeaderValues(){
     }else{elChg.textContent='';elChg.className='cchg fs-stat';}
   }
   const elVol=document.getElementById('fsStat-vol');
-  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">в—€</span>${fk(t.qv)}`:'';
+  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◼</span>${fk(t.qv)}`:'';
   const elTrd=document.getElementById('fsStat-trd');
-  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">вљЎ</span>${fk(t.tr)}`:'';
+  if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const elNatr=document.getElementById('fsStat-natr');
   if(elNatr){
     const na=m.na14;
@@ -5312,7 +5323,7 @@ function buildGroupFilterBar(){
       // Small "+" button to manage this group
       const addBtn=document.createElement('button');
       addBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font:inherit;font-size:8px;padding:0 1px;line-height:1;margin-left:-1px;';
-      addBtn.title=g===FAVORITE_GROUP_ID?'Управление избранным':`Управление группой ${g}`;addBtn.textContent='пј‹';
+      addBtn.title=g===FAVORITE_GROUP_ID?'Управление избранным':`Управление группой ${g}`;addBtn.textContent='＋';
       addBtn.onclick=ev=>{ev.stopPropagation();openGroupManager(g);};
       wrap.appendChild(addBtn);
       grpSec.appendChild(wrap);
@@ -5330,7 +5341,7 @@ function buildGroupFilterBar(){
       const cnt=Object.keys(pr.matches||{}).length;
       const tab=document.createElement('button');
       tab.style.cssText=`background:${pr.enabled?(cnt?'rgba(249,115,22,.18)':'rgba(255,255,255,.05)'):'transparent'};border:1px solid ${pr.enabled?'#f97316':'var(--border2)'};border-radius:4px;color:${pr.enabled?(cnt?'#f97316':'var(--text2)'):'var(--text3)'};cursor:pointer;font:inherit;font-size:9px;padding:2px 7px;transition:all .1s;white-space:nowrap;display:flex;align-items:center;gap:3px;`;
-      tab.innerHTML=`вљЎ ${pr.name}${cnt?` <span style="background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;line-height:1.5">${cnt}</span>`:''}`;
+      tab.innerHTML=`⚡ ${pr.name}${cnt?` <span style="background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;line-height:1.5">${cnt}</span>`:''}`;
       tab.title=`${pr.name}: ${cnt} монет. ЛКМ • фильтр, ПКМ • настройка`;
       tab.onclick=()=>{
         // Toggle filter: show only coins in this preset (exclusive)
@@ -5345,7 +5356,7 @@ function buildGroupFilterBar(){
     // "+" to add new preset
     const addPotBtn=document.createElement('button');
     addPotBtn.style.cssText='background:none;border:1px dashed #a06a35;border-radius:4px;color:#f2bb88;cursor:pointer;font:inherit;font-size:10px;padding:2px 6px;';
-    addPotBtn.textContent='пј‹ Пресет';addPotBtn.title='Добавить пресет Потенциала';
+    addPotBtn.textContent='＋ Пресет';addPotBtn.title='Добавить пресет Потенциала';
     addPotBtn.onclick=()=>openPotPresetEditor(null);
     potSec.appendChild(addPotBtn);
     bar.appendChild(potSec);
@@ -6567,11 +6578,11 @@ function renderPotentialPanel(){
   const tplBtn=document.createElement('button');
   tplBtn.className='pot-tab';
   tplBtn.title='Готовый пресет: BB squeeze + volume impulse + breakout';
-  tplBtn.textContent='пј‹Squeeze';
+  tplBtn.textContent='＋Squeeze';
   tplBtn.onclick=()=>{addBuiltinSqueezePreset();renderPotentialPanel();};
   tabBar.appendChild(tplBtn);
   const addBtn=document.createElement('button');
-  addBtn.className='pot-tab pot-tab-add';addBtn.title='Добавить пресет';addBtn.textContent='пј‹';
+  addBtn.className='pot-tab pot-tab-add';addBtn.title='Добавить пресет';addBtn.textContent='＋';
   addBtn.onclick=()=>openPotPresetEditor(null);
   tabBar.appendChild(addBtn);
 
@@ -6582,7 +6593,7 @@ function renderPotentialPanel(){
 
   const pr=S.potentialPresets.find(p=>p.id===_potActiveTab);
   if(!pr){
-    body.innerHTML='<div class="pot-empty">Нажми пј‹ чтобы добавить пресет с условиями</div>';
+    body.innerHTML='<div class="pot-empty">Нажми ＋ чтобы добавить пресет с условиями</div>';
     return;
   }
 
@@ -6681,7 +6692,7 @@ function openPotPresetEditor(presetId){
       </div>
       <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:space-between">
         <span style="font-size:10px;color:var(--text2)">Условия (ВСЕ должны совпасть)</span>
-        <button class="tbtn" id="potAddCond">пј‹ Условие</button>
+        <button class="tbtn" id="potAddCond">＋ Условие</button>
       </div>
       <div id="potCondList" style="flex:1;overflow-y:auto;min-height:0;padding:6px 14px"></div>
       <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
@@ -6695,7 +6706,7 @@ function openPotPresetEditor(presetId){
 
     // Render conditions
     const cl=box.querySelector('#potCondList');
-    if(!wCond.length){cl.innerHTML='<div style="font-size:9px;color:var(--text3);padding:8px 0">Нет условий • нажми пј‹ чтобы добавить</div>';}
+    if(!wCond.length){cl.innerHTML='<div style="font-size:9px;color:var(--text3);padding:8px 0">Нет условий • нажми ＋ чтобы добавить</div>';}
     wCond.forEach((c,idx)=>{
       const f=POT_FIELDS.find(x=>x.id===c.field)||POT_FIELDS[0];
       const row=document.createElement('div');

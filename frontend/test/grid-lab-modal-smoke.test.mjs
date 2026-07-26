@@ -61,10 +61,18 @@ function makeDeps(overrides = {}) {
 }
 
 function clearDom() {
+  // Close any open modal first — but just removing the element doesn't
+  // remove the document-level capture-phase keydown listener. To force
+  // self-cleanup, dispatch a synthetic keydown after the modal is gone:
+  // the handler checks `if (!document.getElementById('gridLabModal'))`
+  // and removes itself. Without this, leftover listeners call
+  // preventDefault() before our new handler runs.
+  const old = document.getElementById('gridLabModal');
+  if (old) {
+    old.remove();
+    document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'z' }));
+  }
   document.body.innerHTML = '';
-  // Remove all document-level listeners by replacing body
-  const newBody = document.createElement('body');
-  document.documentElement.replaceChild(newBody, document.body);
 }
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
@@ -156,13 +164,9 @@ test('smoke: keydown Ctrl+Z triggers undo on backtest tab', () => {
   const ev = new dom.window.KeyboardEvent('keydown', {
     key: 'z', ctrlKey: true, bubbles: true, cancelable: true,
   });
-  const dispatched = document.dispatchEvent(ev);
-  console.log('  [debug] dispatched=', dispatched, 'defaultPrevented=', ev.defaultPrevented);
-  console.log('  [debug] activeElement=', document.activeElement?.tagName, document.activeElement?.id);
-  const body = document.querySelector('#gridLabBody');
-  console.log('  [debug] body has #gbChartWrap?', !!body?.querySelector('#gbChartWrap'));
+  document.dispatchEvent(ev);
 
-  assert.equal(deps._calls.undo.length, 1, `undoFn called (got ${deps._calls.undo.length})`);
+  assert.equal(deps._calls.undo.length, 1, 'undoFn called once');
   assert.equal(deps._calls.redo.length, 0);
 
   // Ctrl+Shift+Z → redo
