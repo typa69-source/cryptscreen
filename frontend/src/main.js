@@ -2,6 +2,11 @@ import './style.css'
 import { registerGridBotScreeners, buildGridLabPayload } from './gridBotScreeners.js'
 import { registerGridSmartScreener } from './gridSmart.js'
 import {
+  openEmaEditorModal,
+  refreshEmaButtonState as refreshEmaButtonStateUi,
+  toggleEma as toggleEmaUi,
+} from './emaEditor-ui.js'
+import {
   cloneDrawings as cloneDrawingsUi,
   drawingLineColor as drawingLineColorUi,
   getTradeParams as getTradeParamsUi,
@@ -2861,150 +2866,20 @@ function setDrawMode(mode){
   });
 }
 
-function refreshEMAButtonState(){
-  const hasSymEnabled=S.fsSym?!!S.emaSymEnabled[S.fsSym]:false;
-  const active=S.emaVisible||hasSymEnabled;
-  const btn=document.getElementById('emaBtn');if(btn)btn.classList.toggle('on',active);
-  const fsBtn=document.getElementById('fsEmaBtn');if(fsBtn)fsBtn.classList.toggle('on',active);
-}
+function refreshEMAButtonState(){ refreshEmaButtonStateUi({ S }); }
 
 function toggleEMA(){
-  S.emaVisible=!S.emaVisible;
-  refreshEMAButtonState();
-  _emaCache.clear();
-  [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
+  toggleEmaUi({ S, clearEmaCache: () => _emaCache.clear(), rCanvas });
 }
 
 function openEMAEditor(mode='auto'){
-  const old=document.getElementById('emaEditorModal');if(old)old.remove();
-  const modal=document.createElement('div');modal.id='emaEditorModal';
-  modal.style.cssText='position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;';
-  const box=document.createElement('div');
-  box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:300px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.8)';
-
-  const EMA_COLORS=['#f97316','#3b82f6','#a855f7','#e04040','#1fa891','#eab308','#ec4899','#22c55e'];
-  let _editSym=(mode==='symbol'&&S.fsSym)?S.fsSym:null; // null=global, string=per-symbol
-
-  const render=()=>{
-    const activeSym=_editSym||(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);
-    const targetSymEnabled=activeSym?!!S.emaSymEnabled[activeSym]:false;
-    box.innerHTML=`
-      <div style="display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA линии и алерты</span>
-        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('emaEditorModal').remove()">вњ•</button>
-      </div>
-      <div id="emaList" style="flex:1;overflow-y:auto;padding:8px 14px;display:flex;flex-direction:column;gap:6px;min-height:0"></div>
-      <div style="padding:6px 14px;border-top:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <label style="font-size:9px;color:var(--text3)">Показывать EMA:</label>
-        <button id="emaGlobalBtn" class="tbtn${S.emaVisible?' on':''}" title="Показывать EMA на всех монетах">Все</button>
-        <button id="emaSymOnlyBtn" class="tbtn${targetSymEnabled?' on':''}" title="Показывать EMA только для выбранной монеты">Текущая монета</button>
-        <label style="font-size:9px;color:var(--text3)">Звук при пересечении:</label>
-        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}">${S.emaCrossSound?'в—Џ Вкл':'в—‹ Выкл'}</button>
-        <span style="flex:1"></span>
-        <label style="font-size:9px;color:var(--text3)" title="Задать отдельные EMA для текущей монеты">Режим:</label>
-        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}">${_editSym?'рџ“Њ '+_editSym.replace(/USDT$/,''):'рџЊЌ Глобал'}</button>
-      </div>
-      <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
-        <div style="font-size:9px;color:var(--text3)">Алерты пересечения EMA (добавляются в Алерты с ТФ):</div>
-        <div id="emaPairsList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
-      </div>
-      <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
-        <button class="tbtn" style="flex:1" id="addEmaBtn">＋ Добавить EMA</button>
-        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">✓ Готово</button>
-      </div>`;
-
-    const list=box.querySelector('#emaList');
-    if(_editSym&&!S.emaSymOverrides[_editSym])S.emaSymOverrides[_editSym]=[...S.emaSettings.map(c=>({...c}))];
-    const _activeSettings=_editSym?S.emaSymOverrides[_editSym]:S.emaSettings;
-    _activeSettings.forEach((cfg,i)=>{
-      const row=document.createElement('div');
-      row.style.cssText='display:flex;align-items:center;gap:6px;background:var(--bg3);border-radius:4px;padding:5px 8px;';
-      // Color picker dots
-      const colorPicker=document.createElement('div');colorPicker.style.cssText='display:flex;gap:3px;flex-wrap:wrap;';
-      EMA_COLORS.forEach(col=>{
-        const dot=document.createElement('div');
-        dot.style.cssText=`width:10px;height:10px;border-radius:50%;background:${col};cursor:pointer;border:2px solid ${cfg.color===col?'#fff':'transparent'};transition:transform .1s`;
-        dot.onmouseenter=()=>dot.style.transform='scale(1.3)';
-        dot.onmouseleave=()=>dot.style.transform='scale(1)';
-        dot.onclick=()=>{cfg.color=col;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
-        colorPicker.appendChild(dot);
-      });
-      row.appendChild(colorPicker);
-      // Period input
-      const pInp=document.createElement('input');
-      pInp.type='number';pInp.min='2';pInp.max='500';pInp.value=cfg.period;
-      pInp.style.cssText='width:50px;background:var(--bg4);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 4px;text-align:center';
-      pInp.onchange=()=>{const v=parseInt(pInp.value);if(v>=2){cfg.period=v;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));}};
-      row.appendChild(pInp);
-      // Visible toggle
-      const visBtn=document.createElement('button');
-      visBtn.style.cssText=`background:${cfg.visible?cfg.color+'22':'transparent'};border:1px solid ${cfg.visible?cfg.color:'var(--border2)'};border-radius:3px;color:${cfg.visible?cfg.color:'var(--text3)'};font:inherit;font-size:9px;padding:2px 5px;cursor:pointer`;
-      visBtn.textContent=cfg.visible?'Вкл':'Выкл';
-      visBtn.onclick=()=>{cfg.visible=!cfg.visible;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
-      row.appendChild(visBtn);
-      // Delete
-      const delBtn=document.createElement('button');
-      delBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0 2px;margin-left:auto';
-      delBtn.textContent='вњ•';delBtn.title='Удалить';
-      delBtn.onclick=()=>{_activeSettings.splice(i,1);_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
-      row.appendChild(delBtn);
-      list.appendChild(row);
-    });
-
-    if(!_activeSettings.length){
-      list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">Нет EMA линий. Нажми ＋ чтобы добавить.</div>';
-    }
-    const pairsEl=box.querySelector('#emaPairsList');
-    const visiblePeriods=[...new Set(_activeSettings.filter(c=>c.visible).map(c=>c.period))].sort((a,b)=>a-b);
-    if(visiblePeriods.length<2){
-      pairsEl.innerHTML='<span style="font-size:9px;color:var(--text3)">Нужно минимум 2 активные EMA линии</span>';
-    }else{
-      pairsEl.innerHTML='';
-      for(let i=0;i<visiblePeriods.length;i++){
-        for(let j=i+1;j<visiblePeriods.length;j++){
-          const a=visiblePeriods[i],b=visiblePeriods[j];
-          let pair=S.emaAlertPairs.find(p=>p.a===a&&p.b===b);
-          if(!pair){pair={a,b,enabled:false};S.emaAlertPairs.push(pair);}
-          const pbtn=document.createElement('button');
-          pbtn.className='tbtn'+(pair.enabled?' on':'');
-          pbtn.textContent=`EMA${a}×EMA${b}`;
-          pbtn.onclick=()=>{pair.enabled=!pair.enabled;render();};
-          pairsEl.appendChild(pbtn);
-        }
-      }
-    }
-
-    box.querySelector('#addEmaBtn').onclick=()=>{
-      const used=_activeSettings.map(c=>c.color);
-      const col=EMA_COLORS.find(c=>!used.includes(c))||'#f97316';
-      _activeSettings.push({period:9,color:col,visible:true});
-      _emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();
-    };
-    // Fix: bind closures via addEventListener (inline onclick can't access local `render` / `_editSym`)
-    const soundBtn=box.querySelector('#emaSoundBtn');
-    if(soundBtn)soundBtn.onclick=()=>{S.emaCrossSound=!S.emaCrossSound;render();};
-    const gBtn=box.querySelector('#emaGlobalBtn');
-    if(gBtn)gBtn.onclick=()=>{S.emaVisible=!S.emaVisible;refreshEMAButtonState();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
-    const symOnlyBtn=box.querySelector('#emaSymOnlyBtn');
-    if(symOnlyBtn)symOnlyBtn.onclick=()=>{
-      const sym=activeSym;
-      if(!sym)return;
-      S.emaSymEnabled[sym]=!S.emaSymEnabled[sym];
-      refreshEMAButtonState();
-      [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
-      render();
-    };
-    const symBtn=box.querySelector('#emaSymBtn');
-    if(symBtn)symBtn.onclick=()=>{
-      _editSym=_editSym?null:activeSym;
-      render();
-    };
-  };
-  render();
-  modal.appendChild(box);document.body.appendChild(modal);
-  modal.addEventListener('mousedown',e=>{if(e.target===modal)modal.remove();});
+  openEmaEditorModal(mode, {
+    S,
+    rCanvas,
+    clearEmaCache: () => _emaCache.clear(),
+    schedulePersistUserSettings,
+  });
 }
-
 window.openEMAEditor=openEMAEditor;
 
 // в”Ђв”Ђ Ruler в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
