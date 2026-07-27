@@ -67,6 +67,30 @@ import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile } from './metrics.js'
 import {
+  DEFAULT_DENSITY_SETTINGS,
+  getOrCreateDensitySettings,
+  resetDensitySettings as resetDensitySettingsMod,
+  setDensityThreshold as setDensityThresholdMod,
+  clusterOrderBook,
+  volumeStats,
+  classifyTier,
+  buildDensityZones,
+  priceBucket,
+  levelsToUsd,
+} from './density.js'
+import {
+  TIER_STYLE,
+  computeZonesForChart,
+  fetchOrderBook as fetchOrderBookUi,
+  prefetchAllOrderBooks,
+  drawZonesUi,
+  renderSettingsDensityUi,
+  toggleDensityUi,
+  setDensityVisibleUi,
+  setDensityMultUi,
+  resetDensitySettingsUi,
+} from './density-ui.js'
+import {
   POT_FIELDS,
   POT_FIELD_DESC,
   POT_ABS_FIELDS,
@@ -1604,7 +1628,7 @@ async function loadChart(slot,sym){
     ch.candles=cached.slice(-HIST_CACHE_MAX);
     paintSlotData(slot);
     refreshChartOiSeries(ch,S.tf,sym);
-    if(S.showDensity)fetchOrderBook(sym);
+    if(S.showDensity)fetchOrderBookUi(sym, densityDeps);
     return;
   }
   if(Array.isArray(cached)&&cached.length&&cached.length<MIN_CHART_CANDLES)delete S.histCache[cacheKey];
@@ -1626,7 +1650,7 @@ async function loadChart(slot,sym){
     if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[cacheKey]=ch.candles.slice();
     paintSlotData(slot);
     refreshChartOiSeries(ch,S.tf,sym);
-    if(S.showDensity)fetchOrderBook(sym); // #1: pre-fetch OB for density
+    if(S.showDensity)fetchOrderBookUi(sym, densityDeps); // #1: pre-fetch OB for density
   }catch(e){
     if(cb&&ch.sym===sym)cb.innerHTML=`<div class="cph"><span style="color:var(--red);font-size:10px">Ошибка загрузки</span></div>`;
     // If network briefly drops, retry once after a short delay (prevents "dead" chart tiles).
@@ -1865,92 +1889,24 @@ function removeDrawingAtCursor(ch){
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 //  DENSITY (ORDER BOOK CLUSTERS) • Fix #1: uses real depth API
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-const OB_CACHE={}; // sym → {bids:[[price,usdVal],...], asks:[[...]], ts}
-const OB_TTL=45000; // refresh every 45s
-const OB_MAX_CONCURRENT=3;
-let _obPending=0;
-const _obQueue=[];
-const _densityFirstSeen=new Map(); // key: "sym:tier:bucket" -> first seen chart time (sec)
+// Shared deps for density module (order-book fetch + cache).
+const densityDeps = {
+  S,
+  API,
+  fetchJSON: fj,
+  fmtPrice,
+  fk,
+  rCanvas,
+  timeToCoordX,
+  densityCache: _densityCache,
+  consoleWarn: (...args) => console.warn(...args),
+};
 
-async function fetchOrderBook(sym){
-  try{
-    const data=await fj(`${API}/depth?symbol=${encodeURIComponent(sym)}&limit=1000`,10000);
-    // Convert to [price, USDT value] • Fix #1: in dollars, not coin qty
-    const toUsd=levels=>levels.map(([p,q])=>[+p,+p*+q]);
-    OB_CACHE[sym]={bids:toUsd(data.bids),asks:toUsd(data.asks),ts:Date.now()};
-    _densityCache.delete(sym); // invalidate density cache
-    if(S.showDensity)[...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
-  }catch(e){console.warn('OB fetch',sym,e);}
-}
-
-function getOrFetchOB(sym){
-  const cached=OB_CACHE[sym];
-  if(!cached||Date.now()-cached.ts>OB_TTL){
-    if(_obPending<OB_MAX_CONCURRENT){_obPending++;fetchOrderBook(sym).finally(()=>{ _obPending--; const next=_obQueue.shift(); if(next)next();});}
-    else _obQueue.push(()=>getOrFetchOB(sym));
-  }
-  return cached||null;
-}
-
-function computeDensities(ch){
-  const sym=ch.sym||S.fsSym;if(!sym)return[];
-  const ob=getOrFetchOB(sym);if(!ob)return[];
-  const all=[...ob.bids,...ob.asks].sort((a,b)=>a[0]-b[0]);
-  if(all.length<5)return[];
-  let pMin=Infinity,pMax=-Infinity;
-  if(ch.candles.length>0){
-    const cp=ch.candles[ch.candles.length-1].c;
-    pMin=cp*0.7;pMax=cp*1.3; // ±30% from current price • narrower, more relevant
-  }else{all.forEach(([p])=>{pMin=Math.min(pMin,p);pMax=Math.max(pMax,p);});}
-  const relevant=all.filter(([p])=>p>=pMin&&p<=pMax);
-  if(relevant.length<3)return[];
-  // Cluster: 0.3% width • slightly larger clusters = fewer, more meaningful
-  const CLUSTER_PCT=0.003;
-  const clusters=[];let cur=null;
-  for(const[price,usdVal]of relevant){
-    if(!cur||price>cur.centerPrice*(1+CLUSTER_PCT)){
-      if(cur)clusters.push(cur);
-      cur={centerPrice:price,totalUsd:usdVal,count:1};
-    }else{
-      cur.totalUsd+=usdVal;cur.count++;
-      cur.centerPrice=(cur.centerPrice*(cur.count-1)+price)/cur.count;
-    }
-  }
-  if(cur)clusters.push(cur);
-  if(!clusters.length)return[];
-  const vols=clusters.map(c=>c.totalUsd).sort((a,b)=>a-b);
-  const mean=vols.reduce((s,v)=>s+v,0)/vols.length;
-  const std=Math.sqrt(vols.reduce((s,v)=>s+(v-mean)**2,0)/vols.length);
-  // Use persisted settings if available
-  const ds=getDensitySettings(sym);
-  const largeMult=ds.largeMult,medMult=ds.medMult,smallMult=ds.smallMult;
-  const seenAt=ch.candles.length?toChartTime(ch.candles[ch.candles.length-1].t):(Math.floor(Date.now()/1000)+TZ_OFFSET_S);
-  const baseStep=Math.max(1e-8,(ch.candles[ch.candles.length-1]?.c||1)*0.0015); // 0.15% bucket
-  const activeKeys=new Set();
-  // Only show top-tier clusters to avoid noise
-  const zones=clusters
-    .filter(c=>c.totalUsd>=mean+std*smallMult)
-    .map(c=>({
-      _bucket:Math.round(c.centerPrice/baseStep),
-      price:c.centerPrice,
-      vol:c.totalUsd,
-      tier:c.totalUsd>=mean+std*largeMult?'large':c.totalUsd>=mean+std*medMult?'medium':'small',
-    }));
-  for(const z of zones){
-    const key=`${sym}:${z._bucket}`; // bucket-only key so ray start stays tied to first appearance of this price level
-    activeKeys.add(key);
-    if(!_densityFirstSeen.has(key))_densityFirstSeen.set(key,seenAt);
-    z.time=_densityFirstSeen.get(key);
-  }
-  // Trim stale keys for this symbol so map does not grow forever.
-  for(const k of _densityFirstSeen.keys()){
-    if(k.startsWith(sym+':')&&!activeKeys.has(k))_densityFirstSeen.delete(k);
-  }
-  return zones;
-}
+// _obCache, _obQueue, _obPending, _densityFirstSeen and the order-book
+// cache live as state fields on S (initialised lazily by the density
+// module). _densityCache is the in-render cache.
 
 const _densityCache=new Map(); // sym → {ts, zones}
-const _DENSITY_CACHE_TTL=30000; // recompute every 30s max
 
 function drawSessionZones(ctx,ch,W,H){
   if(!S.sessionFx?.enabled||!ch?.lc)return;
@@ -2001,40 +1957,7 @@ function drawSessionZones(ctx,ch,W,H){
 }
 
 function drawDensities(ctx,ch,W,H){
-  if(!ch.cs||!ch.lc)return;
-  const sym=ch.sym||S.fsSym;if(!sym)return;
-  // Use cached zones if fresh
-  const now=Date.now();
-  const cached=_densityCache.get(sym);
-  let zones;
-  if(cached&&now-cached.ts<_DENSITY_CACHE_TTL){zones=cached.zones;}
-  else{zones=computeDensities(ch);_densityCache.set(sym,{ts:now,zones});}
-  if(!zones.length)return;
-  ctx.save();
-  for(const z of zones){
-    const y=ch.cs.priceToCoordinate(z.price);if(y===null||y<0||y>H-TIME_AXIS_H)continue;
-    const x0=Math.max(0,timeToCoordX(ch,z.time)??0);
-    // Do not draw stale ray origins that have scrolled off the visible area
-    if(x0<=0&&z.time<toChartTime(ch.candles[0]?.t||0))continue;
-    let col,alpha;
-    if(z.tier==='large'){col='#e04040';alpha=0.75;}
-    else if(z.tier==='medium'){col='#e8a020';alpha=0.55;}
-    else{col='#606080';alpha=0.35;}
-    ctx.beginPath();ctx.strokeStyle=col;ctx.globalAlpha=alpha;
-    ctx.lineWidth=z.tier==='large'?1.8:z.tier==='medium'?1.3:0.9;
-    ctx.setLineDash(z.tier==='small'?[3,4]:[]);
-    ctx.moveTo(x0,y);ctx.lineTo(W,y);ctx.stroke();
-    ctx.setLineDash([]);ctx.globalAlpha=1;
-    ctx.fillStyle=col;ctx.globalAlpha=alpha+0.2;
-    ctx.font=`${z.tier==='large'?9:8}px JetBrains Mono,monospace`;
-    ctx.textAlign='right';
-    // Fix #1: show in USDT (fk already formats)
-    ctx.fillText(`${fmtPrice(z.price)}  ${fk(z.vol)}$`,W-3,y-(z.tier==='large'?4:3));
-    ctx.textAlign='left';ctx.globalAlpha=1;
-    ctx.beginPath();ctx.fillStyle=col;ctx.globalAlpha=alpha+0.1;
-    ctx.arc(x0,y,z.tier==='large'?3.5:2.5,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
-  }
-  ctx.restore();
+  drawZonesUi(ctx,ch,W,H,densityDeps);
 }
 
 // Track Ctrl key globally • Fix #5
@@ -4635,83 +4558,48 @@ function updateCharts(){
 //  TOGGLE SCREENER
 // в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
 function toggleDensity(){
-  S.showDensity=!S.showDensity;
-  const btn=document.getElementById('densityBtn');
-  if(btn)btn.classList.toggle('on',S.showDensity);
-  if(S.showDensity){
-    // Pre-fetch order books for all visible charts
-    [...S.charts,...S.fsCharts].forEach(ch=>{const s=ch.sym||S.fsSym;if(s)fetchOrderBook(s);});
-  }
-  [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
+  toggleDensityUi({
+    S, rCanvas, renderSettingsDensity,
+    fetchJSON: fj, API,
+    densityCache: _densityCache,
+  });
 }
 
 function getDensitySettings(sym){
-  if(!S.densitySettings[sym])S.densitySettings[sym]={largeMult:3.5,medMult:2.2,smallMult:1.5};
-  return S.densitySettings[sym];
+  return getOrCreateDensitySettings(S.densitySettings, sym);
 }
 
 function renderSettingsDensity(body){
-  const sym=S.fsSym||S.charts.find(c=>c.sym)?.sym||'';
-  const ds=getDensitySettings(sym);
-  body.dataset.densitySym=sym; // store so inputs always reference correct sym
-  body.innerHTML=`
-  <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.6">
-    Плотности • горизонтальные лучи на уровнях с крупными стенками.<br>
-    <span style="color:#e04040">█</span> крупная &nbsp;<span style="color:#e8a020">█</span> средняя &nbsp;<span style="color:#606080">█</span> малая
-  </div>
-  <div class="smodal-row">
-    <span class="smodal-lbl">Отображение плотностей</span>
-    <div class="smodal-btns">
-      ${tbtnHtml('dOn','Вкл',"setDensityVisible(true)",S.showDensity)}
-      ${tbtnHtml('dOff','Выкл',"setDensityVisible(false)",!S.showDensity)}
-    </div>
-  </div>
-  ${sym?`
-  <div style="font-size:9px;color:var(--text2);margin:10px 0 4px">Пороги для: <b style="color:#fff">${sym.replace(/USDT$/,'')}</b></div>
-  <div class="smodal-row">
-    <span class="smodal-lbl">Крупная (×π)</span>
-    <input id="dLarge" type="number" step="0.1" min="0.5" max="20" value="${ds.largeMult}"
-      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'largeMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
-  </div>
-  <div class="smodal-row">
-    <span class="smodal-lbl">Средняя (×π)</span>
-    <input id="dMed" type="number" step="0.1" min="0.5" max="20" value="${ds.medMult}"
-      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'medMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
-  </div>
-  <div class="smodal-row">
-    <span class="smodal-lbl">Малая (×π)</span>
-    <input id="dSmall" type="number" step="0.1" min="0.1" max="20" value="${ds.smallMult}"
-      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'smallMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
-  </div>
-  <div style="margin-top:8px">
-    <button class="tbtn" onclick="resetDensitySettings(document.getElementById('smodal-body').dataset.densitySym)">вџі Сброс</button>
-  </div>`:'<div style="font-size:9px;color:var(--text3);margin-top:8px">Откройте монету для настройки порогов</div>'}
-  `;
+  renderSettingsDensityUi(body, {
+    S, tbtnHtml,
+    fetchJSON: fj, API,
+    densityCache: _densityCache,
+    rCanvas,
+    timeToCoordX,
+  });
 }
 
 function setDensityVisible(on){
-  S.showDensity=on;
-  const btn=document.getElementById('densityBtn');if(btn)btn.classList.toggle('on',on);
-  [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
-  renderSettingsDensity(document.getElementById('smodal-body'));
+  setDensityVisibleUi(on, {
+    S, rCanvas, renderSettingsDensity,
+    fetchJSON: fj, API, densityCache: _densityCache,
+  });
 }
 
 function setDensityMult(sym,key,val){
-  const v=parseFloat(val);
-  if(isNaN(v)||v<0.1)return; // ignore invalid
-  getDensitySettings(sym)[key]=v;
-  _densityCache.delete(sym); // MUST invalidate cache so new value takes effect
-  [...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
+  setDensityMultUi(sym, key, val, {
+    S, rCanvas,
+    fetchJSON: fj, API, densityCache: _densityCache,
+    setDensityThreshold: setDensityThresholdMod,
+  });
 }
 
 function resetDensitySettings(sym){
-  S.densitySettings[sym]={largeMult:3.5,medMult:2.2,smallMult:1.5};
-  _densityCache.delete(sym);
-  renderSettingsDensity(document.getElementById('smodal-body'));
-  [...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
+  resetDensitySettingsUi(sym, {
+    S, rCanvas, renderSettingsDensity,
+    fetchJSON: fj, API, densityCache: _densityCache,
+    resetDensitySettings: resetDensitySettingsMod,
+  });
 }
 
 function renderSettingsAlerts(body){
