@@ -120,6 +120,19 @@ import {
 // API base - in dev points to local backend, in prod to your Railway URL
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
 
+// IMPORTANT: declare state-bearing `let` bindings that are accessed from
+// `calcAll()` (and other early functions) BEFORE that function is defined.
+// Otherwise terser's `mangle: { toplevel: true }` + inline/hoist rewrites can
+// turn access of these into a TDZ ReferenceError ("Cannot access 'k1' before
+// initialization") in the production build.
+/** lastFundingRate (доля, не %) по символу */
+let _fundRates = {}
+/** {oi1h, oi4h} в % от openInterestHist 1h */
+let _oiDelta = {}
+let _fundOiSymIdx = 0
+let _fundOiBusy = false
+let _fundOiInterval = null
+
 // Auth helpers
 export function getToken() { return localStorage.getItem('cs_token') }
 export function setToken(t) { localStorage.setItem('cs_token', t) }
@@ -3596,13 +3609,9 @@ let _metricsSyncCursor=0;
 let _metricsSyncInterval=null;
 let _tickerRestFallbackInterval=null;
 let _lastTickerRestAt=0;
-/** lastFundingRate (доля, не %) по символу */
-let _fundRates={};
-/** {oi1h, oi4h} в % от openInterestHist 1h */
-let _oiDelta={};
-let _fundOiSymIdx=0;
-let _fundOiBusy=false;
-let _fundOiInterval=null;
+// NOTE: _fundRates, _oiDelta, _fundOiSymIdx, _fundOiBusy, _fundOiInterval
+// are declared at the top of this module so they are available to calcAll()
+// and other early-defined functions. See top-of-file comment.
 
 async function refreshPremiumFundingAll(){
   if(document.hidden)return;
