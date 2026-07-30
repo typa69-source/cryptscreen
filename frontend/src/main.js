@@ -6,6 +6,7 @@ import {
   refreshEmaButtonState as refreshEmaButtonStateUi,
   toggleEma as toggleEmaUi,
 } from './emaEditor-ui.js'
+import { cacheGetFresh, cacheSet, cacheHasIDB } from './idb-cache.js'
 import {
   cloneDrawings as cloneDrawingsUi,
   drawingLineColor as drawingLineColorUi,
@@ -5966,20 +5967,66 @@ async function main() {
     updSortHdr();
     if(S.LC)for(let i=0;i<S.gridSize;i++)initLCChart(i);
 
+    // ── IDB cache hydrate ──────────────────────────────────────────
+    // Show cached ticker/symbols immediately so the screener is not
+    // empty during the ~1-3s Binance round-trip. Fresh data will
+    // overwrite these values a moment later.
+    let _cacheHitSyms = false;
+    let _cacheHitTk = false;
+    if (cacheHasIDB()) {
+      try {
+        const [cachedSyms, cachedTk] = await Promise.all([
+          cacheGetFresh('binance:symbols', 24 * 60 * 60 * 1000),
+          cacheGetFresh('binance:ticker24', 30 * 1000),
+        ]);
+        if (Array.isArray(cachedSyms) && cachedSyms.length) {
+          S.syms = cachedSyms;
+          _cacheHitSyms = true;
+        }
+        if (cachedTk && typeof cachedTk === 'object') {
+          Object.assign(S.tk, cachedTk);
+          _cacheHitTk = true;
+        }
+        if (_cacheHitSyms || _cacheHitTk) {
+          // Render placeholder rows so the UI is not blank while fresh
+          // data is fetched. mx is still empty so most metrics show as
+          // '—'; we will re-render once calcAll() has run.
+          renderTable();
+        }
+      } catch (e) { /* cache is best-effort, never block init */ }
+    }
+
     ldSet('Получение списка фьючерсов BinanceвЂ¦',18);
     let info;
     try{info=await fj(`${API}/exchangeInfo`);}
-    catch(e){throw new Error(`Не удалось подключиться к Binance API.\n${e.message}\n\nПричины: нет интернета, Binance заблокирован, CORS.`);}
-    if(!info||!Array.isArray(info.symbols))throw new Error('Binance вернул неожиданный ответ');
-    S.syms=info.symbols.filter(s=>s?.contractType==='PERPETUAL'&&s?.quoteAsset==='USDT'&&s?.status==='TRADING').map(s=>s.symbol).sort();
+    catch(e){
+      // If we already have symbols from cache, don't fail hard — the
+      // screener can still work with stale symbols while we retry.
+      if (_cacheHitSyms) {
+        console.warn('exchangeInfo refresh failed, using cache:', e.message);
+      } else {
+        throw new Error(`Не удалось подключиться к Binance API.\n${e.message}\n\nПричины: нет интернета, Binance заблокирован, CORS.`);
+      }
+    }
+    if(info&&Array.isArray(info.symbols)){
+      S.syms=info.symbols.filter(s=>s?.contractType==='PERPETUAL'&&s?.quoteAsset==='USDT'&&s?.status==='TRADING').map(s=>s.symbol).sort();
+      cacheSet('binance:symbols', S.syms, 24 * 60 * 60 * 1000);
+    }
 
     ldSet('Загрузка 24-часовых данныхвЂ¦',45);
-    const rawTk=await fj(`${API}/ticker/24hr`);
-    if(Array.isArray(rawTk)){
-      for(const t of rawTk){
-        if(t?.symbol?.endsWith('USDT'))
-          S.tk[t.symbol]={p:+t.lastPrice,c24:+t.priceChangePercent,h24:+t.highPrice,l24:+t.lowPrice,qv:+t.quoteVolume,tr:+t.count};
+    try{
+      const rawTk=await fj(`${API}/ticker/24hr`);
+      if(Array.isArray(rawTk)){
+        for(const t of rawTk){
+          if(t?.symbol?.endsWith('USDT'))
+            S.tk[t.symbol]={p:+t.lastPrice,c24:+t.priceChangePercent,h24:+t.highPrice,l24:+t.lowPrice,qv:+t.quoteVolume,tr:+t.count};
+        }
+        // Persist the freshly-built map for next cold start.
+        cacheSet('binance:ticker24', S.tk, 30 * 1000);
       }
+    }catch(e){
+      // If we already have ticker from cache, the UI still works.
+      if (!_cacheHitTk) console.warn('ticker/24hr failed:', e.message);
     }
 
     ldSet('Вычисление метриквЂ¦',70);calcAll();
