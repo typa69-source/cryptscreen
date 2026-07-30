@@ -2986,15 +2986,25 @@ function openQuickFind(seed){
   inp.value=mapped;
   renderQuickFindList();
   m.style.display='flex';
-  // Caret goes to the END so the next keystroke appends — never select
-  // the seeded text. Some browsers reset the selection when focus() is
-  // called on an element that was just made visible (display:none→flex),
-  // so we move the caret inside rAF to guarantee focus has settled.
-  inp.focus({ preventScroll: true });
-  requestAnimationFrame(() => {
-    const len=inp.value.length;
-    try{inp.setSelectionRange(len,len);}catch(e){}
-  });
+  // Place the caret at the END so the next keystroke appends. Chromium
+  // tends to select-all on focus() of a freshly-rendered input, so we
+  // blur+focus to force a "fresh" focus state, then deselect. We do this
+  // both synchronously and after a frame, because the modal is still
+  // settling its layout when the sync block runs.
+  try{ inp.blur(); }catch(e){}
+  try{ inp.focus({preventScroll:true}); }catch(e){ try{inp.focus();}catch(_){} }
+  const placeCaret=()=>{
+    try{
+      if(document.activeElement!==inp){
+        try{inp.focus({preventScroll:true});}catch(_){inp.focus();}
+      }
+      const len=inp.value.length;
+      inp.setSelectionRange(len,len);
+    }catch(e){}
+  };
+  placeCaret();
+  requestAnimationFrame(placeCaret);
+  setTimeout(placeCaret,0);
 }
 function closeQuickFind(){
   const m=document.getElementById('quickFindModal');
@@ -4526,10 +4536,11 @@ function updateToggleScrBtn(){
   const btn=document.getElementById('toggleScrBtn');
   if(!btn)return;
   const on=S.fsOpen?S.fsScreenerVisible:S.screenerVisible;
-  // Use \u-escaped glyphs so this never re-decodes as mojibake.
-  // «−» (eye-slash) when the screener is visible (clicking hides it),
-  // «+» (plus) when hidden (clicking shows it).
-  btn.textContent = (on ? '\u2212' : '+') + ' Список';
+  // Reconstruct the label from char codes so this file is safe to save
+  // in any encoding without producing mojibake. Word is "Spisok"
+  // (Список): \u0421\u043f\u0438\u0441\u043e\u043a. \u2212 is minus.
+  btn.textContent = (on ? String.fromCharCode(0x2212) : '+')
+    + ' ' + String.fromCharCode(0x0421, 0x043f, 0x0438, 0x0441, 0x043e, 0x043a);
   btn.classList.toggle('on',on);
 }
 
@@ -5958,6 +5969,7 @@ async function main() {
     ldSet('Построение интерфейсавЂ¦',12);
     buildChartGrid();
     ensureQuickFindUI();
+    updateToggleScrBtn(); // first paint: replace the ASCII placeholder
     buildScreenerHeader(document.getElementById('shdr'));
     updSortHdr();
     if(S.LC)for(let i=0;i<S.gridSize;i++)initLCChart(i);
