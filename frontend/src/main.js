@@ -2986,12 +2986,15 @@ function openQuickFind(seed){
   inp.value=mapped;
   renderQuickFindList();
   m.style.display='flex';
-  // Don't auto-select the seeded text • the user just typed it and
-  // expects to continue typing more characters, not to overwrite.
-  inp.focus();
-  // Move caret to the end so the next keystroke appends.
-  const len=inp.value.length;
-  try{inp.setSelectionRange(len,len);}catch(e){}
+  // Caret goes to the END so the next keystroke appends — never select
+  // the seeded text. Some browsers reset the selection when focus() is
+  // called on an element that was just made visible (display:none→flex),
+  // so we move the caret inside rAF to guarantee focus has settled.
+  inp.focus({ preventScroll: true });
+  requestAnimationFrame(() => {
+    const len=inp.value.length;
+    try{inp.setSelectionRange(len,len);}catch(e){}
+  });
 }
 function closeQuickFind(){
   const m=document.getElementById('quickFindModal');
@@ -3091,13 +3094,20 @@ document.addEventListener('keydown',e=>{
     return;
   }
   if(mod&&!e.altKey&&(isZ||isY)&&!editable)return;
-  if(!qfOpen&&!editable&&!S.drawMode&&!mod&&!e.altKey&&e.key.length===1&&/[a-z0-9]/i.test(e.key)){
-    const rulerOn=[...S.charts,...S.fsCharts].some(c=>c.ruler?.active);
-    const blocks=document.getElementById('settingsModal')?.classList.contains('open')||!!document.getElementById('emaEditorModal')||!!document.getElementById('alertPctOverlay');
-    if(!blocks&&!rulerOn){
-      openQuickFind(e.key);
-      e.preventDefault();
-      return;
+  if(!qfOpen&&!editable&&!S.drawMode&&!mod&&!e.altKey&&e.key.length===1){
+    // Open quickfind if either the raw key or its RU→EN mapping is a
+    // Latin alphanum. This way typing on a Russian keyboard (where the
+    // first char might be Cyrillic, e.g. "й" instead of "q") still
+    // opens the panel and remaps to "q" downstream.
+    const mapped=mapRuKeyboardToEn(e.key);
+    if(/[a-z0-9]/i.test(mapped)){
+      const rulerOn=[...S.charts,...S.fsCharts].some(c=>c.ruler?.active);
+      const blocks=document.getElementById('settingsModal')?.classList.contains('open')||!!document.getElementById('emaEditorModal')||!!document.getElementById('alertPctOverlay');
+      if(!blocks&&!rulerOn){
+        openQuickFind(e.key);
+        e.preventDefault();
+        return;
+      }
     }
   }
   if(e.key==='Escape'){
@@ -4516,7 +4526,10 @@ function updateToggleScrBtn(){
   const btn=document.getElementById('toggleScrBtn');
   if(!btn)return;
   const on=S.fsOpen?S.fsScreenerVisible:S.screenerVisible;
-  btn.textContent=(on?'—Ђ':'–¶')+' Список';
+  // Use \u-escaped glyphs so this never re-decodes as mojibake.
+  // «−» (eye-slash) when the screener is visible (clicking hides it),
+  // «+» (plus) when hidden (clicking shows it).
+  btn.textContent = (on ? '\u2212' : '+') + ' Список';
   btn.classList.toggle('on',on);
 }
 

@@ -191,8 +191,13 @@ html,body{
 /* CHARTS PANEL */
 #cpanel{width:64%;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border);overflow:hidden;transition:width .2s}
 #cgrid{flex:1;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
-  gap:1px;background:var(--border);overflow:hidden}
-.ccell{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;user-select:none;}
+  overflow:hidden;background:var(--bg)}
+/* Grid separators via inset box-shadow on each cell. The parent's
+   overflow:hidden clips the outer edges of the first/last row+column,
+   leaving clean 1px lines between cells regardless of subpixel rounding
+   (the old gap+background hack could drop the last column's line). */
+.ccell{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;user-select:none;
+  box-shadow:inset -1px 0 0 var(--border),inset 0 -1px 0 var(--border)}
 .chead{height:24px;padding:0 4px 0 6px;display:flex;flex-direction:row;align-items:center;gap:5px;
   background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0;user-select:none;overflow:hidden}
 .chead.wrap{height:28px}
