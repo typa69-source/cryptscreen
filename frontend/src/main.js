@@ -1902,6 +1902,13 @@ function removeDrawingAtCursor(ch){
 // ───────────────────────────────────────────────────────────────
 //  DENSITY (ORDER BOOK CLUSTERS) • Fix #1: uses real depth API
 // ───────────────────────────────────────────────────────────────
+// _obCache, _obQueue, _obPending, _densityFirstSeen and the order-book
+// cache live as state fields on S (initialised lazily by the density
+// module). _densityCache is the in-render cache.
+// NB: must be declared BEFORE densityDeps, because the object literal
+// below reads it at module-evaluation time (TDZ otherwise).
+const _densityCache=new Map(); // sym → {ts, zones}
+
 // Shared deps for density module (order-book fetch + cache).
 const densityDeps = {
   S,
@@ -1914,12 +1921,6 @@ const densityDeps = {
   densityCache: _densityCache,
   consoleWarn: (...args) => console.warn(...args),
 };
-
-// _obCache, _obQueue, _obPending, _densityFirstSeen and the order-book
-// cache live as state fields on S (initialised lazily by the density
-// module). _densityCache is the in-render cache.
-
-const _densityCache=new Map(); // sym → {ts, zones}
 
 function drawSessionZones(ctx,ch,W,H){
   if(!S.sessionFx?.enabled||!ch?.lc)return;
