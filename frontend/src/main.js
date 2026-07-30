@@ -7,6 +7,7 @@ import {
   toggleEma as toggleEmaUi,
 } from './emaEditor-ui.js'
 import { cacheGetFresh, cacheSet, cacheHasIDB } from './idb-cache.js'
+import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
 import {
   cloneDrawings as cloneDrawingsUi,
   drawingLineColor as drawingLineColorUi,
@@ -66,7 +67,7 @@ import {
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
-import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile } from './metrics.js'
+import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
 import {
   DEFAULT_DENSITY_SETTINGS,
   getOrCreateDensitySettings,
@@ -457,13 +458,6 @@ function applyDefaultChartViewAll(){
   if(S.fsOpen)S.fsCharts.forEach(ch=>{if(ch.lc&&ch.candles?.length)applyDefaultChartView(ch);});
 }
 
-function calcRangeFromCandles(candles){
-  if(!candles||!candles.length)return null;
-  const H=candles.reduce((m,k)=>Math.max(m,k.h),-Infinity);
-  const L=candles.reduce((m,k)=>Math.min(m,k.l),Infinity);
-  return L>0?(H-L)/L*100:null;
-}
-
 function mkChart(){
   return{lc:null,cs:null,vs:null,sym:null,candles:[],histLoading:false,
     drawings:[], pendingP1:null, ruler:null, hoverX:0, hoverY:0,
@@ -553,38 +547,6 @@ function _onPanStart() {
   }, 180));
 }
 
-/** Последние N баров → % изменения quote-объёма (qv) + path для SVG (лог-масштаб по Y). */
-function sparkVolSnapshot(kl,n=30){
-  if(!kl||kl.length<6)return{spVol:null,spVold:''};
-  const sl=kl.slice(-Math.min(n,kl.length));
-  const vols=[];
-  for(const k of sl){
-    const q=+k.qv;
-    if(isFinite(q)&&q>=0)vols.push(q);
-  }
-  if(vols.length<6)return{spVol:null,spVold:''};
-  const first=Math.max(vols[0],1e-9),last=vols[vols.length-1];
-  const chg=(last/first-1)*100;
-  const logLo=Math.log(Math.min(...vols.map(vol=>Math.max(vol,1e-9)))+1);
-  const logHi=Math.log(Math.max(...vols)+1);
-  const loR=logLo,hiR=logHi<=logLo?logLo+1e-6:logHi;
-  const padY=5,padX=1;
-  const W=100,H=40;
-  const n1=vols.length-1||1;
-  const pts=vols.map((vol,i)=>{
-    const x=padX+(i/n1)*(W-2*padX);
-    const lv=Math.log(Math.max(vol,1e-9)+1);
-    const y=padY+(1-(lv-loR)/(hiR-loR))*(H-2*padY);
-    return x.toFixed(2)+','+y.toFixed(2);
-  });
-  return{spVol:chg,spVold:'M'+pts.join(' L')};
-}
-function sparkHeatBackground(pct){
-  if(pct==null||isNaN(pct))return'transparent';
-  const t=Math.max(-6,Math.min(6,pct))/6;
-  if(t>=0)return`rgba(34,197,94,${0.06+t*0.26})`;
-  return`rgba(239,68,68,${0.06+(-t)*0.26})`;
-}
 /** Последние period закрытий на k5 → SMA, полосы Боллинджера, относительная ширина полос. */
 function bollingerOnTail(k5,period=20,mult=2){
   if(!k5||k5.length<period)return null;
@@ -723,7 +685,6 @@ function getSessionKindByUtcHour(h){
   if(S.sessionFx.asia!==false&&h>=0&&h<9)return'as';
   return'dead';
 }
-function calcRets(kl){if(!kl||kl.length<2)return[];const r=[];for(let i=1;i<kl.length;i++)r.push((kl[i].c-kl[i-1].c)/kl[i-1].c);return r;}
 function calcCorr(a,b){if(!a||!b||a.length<5)return null;const n=Math.min(a.length,b.length);const x=a.slice(-n),y=b.slice(-n);let mx=0,my=0;for(let i=0;i<n;i++){mx+=x[i];my+=y[i];}mx/=n;my/=n;let num=0,sx=0,sy=0;for(let i=0;i<n;i++){const xa=x[i]-mx,ya=y[i]-my;num+=xa*ya;sx+=xa*xa;sy+=ya*ya;}const d=Math.sqrt(sx*sy);return d>0?num/d:null;}
 
 function updateLiveKlineSeries(kl,intervalMs,price,nowMs){
@@ -2994,7 +2955,20 @@ function ensureQuickFindUI(){
   document.body.appendChild(d);
   d.addEventListener('mousedown',ev=>{if(ev.target===d)closeQuickFind();});
   const inp=document.getElementById('qfInput');
-  inp.addEventListener('input',renderQuickFindList);
+  inp.addEventListener('input',()=>{
+    // Mirror the top search behaviour: if the user typed a Cyrillic char
+    // on a Russian layout, remap it to the matching English key before
+    // we filter. This lets people type tickers (BTC, ETH, ...) without
+    // having to switch keyboard layout first.
+    const raw=inp.value;
+    const mapped=mapRuKeyboardToEn(raw);
+    if(mapped!==raw){
+      const pos=inp.selectionStart;
+      inp.value=mapped;
+      try{inp.setSelectionRange(pos,pos);}catch(e){}
+    }
+    renderQuickFindList();
+  });
   inp.addEventListener('keydown',ev=>{
     if(ev.key==='Enter'){
       const first=document.querySelector('#qfList .qf-item');
@@ -3006,10 +2980,18 @@ function openQuickFind(seed){
   ensureQuickFindUI();
   const m=document.getElementById('quickFindModal');
   const inp=document.getElementById('qfInput');
-  inp.value=seed!=null&&seed!==''?String(seed).slice(0,24):'';
+  // Map RU→EN layout so users typing on a Russian keyboard get the
+  // English ticker they actually wanted (same logic as the top search).
+  const mapped=mapRuKeyboardToEn(seed!=null&&seed!==''?String(seed):'').slice(0,24);
+  inp.value=mapped;
   renderQuickFindList();
   m.style.display='flex';
-  inp.focus();inp.select();
+  // Don't auto-select the seeded text • the user just typed it and
+  // expects to continue typing more characters, not to overwrite.
+  inp.focus();
+  // Move caret to the end so the next keystroke appends.
+  const len=inp.value.length;
+  try{inp.setSelectionRange(len,len);}catch(e){}
 }
 function closeQuickFind(){
   const m=document.getElementById('quickFindModal');
@@ -6029,7 +6011,36 @@ async function main() {
       if (!_cacheHitTk) console.warn('ticker/24hr failed:', e.message);
     }
 
-    ldSet('Вычисление метриквЂ¦',70);calcAll();
+    ldSet('Вычисление метриквЂ¦',70);
+    // Run the heavy per-symbol metric pass off the main thread when we
+    // can. Fall back to the synchronous calcAll() in any failure case
+    // (worker unsupported, timeout, postMessage error) so behaviour
+    // is identical for users on browsers without Worker support.
+    try {
+      if (workerAvailable()) {
+        const payload = {
+          syms: S.syms,
+          k5m: S.k5m, k1h: S.k1h, k1m: S.k1m,
+          tk: S.tk,
+          fundRates: _fundRates,
+          oiDelta: _oiDelta,
+          prevMx: S.mx,
+          dayStartMs: new Date().setHours(0, 0, 0, 0),
+        };
+        const res = await runMetrics(payload);
+        if (res && res.mx) {
+          S.mx = res.mx;
+          if (Array.isArray(res.btcR)) S.btcR = res.btcR;
+        } else {
+          calcAll();
+        }
+      } else {
+        calcAll();
+      }
+    } catch (e) {
+      console.warn('metrics worker failed, falling back to main thread:', e.message);
+      calcAll();
+    }
     ldSet('Готово!',100);
     renderTable();updSortHdr();updTime();refreshEMAButtonState();
     setTimeout(ldHide,150);

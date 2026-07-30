@@ -167,6 +167,64 @@ export function calcVolProfile(kl,bins=24){
   return prof.map((v,i)=>({price:L+(i+0.5)*bucketH,vol:v,pct:maxV?v/maxV:0}));
 }
 
+// Returns percentage range (high-low)/low*100 for a slice of candles.
+// Used to compute intraday range from the day's 1h candles.
+export function calcRangeFromCandles(candles){
+  if(!candles||!candles.length)return null;
+  const H=candles.reduce((m,k)=>Math.max(m,k.h),-Infinity);
+  const L=candles.reduce((m,k)=>Math.min(m,k.l),Infinity);
+  return L>0?(H-L)/L*100:null;
+}
+
+// Array of simple returns between consecutive closes. Used for correlations.
+export function calcRets(kl){
+  if(!kl||kl.length<2)return[];
+  const r=[];
+  for(let i=1;i<kl.length;i++)r.push((kl[i].c-kl[i-1].c)/kl[i-1].c);
+  return r;
+}
+
+/**
+ * Snapshot of the volume trend on the last N bars.
+ * Returns:
+ *   spVol — % change of last vs first quote-volume (used for sorting)
+ *   spVold — SVG path data with log-scale Y (compact string for the table cell)
+ */
+export function sparkVolSnapshot(kl,n=30){
+  if(!kl||kl.length<6)return{spVol:null,spVold:''};
+  const sl=kl.slice(-Math.min(n,kl.length));
+  const vols=[];
+  for(const k of sl){
+    const q=+k.qv;
+    if(isFinite(q)&&q>=0)vols.push(q);
+  }
+  if(vols.length<6)return{spVol:null,spVold:''};
+  const first=Math.max(vols[0],1e-9),last=vols[vols.length-1];
+  const chg=(last/first-1)*100;
+  const logLo=Math.log(Math.min(...vols.map(vol=>Math.max(vol,1e-9)))+1);
+  const logHi=Math.log(Math.max(...vols)+1);
+  const loR=logLo,hiR=logHi<=logLo?logLo+1e-6:logHi;
+  const padY=5,padX=1;
+  const W=100,H=40;
+  const n1=vols.length-1||1;
+  const pts=vols.map((vol,i)=>{
+    const x=padX+(i/n1)*(W-2*padX);
+    const lv=Math.log(Math.max(vol,1e-9)+1);
+    const y=padY+(1-(lv-loR)/(hiR-loR))*(H-2*padY);
+    return x.toFixed(2)+','+y.toFixed(2);
+  });
+  return{spVol:chg,spVold:'M'+pts.join(' L')};
+}
+
+// Background tint for the sp5/spv sparkline cells. Green for positive %,
+// red for negative. Magnitude capped at ±6% to avoid very dark cells.
+export function sparkHeatBackground(pct){
+  if(pct==null||isNaN(pct))return'transparent';
+  const t=Math.max(-6,Math.min(6,pct))/6;
+  if(t>=0)return`rgba(34,197,94,${0.06+t*0.26})`;
+  return`rgba(239,68,68,${0.06+(-t)*0.26})`;
+}
+
 // Expose legacy globals temporarily for interop with main.js
 if(typeof window!=='undefined'){
   window.calcATR = calcATR;
@@ -183,4 +241,8 @@ if(typeof window!=='undefined'){
   window.calcBbSignals = calcBbSignals;
   window.sparkTrendSnapshot = sparkTrendSnapshot;
   window.calcVolProfile = calcVolProfile;
+  window.calcRangeFromCandles = calcRangeFromCandles;
+  window.calcRets = calcRets;
+  window.sparkVolSnapshot = sparkVolSnapshot;
+  window.sparkHeatBackground = sparkHeatBackground;
 }
