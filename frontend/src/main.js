@@ -224,7 +224,7 @@ function buildAuthUI() {
       const data = await res.json()
       if (!res.ok) { errEl.textContent = data.error || 'Ошибка'; btn.disabled = false; btn.textContent = mode === 'login' ? 'ВОЙТИ' : 'ЗАРЕГИСТРИРОВАТЬСЯ'; return }
       if (mode === 'register') {
-        okEl.textContent = 'Аккаунт создан! ВходимвЂ¦'
+        okEl.textContent = 'Аккаунт создан! Входим…'
         // auto-login after register
         const loginRes = await fetch(`${BACKEND}/api/auth/login`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -327,9 +327,9 @@ if (getToken()) {
 }
 
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────
 // ORIGINAL APP CODE
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────
 // State, constants, formatting and network helpers are imported from modules.
 
 function loadChartViewPrefs(){
@@ -490,9 +490,9 @@ function activeCols(){
     .map(id=>ALL_COLS.find(c=>c.id===id)).filter(Boolean);
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  LOADING UI
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function ldSet(t,p,d){
   const tEl=document.getElementById('ltxt');
   const pEl=document.getElementById('lfill');
@@ -840,9 +840,9 @@ function calcAll(){
   S.mx=nextMx;
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  FORMAT HELPERS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function fv(v,id){
   if(v==null||isNaN(v))return'•';
   if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5'||id==='spv')return(v>0?'+':'')+fn(v,2)+'%';
@@ -937,9 +937,9 @@ function showConfirmModal(text,{title='Подтверждение',okText='По�
   ok.focus();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  CHART GRID BUILD
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function buildChartGrid(){
   const g=document.getElementById('cgrid');g.innerHTML='';
   const n=S.gridSize;
@@ -1038,9 +1038,9 @@ function setCoinIcon(elId,sym){
   tryNext();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  CHART INIT
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function initLCChart(slot,isFs=false,fsIdx=null){
   if(!S.LC)return false;
   const ch=isFs?S.fsCharts[fsIdx]:S.charts[slot];
@@ -1421,9 +1421,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   return true;
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  CHART LOAD
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function getSymDrawings(sym){
   if(!S.symDrawings[sym])S.symDrawings[sym]=[];
   return S.symDrawings[sym];
@@ -1808,9 +1808,9 @@ async function loadMoreHistory(slot){
   }catch(e){}finally{ch.histLoading=false;}
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  CANVAS DRAWING SYSTEM
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function getCoords(container,cx,cy){const r=container.getBoundingClientRect();return{x:cx-r.left,y:cy-r.top};}
 
 function timeToCoordX(ch,time){ return timeToCoordXUi(ch,time); }
@@ -1899,9 +1899,9 @@ function removeDrawingAtCursor(ch){
   }
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  DENSITY (ORDER BOOK CLUSTERS) • Fix #1: uses real depth API
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 // Shared deps for density module (order-book fetch + cache).
 const densityDeps = {
   S,
@@ -1982,7 +1982,7 @@ document.addEventListener('keyup',e=>{if(e.key==='Control'||e.key==='Meta')_ctrl
 const PRICE_AXIS_W=65;
 const TIME_AXIS_H=22;
 
-// в”Ђв”Ђ Render canvas в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ Render canvas ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 // Per-chart RAF guard: only one pending rCanvas per chart at a time
 function rCanvas(ch,opts){
   if(_anyChartPanning||opts?.immediate){
@@ -2264,7 +2264,7 @@ function drawRuler(ctx,ch){
   ctx.restore();
 }
 
-// в”Ђв”Ђ Alert Ray в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ Alert Ray ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function drawAlertRay(ctx,ch,d,W,hov){
   const p1=resolveDrawPoint(ch,d.p1);
   const y=ch.cs.priceToCoordinate(p1.price);if(y===null)return;
@@ -2333,7 +2333,7 @@ function drawAlertTLine(ctx,ch,d,hov){
   ctx.restore();
 }
 
-// в”Ђв”Ђ Brush stroke в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ Brush stroke ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function drawBrushStroke(ctx,ch,d,hov){
   if(!d.pts||d.pts.length<2)return;
   if(!ch.cs||!ch.lc)return;
@@ -2360,7 +2360,7 @@ function drawBrushStroke(ctx,ch,d,hov){
 let _brushColor='#f97316';
 let _brushWidth=2;
 
-// в”Ђв”Ђ Trade helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ Trade helpers ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 // Returns entry/tp/sl as absolute prices (migrates old rr-based format)
 function getTradeParams(d){ return getTradeParamsUi(d); }
 // Seconds per canvas pixel (for horizontal time drag)
@@ -2375,7 +2375,7 @@ function getTimePerPx(ch){
   return(t2-t1)/(x2-x1);
 }
 
-// в”Ђв”Ђ Trade Rectangle (Long / Short simulation) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ Trade Rectangle (Long / Short simulation) ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function drawTradeRect(ctx,ch,d,hov,preview=false){
   if(!d.p1||!d.p2||!ch.cs||!ch.lc)return;
   const{isLong,entryPrice,tpPrice,slPrice}=getTradeParams(d);
@@ -2432,11 +2432,11 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   ctx.fillStyle='#ffffff88';ctx.font='9px JetBrains Mono,monospace';
   ctx.fillText(`Вход ${fmtPrice(entryPrice)} · R:R ${rr.toFixed(1)}:1`,lx+3,yEntry-4);
   ctx.fillStyle=dirCol;ctx.font='bold 10px JetBrains Mono,monospace';ctx.textAlign='center';
-  ctx.fillText(isLong?'в–І ЛОНГ':'в–ј ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
+  ctx.fillText(isLong?'–І ЛОНГ':'–ј ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
   ctx.globalAlpha=1;ctx.restore();
 }
 
-// в”Ђв”Ђ EMA overlay в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ EMA overlay ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 // EMA settings per chart (shared via S.emaSettings)
 const EMA_DEFAULTS=[
   {period:9, color:'#f97316',visible:true},
@@ -2531,7 +2531,7 @@ function drawEMAs(ctx,ch,W,H){
   ctx.globalAlpha=1;ctx.restore();
 }
 
-// в”Ђв”Ђ EMA Crossover alerts в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ EMA Crossover alerts ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 // Check last 2 EMA values: if they cross, fire alert
 let _emaCrossAlerted={}; // key="sym_aXb" → last alert ts
 function checkEMACrossovers(ch){
@@ -2576,7 +2576,7 @@ function checkEMACrossovers(ch){
   }
 }
 
-// в”Ђв”Ђ Alert Sound в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ Alert Sound ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 let _alertCtx=null;
 function playAlert(freq=880){
   try{
@@ -2713,7 +2713,7 @@ function showAlertPctInput(ch,drawing,container){
   setTimeout(()=>document.addEventListener('mousedown',function h(e){if(!wrap.contains(e.target)){confirm();document.removeEventListener('mousedown',h);}},true),100);
 }
 
-// в”Ђв”Ђ Interact events в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ Interact events ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function onInteractMove(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   ch.hoverX=x;ch.hoverY=y;
@@ -2844,7 +2844,7 @@ function openEMAEditor(mode='auto'){
 }
 window.openEMAEditor=openEMAEditor;
 
-// в”Ђв”Ђ Ruler в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ”Ђ”Ђ Ruler ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function clearAllRulers(){
   const tt=document.getElementById('rulerTooltip');
   if(tt)tt.style.display='none';
@@ -2973,9 +2973,9 @@ function updateRulerTooltip(ch){
   tt.style.display='block';
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  БЫСТРЫЙ ПОИСК МОНЕТЫ (печать с клавиатуры)
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function ensureQuickFindUI(){
   if(document.getElementById('quickFindModal'))return;
   const d=document.createElement('div');
@@ -3257,9 +3257,9 @@ window.addEventListener('online',()=>{
   handleResumeRecovery('network-online');
 });
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  WEBSOCKETS • generation counter pattern prevents reconnect storms
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 let _wsChartsGen=0; // increment on each start to invalidate old callbacks
 let _wsScreenerGen=0;
 let _wsChartsReconnectTimer=null;
@@ -3572,7 +3572,7 @@ function startRealtimeWatchdog(){
   },2500);
 }
 
-// в”Ђв”Ђ Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) в”Ђв”Ђ
+// ”Ђ”Ђ Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) ”Ђ”Ђ
 const _tickerWorkerCode=`
 self.onmessage=function(e){
   try{
@@ -3964,14 +3964,14 @@ function updateFsHeaderValues(){
   if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∞</span>${fn(corVal,2)}`:'';
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  SCREENER TABLE (shared for main & FS)
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function buildScreenerHeader(hdrEl){
   hdrEl.innerHTML='';
   const tickCol=document.createElement('div');
   tickCol.className='tick-col';tickCol.title='Сортировать по тикеру';
-  tickCol.innerHTML='<span class="tick-lbl">ТИКЕР '+(S.sortAlpha?(S.sortDir==='asc'?'в–І':'в–ј'):'')+' </span>';
+  tickCol.innerHTML='<span class="tick-lbl">ТИКЕР '+(S.sortAlpha?(S.sortDir==='asc'?'–І':'–ј'):'')+' </span>';
   tickCol.onclick=()=>doSort('sym');
   hdrEl.appendChild(tickCol);
   const ms=document.createElement('div');ms.className='mscroll';
@@ -4087,7 +4087,7 @@ function buildScreenerRow(m,cols){
   rt.appendChild(gdot);
   const fstar=document.createElement('span');
   fstar.className='cg-fstar';
-  fstar.textContent='в…';
+  fstar.textContent='★…';
   fstar.title='Избранное';
   rt.appendChild(fstar);
   const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=sym.replace(/USDT$/,'');
@@ -4311,9 +4311,9 @@ function updSortHdr(){
   if(si)si.textContent='';
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  CONTROLS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function doSort(id){
   if(id==='sym'){
     S.sortAlpha=true;S.sortId='sym';
@@ -4532,13 +4532,13 @@ function updateToggleScrBtn(){
   const btn=document.getElementById('toggleScrBtn');
   if(!btn)return;
   const on=S.fsOpen?S.fsScreenerVisible:S.screenerVisible;
-  btn.textContent=(on?'в—Ђ':'в–¶')+' Список';
+  btn.textContent=(on?'—Ђ':'–¶')+' Список';
   btn.classList.toggle('on',on);
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  AUTO CHART UPDATE
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function updateCharts(){
   const rows=sortedRows();
   const start=S.page*S.charts.length;
@@ -4563,9 +4563,9 @@ function updateCharts(){
   schedulePersistUserSettings();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  TOGGLE SCREENER
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function toggleDensity(){
   toggleDensityUi({
     S, rCanvas, renderSettingsDensity,
@@ -4659,9 +4659,9 @@ function resetAllAlerts(){
   });
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  #11: CLEAR DRAWINGS (double-click button in chart header)
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 const _clearClickTs={};
 function clearDrawingsSlot(slot){
   const now=Date.now();
@@ -4703,9 +4703,9 @@ function clearFsDrawings(){
   }
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  #9: COLOR GROUPS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function getSymGroup(sym){return S.symGroups[sym]||0;}
 function isSymFavorite(sym){return !!S.symFavorites?.[sym];}
 function symbolInGroup(sym,g){
@@ -4797,7 +4797,7 @@ function buildGroupFilterBar(){
         btn.style.justifyContent='center';
         btn.style.fontSize='13px';
         btn.style.lineHeight='1';
-        btn.textContent='в…';
+        btn.textContent='★…';
       }else{
         btn.style.background=GROUP_COLORS[g];
         btn.textContent='';
@@ -4913,7 +4913,7 @@ function showQuickGroupChanger(sym,anchorEl){
   const favOn=isSymFavorite(sym);
   const fav=document.createElement('div');
   fav.className='cg-dot cg-fav-dot';
-  fav.textContent='в…';
+  fav.textContent='★…';
   fav.title='Избранное · нажмите чтобы добавить/убрать';
   if(favOn)fav.style.outline='2px solid #fff';
   fav.onclick=()=>{setSymFavorite(sym,!favOn);pick.remove();syncAllGroupDots(sym);};
@@ -4949,7 +4949,7 @@ function openGroupManager(g){
   // Header
   const hdr=document.createElement('div');
   hdr.style.cssText='display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);gap:8px;flex-shrink:0';
-  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'в…':''}</span>
+  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'★…':''}</span>
     <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`}</span>
     <span style="font-size:9px;color:var(--text3)">Нажмите монету чтобы добавить/убрать</span>
     <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">вњ•</button>`;
@@ -4972,7 +4972,7 @@ function openGroupManager(g){
       const inGrp=symbolInGroup(m.sym,g);
       const row=document.createElement('div');
       row.style.cssText=`display:flex;align-items:center;padding:5px 12px;cursor:pointer;gap:8px;border-bottom:1px solid rgba(37,37,48,.4);transition:background .06s;${inGrp?'background:rgba(255,255,255,.04)':''}`;
-      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'в…':'в†'):''}</span>
+      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'★…':'★†'):''}</span>
         <span style="font-size:10px;font-weight:500;color:${inGrp?'#fff':'var(--text2)'};flex:1">${m.sym.replace(/USDT$/,'')}</span>
         ${inGrp?`<span style="font-size:9px;color:${col}">✓ в группе</span>`:''}`;
       row.onmouseenter=()=>row.style.background=inGrp?'rgba(255,255,255,.07)':'rgba(255,255,255,.025)';
@@ -5038,9 +5038,9 @@ function toggleFsScreener(){
   if(S.fsScreenerVisible)renderTable();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  SPLITTER (generic)
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function dragSpl(e,splId,leftId,bodyId){
   e.preventDefault();
   const spl=document.getElementById(splId);spl.classList.add('drag');
@@ -5066,9 +5066,9 @@ function dragSpl(e,splId,leftId,bodyId){
   window.addEventListener('mousemove',onM);window.addEventListener('mouseup',onU);
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  SETTINGS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function openSettings(){
   switchSettingsTab(S.settingsTab);
   document.getElementById('settingsModal').classList.add('open');
@@ -5437,9 +5437,9 @@ function setChartVisibleBars(v){
   schedulePersistUserSettings();
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  FULLSCREEN ANALYSIS
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function buildFsChartLayout(){
   const area=document.getElementById('fsChartArea');
   if(!area)return;
@@ -5741,9 +5741,9 @@ function startFsWs(){
   S.fsWs=ws;
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  BACKGROUND KLINES
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 async function loadKlinesBackground(){
   try{
     const visible=S.charts.map(c=>c.sym).filter(Boolean);
@@ -5787,9 +5787,9 @@ async function loadKlinesBackground(){
 
 function loadScript(url){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  MAIN
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 function hydrateUserSession(){
   const pd=window.__pendingDrawings;
   if(pd&&typeof pd==='object'){
@@ -6003,9 +6003,9 @@ async function main() {
   }
 }
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 //  POTENTIAL MONITOR • multi-preset tabbed system
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
 // POT_FIELDS, POT_FIELD_DESC, POT_ABS_FIELDS and pure helpers live in
 // potentialPresets.js (extracted during refactor).
 
@@ -6439,8 +6439,8 @@ registerGridSmartScreener({
   },
 });
 
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
-// в•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђв•ђ
+// ───────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────
 window.rCanvas            = rCanvas;
 window.setDensityMult     = setDensityMult;
 window.setTf              = setTf;

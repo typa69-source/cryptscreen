@@ -23,7 +23,10 @@ export function fj(url,timeout=15000,retries=2){
     if(_bnBannedUntil>now){
       const wait=_bnBannedUntil-now;
       console.warn(`Binance ban active, waiting ${Math.round(wait/1000)}s`);
-      setTimeout(()=>fj(url,timeout,retries).then(res).catch(rej), Math.min(wait,30000));
+      // Preserve the original retries budget; otherwise the recursive call
+      // would always start with a fresh counter and could hammer the API
+      // while the rate-limit ban is still active.
+      setTimeout(()=>fj(url,timeout,Math.max(0,retries-1)).then(res).catch(rej), Math.min(wait,30000));
       return;
     }
     const doFetch=()=>new Promise((rs,rj)=>{
