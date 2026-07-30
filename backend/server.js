@@ -1,6 +1,7 @@
 require('dotenv').config()
 const express = require('express')
 const cors = require('cors')
+const rateLimit = require('express-rate-limit')
 const db = require('./db/pool')
 
 const app = express()
@@ -31,8 +32,19 @@ app.use((req, res, next) => {
   next()
 })
 
+// Rate-limit auth endpoints to slow down brute-force / credential-stuffing.
+// 10 attempts per 15 min per IP for login/register; this is well above any
+// realistic user retry rate but blocks scripted attacks.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: { error: 'Слишком много попыток. Подождите 15 минут.' },
+})
+
 // ─── ROUTES ─────────────────────────────────────────────────────
-app.use('/api/auth', require('./routes/auth'))
+app.use('/api/auth', authLimiter, require('./routes/auth'))
 app.use('/api/user', require('./routes/user'))
 app.use('/api/proxy', require('./routes/proxy'))
 
