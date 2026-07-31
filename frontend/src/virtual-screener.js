@@ -79,17 +79,24 @@ export function ensureVirtualScreener(bodyEl, opts) {
       // pool in place — avoiding full rebuild churn every ~1-2s.
       // Otherwise we preserve scroll position and rebuild the pool.
       const newRows = rows || [];
+      const prevLen = currentRows.length;
+      const newLen = newRows.length;
       const sameOrder =
         newRows === currentRows ||
-        (newRows.length === currentRows.length &&
-          newRows.length > 0 &&
+        (newLen === prevLen &&
+          newLen > 0 &&
           this._sameOrdering(newRows, currentRows));
       const sameCols = currentCols.length === cols.length &&
         currentCols.every((c, i) => c.id === cols[i].id);
 
       // Remember which symbol sits at the top of the viewport so we can
-      // restore scroll position after the data changes.
-      scrollAnchor = this._getTopSymbol();
+      // restore scroll position after the SORT changes. But if the
+      // length also changed (filter on/off, threshold tweak) the anchor
+      // position in the new dataset is almost always meaningless — a
+      // user filtering from 500→30 then scrolling to row 5 should NOT
+      // jump to wherever that row landed in the 500-row unfiltered
+      // dataset. So in that case we just reset scroll to top.
+      scrollAnchor = (sameOrder || newLen !== prevLen) ? null : this._getTopSymbol();
       currentRows = newRows;
       currentCols = cols || [];
       if (inChart) currentInChart = inChart;
