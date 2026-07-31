@@ -3,7 +3,70 @@
  * Registered from main.js with shared Binance helpers and app state S.
  */
 
-function gbsFmt(v, d = 2) {
+import {
+  baseSymbol,
+  escapeHtml,
+  pruneLocalStoragePrefix,
+  createKlineCache,
+  createMcapProvider,
+  selectUniverse,
+  passesMinVol,
+} from './grid-shared.js';
+
+/**
+ * Build a payload to pre-fill Grid Lab from a screener row.
+ * Pure function — no DOM, no globals — safe to unit-test.
+ *
+ * @param {object} row    Screener row (Swing / Pick / Intraday).
+ * @param {string} source One of 'swing' | 'pick' | 'intra'.
+ * @returns {{sym:string,tf:string,lower:number|null,upper:number|null,
+ *            stepAbs:number|null,stepPct:number|null,levels:number|null,
+ *            source:string,score:number|null}}
+ */
+export function buildGridLabPayload(row, source){
+  if(!row || !row.sym) return null;
+  let lo, hi, stepAbs, stepPct, levels, direction;
+  if (source === 'intra') {
+    lo = row?.grid?.gLo;
+    hi = row?.grid?.gHi;
+    stepAbs = row?.grid?.stepAbs;
+    stepPct = row?.grid?.stepPct;
+    levels = row?.grid?.nLev;
+    direction = null; // Intraday doesn't classify
+  } else if (source === 'smart') {
+    lo = row?.gridBounds?.lower;
+    hi = row?.gridBounds?.upper;
+    stepAbs = row?.gridBounds?.step;
+    stepPct = null;
+    levels = row?.gridBounds?.levels;
+    direction = row?.direction || null; // LONG/SHORT/NEUTRAL from classifier
+  } else {
+    // Swing & Pick store bounds directly on the row.
+    lo = row?.gridLo;
+    hi = row?.gridHi;
+    stepAbs = row?.stepAbs;
+    stepPct = row?.stepPct;
+    levels = null;
+    direction = null;
+  }
+  // Default TF by screener: Swing/Smart = 15m, Intraday/Pick = 5m.
+  const tf = (source === 'swing' || source === 'smart') ? '15m' : '5m';
+  return {
+    sym: row.sym,
+    tf,
+    lower: isFinite(lo) ? lo : null,
+    upper: isFinite(hi) ? hi : null,
+    stepAbs: isFinite(stepAbs) ? stepAbs : null,
+    stepPct: isFinite(stepPct) ? stepPct : null,
+    levels: isFinite(levels) ? levels : null,
+    direction,
+    source,
+    score: typeof row.score === 'number' ? row.score : null,
+  };
+}
+
+
+export function gbsFmt(v, d = 2) {
   if (v == null || (typeof v === 'number' && !isFinite(v))) return 'N/A';
   return Number(v).toFixed(d);
 }
@@ -27,17 +90,17 @@ const GRID_INTRADAY_TIPS = {
   spr: 'Прокси спреда через (H−L)/Close последней 15m. Широкие бары — выше издержки/шум для сетки.',
 };
 
-function bandFromScore(score) {
+export function bandFromScore(score) {
   if (score >= 11) return 'green';
   if (score >= 7) return 'yellow';
   return 'red';
 }
 
-function trueRangeBar(h, l, prevC) {
+export function trueRangeBar(h, l, prevC) {
   return Math.max(h - l, Math.abs(h - prevC), Math.abs(l - prevC));
 }
 
-function wilderRmaSeries(arr, period) {
+export function wilderRmaSeries(arr, period) {
   if (!arr || arr.length < period) return null;
   const out = [];
   let s = 0;
@@ -94,7 +157,7 @@ function calcADXWilder(kl, period = 14) {
   return { adx, plusDI, minusDI };
 }
 
-function calcChoppiness(kl, n = 14) {
+export function calcChoppiness(kl, n = 14) {
   if (!kl || kl.length < n + 1) return null;
   const slice = kl.slice(-(n + 1));
   let sumTR = 0;
@@ -108,7 +171,7 @@ function calcChoppiness(kl, n = 14) {
   return (100 * Math.log10(ratio)) / Math.log10(n);
 }
 
-function hurstExponentRS(closes) {
+export function hurstExponentRS(closes) {
   const x = closes.filter((c) => isFinite(c) && c > 0);
   if (x.length < 60) return null;
   const lens = [10, 12, 15, 20, 25, 30, 40].filter((L) => L * 3 <= x.length);
@@ -149,7 +212,7 @@ function hurstExponentRS(closes) {
   return num / den;
 }
 
-function countMa20Crossings30(last30) {
+export function countMa20Crossings30(last30) {
   if (!last30 || last30.length < 30) return null;
   const c = last30.map((k) => +k.c);
   let x = 0;
@@ -165,7 +228,7 @@ function countMa20Crossings30(last30) {
   return x;
 }
 
-function percentileCloses(closes, p) {
+export function percentileCloses(closes, p) {
   const s = closes.filter((x) => isFinite(x)).slice().sort((a, b) => a - b);
   if (!s.length) return null;
   const idx = (s.length - 1) * (p / 100);
@@ -224,38 +287,6 @@ function scoreSwingRcov(rc) {
   return { pts: 0, label: gbsFmt(rc, 2) + '%' };
 }
 
-let _cgMcapMap = null;
-let _cgMcapAt = 0;
-
-async function ensureCgMcapMap(fj, backendBase) {
-  if (_cgMcapMap && Date.now() - _cgMcapAt < 3600000) return _cgMcapMap;
-  const map = new Map();
-  for (let page = 1; page <= 3; page++) {
-    try {
-      const url = backendBase
-        ? `${backendBase.replace(/\/$/, '')}/api/proxy/coingecko/markets?page=${page}`
-        : `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}`;
-      const rows = await fj(url, 20000, 1);
-      if (!Array.isArray(rows)) break;
-      for (const row of rows) {
-        const sym = String(row.symbol || '').toUpperCase();
-        if (sym && row.market_cap && !map.has(sym)) map.set(sym, row.market_cap);
-      }
-      await new Promise((r) => setTimeout(r, 1100));
-    } catch {
-      // Market cap is an optional enhancement. If it fails, continue with what we have.
-      break;
-    }
-  }
-  _cgMcapMap = map;
-  _cgMcapAt = Date.now();
-  return map;
-}
-
-function baseSymbol(sym) {
-  return sym.replace(/USDT$/i, '').toUpperCase();
-}
-
 export function registerGridBotScreeners(deps) {
   const {
     S,
@@ -264,76 +295,28 @@ export function registerGridBotScreeners(deps) {
     fn,
     fmtPrice,
     openFullscreenBySym,
+    openGridLabFromRow,
     bollingerOnTail,
     calcATR,
     BACKEND,
     GROUP_COLORS = ['', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'],
+    calcAll = null,
     tagScreenerGroup,
   } = deps;
 
   // ─── Lightweight caches (avoid re-fetch on reopen) ─────────────
-  const KLINE_CACHE_TTL_MS = 2 * 60 * 1000;
-  const _klineCache = new Map(); // key -> { ts, bySym: Map(sym -> klines[]) }
-
-  function _klineKey(iv, lim) {
-    return `${iv}:${lim}`;
-  }
-
-  async function batchKlinesCached(syms, iv, lim, pFrom, pTo, bs = 10) {
-    const key = _klineKey(iv, lim);
-    const now = Date.now();
-    const cached = _klineCache.get(key);
-    const bySym = cached && now - cached.ts < KLINE_CACHE_TTL_MS ? cached.bySym : new Map();
-
-    const missing = [];
-    for (const s of syms) if (!bySym.has(s)) missing.push(s);
-
-    if (missing.length) {
-      const fresh = await batchKlines(missing, iv, lim, pFrom, pTo, bs);
-      for (const [sym, kl] of Object.entries(fresh || {})) bySym.set(sym, kl);
-      _klineCache.set(key, { ts: now, bySym });
-    }
-
-    const out = {};
-    for (const s of syms) if (bySym.has(s)) out[s] = bySym.get(s);
-    return out;
-  }
+  const klineCache = createKlineCache(batchKlines, 2 * 60 * 1000);
+  const getMcapMap = createMcapProvider(fj, BACKEND);
 
   function vol24For(sym) {
     return S.mx[sym]?.vol24 ?? S.tk[sym]?.qv ?? null;
   }
 
-  function selectUniverse(allSyms, maxN) {
-    const max = Math.max(20, Math.min(400, maxN | 0));
-    const withVol = allSyms
-      .map((sym) => ({ sym, v: vol24For(sym) }))
-      .filter((x) => x.v != null && isFinite(x.v) && x.v > 0)
-      .sort((a, b) => b.v - a.v)
-      .slice(0, max)
-      .map((x) => x.sym);
-    if (withVol.length >= 20) return withVol;
-    // Fallback: if volumes not ready yet, just cap raw list.
-    return allSyms.slice(0, max);
+  function selectU(allSyms, maxN){
+    return selectUniverse(allSyms, vol24For, maxN);
   }
-
-  function passesVol(sym) {
-    const v = vol24For(sym);
-    if ((S.minVol | 0) <= 0) return true;
-    return v != null && v >= S.minVol * 1e6;
-  }
-
-  function pruneLocalStoragePrefix(prefix, maxKeep) {
-    const keys = Object.keys(localStorage)
-      .filter((k) => k.startsWith(prefix))
-      .sort()
-      .reverse();
-    for (let i = maxKeep; i < keys.length; i++) {
-      try {
-        localStorage.removeItem(keys[i]);
-      } catch {
-        /* ignore */
-      }
-    }
+  function passesVol(sym){
+    return passesMinVol(sym, vol24For, S.minVol);
   }
 
   function computeSwingRow(sym, d1, j4h, mcapMap) {
@@ -406,7 +389,20 @@ export function registerGridBotScreeners(deps) {
         vm: { ...s6, tip: GRID_SWING_TIPS.vm },
         rcov: { ...s7, tip: GRID_SWING_TIPS.rcov },
       },
-      raw: { adx, chop, atrp, hurst, maX, vm, rcov, p5, p95, h4ch },
+      raw: {
+        adx,
+        chop,
+        atrp,
+        hurst,
+        maX,
+        vm,
+        rcov,
+        p5,
+        p95,
+        h4ch,
+        plusDI: adxR?.plusDI ?? null,
+        minusDI: adxR?.minusDI ?? null,
+      },
     };
   }
 
@@ -417,7 +413,7 @@ export function registerGridBotScreeners(deps) {
     if (ui.renderMeta) ui.renderMeta();
     const base = S.syms.filter(passesVol);
     // Important: without a volume filter S.syms is huge → Binance rate limits → empty results.
-    const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 140);
+    const syms = selectU(base, (S.minVol | 0) > 0 ? 260 : 140);
     ui.diag = `universe ${syms.length}/${base.length || 0}`;
     if (!syms.length) {
       ui.lastRows = [];
@@ -430,15 +426,15 @@ export function registerGridBotScreeners(deps) {
     try {
       ui.diag = ui.diag ? ui.diag + ' · mcap…' : 'mcap…';
       if (ui.renderMeta) ui.renderMeta();
-      const mcapMap = await ensureCgMcapMap(fj, BACKEND);
+      const mcapMap = await getMcapMap();
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1…`;
       if (ui.renderMeta) ui.renderMeta();
-      const d1 = await batchKlinesCached(syms, '1d', 100, null, null, 10);
+      const d1 = await klineCache.batchCached(syms, '1d', 100, null, null, 10);
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h…`;
       if (ui.renderMeta) ui.renderMeta();
-      const j4h = await batchKlinesCached(syms, '4h', 14, null, null, 10);
+      const j4h = await klineCache.batchCached(syms, '4h', 14, null, null, 10);
 
       ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
       const rows = [];
@@ -548,6 +544,10 @@ export function registerGridBotScreeners(deps) {
       if (dg) dg.textContent = ui.diag || '';
     }
 
+    function escapeHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
     function applyFiltersAndRender() {
       let rows = ui.lastRows.slice();
       rows = rows.filter((r) => r.score >= ui.minScore);
@@ -581,47 +581,54 @@ export function registerGridBotScreeners(deps) {
       if (!tb) return;
       if (!rows.length) {
         const msg = ui.error || (ui.loading ? 'Загрузка…' : 'Нет результатов (проверь фильтры).');
-        tb.innerHTML = `<tr><td colspan="8" style="padding:10px 8px;color:var(--text3);font-size:10px">${msg}</td></tr>`;
+        tb.innerHTML = `<tr><td colspan="8" style="padding:10px 8px;color:var(--text3);font-size:10px">${escapeHtml(msg)}</td></tr>`;
         renderMeta();
         return;
       }
-      tb.innerHTML = rows.map((r) => {
-          const badge =
-            r.band === 'green'
-              ? '#22c55e'
-              : r.band === 'yellow'
-                ? '#eab308'
-                : '#ef4444';
-          const bd = r.breakdown;
-          const det = Object.entries(bd)
-            .map(
-              ([k, v]) =>
-                `<span class="gbs-tag" title="${v.tip}">${k}: ${v.label} → +${v.pts}</span>`
-            )
-            .join(' ');
-          const gl =
-            r.gridLo != null && r.gridHi != null
-              ? `${fmtPrice(r.gridLo)} … ${fmtPrice(r.gridHi)}`
-              : '—';
-          const st =
-            r.stepAbs != null ? `${fmtPrice(r.stepAbs)} (${fn(r.stepPct, 2)}%)` : '—';
-          return `<tr data-sym="${r.sym}">
-          <td><b style="cursor:pointer;color:#7dd3fc" class="gbs-open">${r.sym.replace(/USDT$/, '')}</b></td>
-          <td class="${(r.ch24 ?? 0) >= 0 ? 'p' : 'n'}">${r.ch24 != null ? fn(r.ch24, 2) : '—'}%</td>
-          <td>${r.h4ch != null ? fn(r.h4ch, 2) : '—'}%</td>
-          <td><span style="background:${badge};color:#0a0a0b;padding:2px 6px;border-radius:4px;font-weight:700">${r.score}</span></td>
-          <td>${r.raw.adx != null ? fn(r.raw.adx, 1) : '—'}</td>
-          <td>${gl}</td>
-          <td>${st}</td>
-          <td style="font-size:9px;color:var(--text3)">${det}</td>
-        </tr>`;
-        }).join('');
+      const frag = document.createDocumentFragment();
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.dataset.sym = r.sym;
+        const badgeCls = `gbs-badge gbs-badge--${r.band === 'green' ? 'green' : r.band === 'yellow' ? 'yellow' : 'red'}`;
+        const bd = r.breakdown;
+        const det = Object.entries(bd)
+          .map(([k, v]) => `<span class="gbs-tag" title="${escapeHtml(v.tip)}">${escapeHtml(k)}: ${escapeHtml(v.label)} → +${escapeHtml(v.pts)}</span>`)
+          .join(' ');
+        const gl = r.gridLo != null && r.gridHi != null ? `${fmtPrice(r.gridLo)} … ${fmtPrice(r.gridHi)}` : '—';
+        const st = r.stepAbs != null ? `${fmtPrice(r.stepAbs)} (${fn(r.stepPct, 2)}%)` : '—';
+        const ch24Class = (r.ch24 ?? 0) >= 0 ? 'p' : 'n';
+        const ch24Txt = r.ch24 != null ? fn(r.ch24, 2) : '—';
+        const h4Txt = r.h4ch != null ? fn(r.h4ch, 2) : '—';
+        const adxTxt = r.raw.adx != null ? fn(r.raw.adx, 1) : '—';
+        tr.innerHTML = `
+          <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b style="cursor:pointer;color:#7dd3fc" class="gbs-open">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">📊</button></div></td>
+          <td class="${escapeHtml(ch24Class)}">${escapeHtml(ch24Txt)}%</td>
+          <td>${escapeHtml(h4Txt)}%</td>
+          <td><span class="${escapeHtml(badgeCls)}">${escapeHtml(r.score)}</span></td>
+          <td>${escapeHtml(adxTxt)}</td>
+          <td>${escapeHtml(gl)}</td>
+          <td>${escapeHtml(st)}</td>
+          <td style="font-size:9px;color:var(--text3)">${det}</td>`;
+        frag.appendChild(tr);
+      }
+      tb.replaceChildren(frag);
       tb.querySelectorAll('.gbs-open').forEach((el) => {
         el.onclick = () => {
-          // Close modal but keep cached state, so coming back is instant.
           if (ui.timer) clearInterval(ui.timer);
           modal.remove();
           openFullscreenBySym(el.closest('tr').dataset.sym);
+        };
+      });
+      tb.querySelectorAll('.gbs-lab-open').forEach((el) => {
+        el.onclick = (e) => {
+          e.stopPropagation();
+          const tr = el.closest('tr');
+          const r = rows.find((x) => x.sym === tr.dataset.sym);
+          if (r && typeof openGridLabFromRow === 'function') {
+            // Stop the refresh loop first, then close this screener so only Grid Lab remains.
+            if (ui.timer) { clearInterval(ui.timer); ui.timer = null; }
+            openGridLabFromRow(r, 'swing', () => modal.remove());
+          }
         };
       });
       renderMeta();
@@ -744,10 +751,256 @@ export function registerGridBotScreeners(deps) {
 
     ui.renderMeta = renderMeta;
     ui.applyFiltersAndRender = applyFiltersAndRender;
+    // Cancel any stale interval before starting a new one. Without this, reopening
+    // the modal after a previous open → close cycle leaks timers (cachedUi keeps
+    // the same ui object across openings, so the old interval is never cleared).
+    if (ui.timer) { clearInterval(ui.timer); ui.timer = null; }
     ui.timer = setInterval(() => runSwingScan(ui), 300000);
     // If we already have results, show them immediately; update in background.
     if (ui.lastRows?.length) ui.applyFiltersAndRender();
     runSwingScan(ui);
+  }
+
+  function pickGridNLevels(r) {
+    const a = r.gridLo;
+    const b = r.gridHi;
+    if (a == null || b == null || !(b > a) || r.stepAbs == null || !(r.stepAbs > 0)) return null;
+    return Math.max(6, Math.min(32, Math.round((b - a) / r.stepAbs)));
+  }
+
+  function pickWhyLines(r, mode) {
+    const p = [];
+    const adx = r.raw?.adx;
+    const ch = r.ch24;
+    if (r.score >= 9) p.push(`высокий score ${r.score} по Swing-метрикам сетки`);
+    if (adx != null && adx <= 22) p.push(`ADX ${fn(adx, 1)} — слабый тренд, цена чаще возвращается в диапазон`);
+    if (mode === 'neutral' && ch != null && Math.abs(ch) <= 4) p.push(`24ч ≈ flat (${fn(ch, 2)}%) — хороший фон для neutral grid`);
+    if (mode === 'long' && ch != null && ch >= 1.5) p.push(`24ч +${fn(ch, 2)}% и +DI≥−DI — контекст набора лонга снизу`);
+    if (mode === 'short' && ch != null && ch <= -1.5) p.push(`24ч ${fn(ch, 2)}% и −DI≥+DI — контекст шорта с верхних доборов`);
+    if (r.raw?.atrp != null) p.push(`ATR% ${fn(r.raw.atrp, 2)} — шаг 0.5×ATR совпадает с типичным движением`);
+    if (p.length === 0) p.push('сочетание chop/Hurst, пересечений MA20 и оборота (vm)');
+    return p;
+  }
+
+  async function runPickScan(ui) {
+    ui.loading = true;
+    ui.error = '';
+    ui.diag = '';
+    if (ui.renderMeta) ui.renderMeta();
+    try {
+      if (typeof calcAll === 'function') calcAll();
+    } catch (e) {
+      /* ignore */
+    }
+    const base = S.syms.filter(passesVol);
+    const syms = selectU(base, (S.minVol | 0) > 0 ? 260 : 140);
+    ui.diag = `universe ${syms.length}/${base.length || 0}`;
+    if (!syms.length) {
+      ui.lastRows = [];
+      ui.pickNeutral = [];
+      ui.pickLong = [];
+      ui.pickShort = [];
+      ui.loading = false;
+      ui.lastRun = Date.now();
+      ui.error = 'Нет символов (объём / список).';
+      if (ui.applyRender) ui.applyRender();
+      return;
+    }
+    try {
+      ui.diag += ' · mcap…';
+      if (ui.renderMeta) ui.renderMeta();
+      const mcapMap = await getMcapMap();
+      ui.diag = `universe ${syms.length} · mcap ${mcapMap?.size || 0} · d1…`;
+      if (ui.renderMeta) ui.renderMeta();
+      const d1 = await klineCache.batchCached(syms, '1d', 100, null, null, 10);
+      ui.diag += ' · 4h…';
+      if (ui.renderMeta) ui.renderMeta();
+      const j4h = await klineCache.batchCached(syms, '4h', 14, null, null, 10);
+      ui.diag = `universe ${syms.length} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
+      const rows = [];
+      for (const sym of syms) {
+        const r = computeSwingRow(sym, d1, j4h, mcapMap);
+        if (r) rows.push(r);
+      }
+      rows.sort((a, b) => b.score - a.score);
+      ui.lastRows = rows;
+      const pdi = (r) => +(r.raw?.plusDI ?? 0);
+      const mdi = (r) => +(r.raw?.minusDI ?? 0);
+      ui.pickNeutral = rows.filter((r) => Math.abs(r.ch24 ?? 0) <= 5 && r.score >= 6).slice(0, 40);
+      ui.pickLong = rows
+        .filter((r) => (r.ch24 ?? 0) >= 1.2 && pdi(r) >= mdi(r) * 1.02)
+        .slice(0, 40);
+      ui.pickShort = rows
+        .filter((r) => (r.ch24 ?? 0) <= -1.2 && mdi(r) >= pdi(r) * 1.02)
+        .slice(0, 40);
+      if (!rows.length) {
+        ui.error = 'Нет данных после скана (rate limit / klines).';
+      }
+    } catch (e) {
+      ui.lastRows = [];
+      ui.pickNeutral = [];
+      ui.pickLong = [];
+      ui.pickShort = [];
+      ui.error = `Ошибка: ${e?.message || String(e)}`;
+    } finally {
+      ui.loading = false;
+      ui.lastRun = Date.now();
+      if (ui.applyRender) ui.applyRender();
+    }
+  }
+
+  function openGridPickScreener() {
+    const old = document.getElementById('gridPickModal');
+    if (old) {
+      old.remove();
+      return;
+    }
+    const modal = document.createElement('div');
+    modal.id = 'gridPickModal';
+    modal.style.cssText =
+      'position:fixed;inset:0;z-index:825;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;';
+    const box = document.createElement('div');
+    box.style.cssText =
+      'width:min(1180px,98vw);height:min(90vh,940px);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
+
+    const cacheKey = '__gbs_pick_v1';
+    const cachedUi = typeof window !== 'undefined' ? window[cacheKey] : null;
+
+    const ui = cachedUi || {
+      tab: 'neutral',
+      loading: false,
+      error: '',
+      diag: '',
+      lastRows: [],
+      pickNeutral: [],
+      pickLong: [],
+      pickShort: [],
+      lastRun: 0,
+    };
+    if (typeof window !== 'undefined') window[cacheKey] = ui;
+    ui.pickNeutral ||= [];
+    ui.pickLong ||= [];
+    ui.pickShort ||= [];
+
+    function renderMeta() {
+      const sk = box.querySelector('#gbsPickSk');
+      if (sk) sk.style.display = ui.loading ? '' : 'none';
+      const dg = box.querySelector('#gbsPickDiag');
+      if (dg) dg.textContent = ui.diag || '';
+      const lu = box.querySelector('#gbsPickLu');
+      if (lu && ui.lastRun) lu.textContent = new Date(ui.lastRun).toLocaleTimeString();
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function rowHtml(r, mode) {
+      const gl =
+        r.gridLo != null && r.gridHi != null ? `${fmtPrice(r.gridLo)} … ${fmtPrice(r.gridHi)}` : '—';
+      const nL = pickGridNLevels(r);
+      const nTxt = nL != null ? String(nL) : '—';
+      const why = pickWhyLines(r, mode).join(' · ');
+      const badgeCls = `gbs-badge gbs-badge--${r.band === 'green' ? 'green' : r.band === 'yellow' ? 'yellow' : 'red'}`;
+      const ch24Class = (r.ch24 ?? 0) >= 0 ? 'p' : 'n';
+      const ch24Txt = r.ch24 != null ? fn(r.ch24, 2) : '—';
+      return `<tr data-sym="${escapeHtml(r.sym)}">
+        <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b class="gbs-pick-open" style="cursor:pointer;color:#7dd3fc">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">📊</button></div></td>
+        <td class="${escapeHtml(ch24Class)}">${escapeHtml(ch24Txt)}%</td>
+        <td><span class="${escapeHtml(badgeCls)}">${escapeHtml(r.score)}</span></td>
+        <td style="font-size:9px">${escapeHtml(gl)}</td>
+        <td style="font-size:9px">${escapeHtml(nTxt)}</td>
+        <td style="font-size:9px;color:var(--text3);line-height:1.35">${escapeHtml(why)}</td>
+      </tr>`;
+    }
+
+    function applyRender() {
+      renderMeta();
+      const err = box.querySelector('#gbsPickErr');
+      if (err) err.textContent = ui.error || '';
+      const list =
+        ui.tab === 'long' ? ui.pickLong : ui.tab === 'short' ? ui.pickShort : ui.pickNeutral;
+      const tb = box.querySelector('#gbsPickBody');
+      if (!tb) return;
+      if (!list.length) {
+        tb.innerHTML = `<tr><td colspan="6" style="padding:12px;color:var(--text3);font-size:10px">${escapeHtml(
+          ui.loading ? 'Загрузка…' : ui.error || 'Нет монет под фильтр вкладки (обнови скан).'
+        )}</td></tr>`;
+        return;
+      }
+      tb.innerHTML = list.map((r) => rowHtml(r, ui.tab)).join('');
+      tb.querySelectorAll('.gbs-pick-open').forEach((el) => {
+        el.onclick = () => {
+          modal.remove();
+          openFullscreenBySym(el.closest('tr').dataset.sym);
+        };
+      });
+      tb.querySelectorAll('.gbs-lab-open').forEach((el) => {
+        el.onclick = (e) => {
+          e.stopPropagation();
+          const tr = el.closest('tr');
+          const r = list.find((x) => x.sym === tr.dataset.sym);
+          if (r && typeof openGridLabFromRow === 'function') {
+            openGridLabFromRow(r, 'pick', () => modal.remove());
+          }
+        };
+      });
+    }
+
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+        <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Pick — монеты под тип сетки</span>
+        <span id="gbsPickSk" style="font-size:10px;color:var(--text3);display:none">Скан…</span>
+        <span id="gbsPickDiag" style="font-size:9px;color:var(--text3)"></span>
+        <button class="tbtn" id="gbsPickRf">Обновить</button>
+        <button class="tbtn" id="gbsPickX">Закрыть</button>
+      </div>
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;gap:6px;flex-wrap:wrap;font-size:10px">
+        <button class="tbtn gbs-pick-tab" data-t="neutral">Нейтральные</button>
+        <button class="tbtn gbs-pick-tab" data-t="long">Лонг</button>
+        <button class="tbtn gbs-pick-tab" data-t="short">Шорт</button>
+        <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsPickLu">—</span></span>
+      </div>
+      <div style="padding:8px 12px;font-size:9px;color:var(--text3);line-height:1.45;border-bottom:1px solid var(--border)">
+        Те же дневные метрики, что у Grid Swing (ADX, chop, Hurst, ATR%, пересечения MA20, оборот). Границы — p5–p95 закрытий за 30 дней; уровни — шаг 0.5×ATR14, 6–32 линий. Вкладки отбирают по 24ч % и направлению +DI/−DI.
+      </div>
+      <div id="gbsPickErr" style="padding:4px 12px;font-size:10px;color:#f87171;min-height:18px"></div>
+      <div style="flex:1;min-height:0;overflow:auto">
+        <table class="gbs-table" style="width:100%;border-collapse:collapse;font-size:10px">
+          <thead><tr>
+            <th>Тикер</th><th>24ч %</th><th>Score</th><th>Границы</th><th>Уровней</th><th>Почему подходит</th>
+          </tr></thead>
+          <tbody id="gbsPickBody"></tbody>
+        </table>
+      </div>
+    `;
+
+    modal.appendChild(box);
+    document.body.appendChild(modal);
+
+    ui.renderMeta = renderMeta;
+    ui.applyRender = applyRender;
+
+    function setTab(t) {
+      ui.tab = t;
+      box.querySelectorAll('.gbs-pick-tab').forEach((b) => {
+        b.classList.toggle('on', b.dataset.t === t);
+      });
+      applyRender();
+    }
+
+    box.querySelectorAll('.gbs-pick-tab').forEach((b) => {
+      b.onclick = () => setTab(b.dataset.t);
+    });
+    box.querySelector('#gbsPickRf').onclick = () => runPickScan(ui);
+    box.querySelector('#gbsPickX').onclick = () => modal.remove();
+    modal.addEventListener('mousedown', (e) => {
+      if (e.target === modal) modal.remove();
+    });
+
+    setTab(ui.tab || 'neutral');
+    if (ui.lastRows?.length) applyRender();
+    runPickScan(ui);
   }
 
   // ─── Intraday ───────────────────────────────────────────────────────
@@ -967,7 +1220,7 @@ export function registerGridBotScreeners(deps) {
     const sk = root.querySelector('#gbsIntBusy');
     if (sk) sk.style.display = '';
     const base = S.syms.filter(passesVol);
-    const syms = selectUniverse(base, (S.minVol | 0) > 0 ? 260 : 160);
+    const syms = selectU(base, (S.minVol | 0) > 0 ? 260 : 160);
     ui.diag = `universe ${syms.length}/${base.length || 0}`;
     if (!syms.length) {
       ui.ready = [];
@@ -975,14 +1228,14 @@ export function registerGridBotScreeners(deps) {
       ui.error = 'Нет символов для скана (проверь фильтр объёма / загрузку списка).';
     } else {
       try {
-        const d1 = await batchKlinesCached(syms, '1d', 16, null, null, 10);
-        const h1 = await batchKlinesCached(syms, '1h', 48, null, null, 10);
+        const d1 = await klineCache.batchCached(syms, '1d', 16, null, null, 10);
+        const h1 = await klineCache.batchCached(syms, '1h', 48, null, null, 10);
         ui.diag = `universe ${syms.length}/${base.length || 0} · d1 ${Object.keys(d1 || {}).length} · 1h ${Object.keys(h1 || {}).length}`;
         const st1Map = {};
         for (const sym of syms) st1Map[sym] = computeStage1(sym, null, h1, d1);
         const passSyms = syms.filter((s) => st1Map[s].pass);
         let m15 = {};
-        if (passSyms.length) m15 = await batchKlinesCached(passSyms, '15m', 200, null, null, 10);
+        if (passSyms.length) m15 = await klineCache.batchCached(passSyms, '15m', 200, null, null, 10);
         ui.diag += ` · s1 ${passSyms.length} · 15m ${Object.keys(m15 || {}).length}`;
         if (!passSyms.length) {
           ui.ready = [];
@@ -1169,7 +1422,7 @@ export function registerGridBotScreeners(deps) {
         } else {
         body.innerHTML = rows
           .map((r) => {
-            const badge = r.band === 'green' ? '#22c55e' : r.band === 'yellow' ? '#eab308' : '#ef4444';
+            const badgeCls = `gbs-badge gbs-badge--${r.band === 'green' ? 'green' : r.band === 'yellow' ? 'yellow' : 'red'}`;
             const fl = r.flags.map((f) => (f.level === 'red' ? '🔴' : '🟡') + f.text).join(' ');
             const bd = Object.entries(r.breakdown)
               .map(([k, v]) => `<span class="gbs-tag" title="${v.tip}">${k}: ${v.label} → +${v.pts}</span>`)
@@ -1181,11 +1434,11 @@ export function registerGridBotScreeners(deps) {
                 ? `${fmtPrice(g.gLo)} … ${fmtPrice(g.gHi)} · шаг ${fmtPrice(g.stepAbs)} (${fn(g.stepPct, 2)}%) · ~${g.nLev} ур.`
                 : '—';
             return `<tr data-sym="${r.sym}">
-            <td><b class="gbs-open" style="cursor:pointer;color:#7dd3fc">${r.sym.replace(/USDT$/, '')}</b></td>
+            <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b class="gbs-open" style="cursor:pointer;color:#7dd3fc">${r.sym.replace(/USDT$/, '')}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">📊</button></div></td>
             <td class="${(r.ch24 ?? 0) >= 0 ? 'p' : 'n'}">${r.ch24 != null ? fn(r.ch24, 2) : '—'}%</td>
             <td>${r.st1.volRatio != null ? fn(r.st1.volRatio, 2) + '×' : '—'}</td>
-            <td><span style="background:#166534;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px">S1✓</span></td>
-            <td><span style="background:${badge};color:#0a0a0b;padding:2px 6px;border-radius:4px;font-weight:700">${r.score}</span></td>
+            <td><span class="gbs-stage">S1✓</span></td>
+            <td><span class="${badgeCls}">${r.score}</span></td>
             <td>${r.consHuman} (${r.consN}×15m)</td>
             <td style="font-size:9px">${fl || '—'}</td>
             <td style="font-size:9px;color:var(--text3)">${gridTxt}</td>
@@ -1200,6 +1453,18 @@ export function registerGridBotScreeners(deps) {
             if (ui.cdTimer) clearInterval(ui.cdTimer);
             modal.remove();
             openFullscreenBySym(el.closest('tr').dataset.sym);
+          };
+        });
+        body.querySelectorAll('.gbs-lab-open').forEach((el) => {
+          el.onclick = (e) => {
+            e.stopPropagation();
+            const tr = el.closest('tr');
+            const r = rows.find((x) => x.sym === tr.dataset.sym);
+            if (r && typeof openGridLabFromRow === 'function') {
+              if (ui.timer) { clearInterval(ui.timer); ui.timer = null; }
+              if (ui.cdTimer) { clearInterval(ui.cdTimer); ui.cdTimer = null; }
+              openGridLabFromRow(r, 'intra', () => modal.remove());
+            }
           };
         });
         }
@@ -1355,6 +1620,10 @@ export function registerGridBotScreeners(deps) {
     };
 
     ui.applyFiltersAndRender = applyFiltersAndRender;
+    // Cancel any stale intervals before starting new ones — ui may be a cached
+    // object from a previous modal open (see window[cacheKey] in openGridIntradayScreener).
+    if (ui.timer)   { clearInterval(ui.timer);   ui.timer = null; }
+    if (ui.cdTimer) { clearInterval(ui.cdTimer); ui.cdTimer = null; }
     ui.timer = setInterval(() => runIntradayScan(ui), 30000);
     ui.cdTimer = setInterval(() => {
       ui.cdLeft = Math.max(0, ui.cdLeft - 1);
@@ -1370,5 +1639,6 @@ export function registerGridBotScreeners(deps) {
   if (typeof window !== 'undefined') {
     window.openGridSwingScreener = openGridSwingScreener;
     window.openGridIntradayScreener = openGridIntradayScreener;
+    window.openGridPickScreener = openGridPickScreener;
   }
 }

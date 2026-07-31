@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>CryptScreen — Crypto Screener</title>
+</head>
+<body>
+</head>
+<body>
+
+<div id="rulerTooltip">
+  <div class="rt-pct" id="rtPct"></div>
+  <div class="rt-row" id="rtBars"></div>
+  <div class="rt-row" id="rtTime"></div>
+  <div class="rt-row" id="rtVol"></div>
+</div>
+
+<div id="ld">
+  <div class="ld-logo">⬛ CRYPTSCREEN</div>
+  <div class="ld-main" id="ltxt">Инициализация...</div>
+  <div class="ld-bar"><div class="ld-fill" id="lfill"></div></div>
+  <div class="ld-log" id="llog"></div>
+  <div class="ld-err" id="lerr"></div>
+</div>
+
+<!-- FULLSCREEN VIEW -->
+<div id="fsView">
+  <div id="fsHdr">
+    <div class="fs-hdr-logo"><div class="logo-sq" style="font-size:8px;font-weight:700;width:14px;height:14px">C</div>CRYPTSCREEN</div>
+    <div class="hsep"></div>
+    <div class="fs-hdr-status">
+      <span class="live-dot" id="fsLdot"></span>
+      <span id="fsHstatus" style="font-size:10px;color:var(--text2)">—</span>
+      <span id="fsHcount" style="font-size:10px;color:var(--text3)"></span>
+      <span id="fsHtime" style="font-size:10px;color:var(--text3);min-width:65px;text-align:right"></span>
+    </div>
+    <div class="hsep"></div>
+    <button class="fs-back" onclick="closeFullscreen()">← Назад</button>
+    <div class="hsep"></div>
+    <span id="fsSym"></span>
+    <span id="fsPrc" style="margin-left:6px"></span>
+    <span id="fsChg" style="margin-left:4px"></span>
+    <span class="fs-stat" id="fsVol" style="margin-left:6px"></span>
+    <span class="fs-stat" id="fsTrd" style="margin-left:4px"></span>
+    <span class="fs-stat" id="fsCorr" style="margin-left:4px"></span>
+    <div class="hsep"></div>
+    <!-- TF -->
+    <span style="font-size:9px;color:var(--text3)">ТФ</span>
+    <div id="fsTfBtns" style="display:flex;gap:2px"></div>
+    <div class="tsep"></div>
+    <!-- Draw -->
+    <span style="font-size:9px;color:var(--text3)">РИСУНОК</span>
+    <button class="tbtn on" id="fs-draw-none" onclick="setDrawMode(null)">↖</button>
+    <button class="tbtn" id="fs-draw-hray" onclick="setDrawMode('hray')">─▷</button>
+    <button class="tbtn" id="fs-draw-tline" onclick="setDrawMode('tline')">╱</button>
+    <button class="tbtn" id="fs-draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч">🔔─</button>
+    <button class="tbtn" id="fs-draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия">🔔╱</button>
+    <button class="tbtn" id="fsClearDrawBtn" onclick="clearFsDrawings()" title="Двойное нажатие — удалить все рисунки текущей монеты" style="color:var(--text3)">✕✕</button>
+    <div class="tsep"></div>
+    <!-- Pagination -->
+    <span style="font-size:9px;color:var(--text3)">СТР</span>
+    <div class="pg-wrap">
+      <button class="pg-btn" id="fsPgPrev" onclick="changePage(-1)" disabled>‹</button>
+      <span class="pg-info" id="fsPgInfo">1/1</span>
+      <button class="pg-btn" id="fsPgNext" onclick="changePage(1)" disabled>›</button>
+    </div>
+    <div class="tsep"></div>
+    <!-- Vol filter -->
+    <span style="font-size:9px;color:var(--text3)">ОБ≥</span>
+    <input type="range" class="vol-slider" id="fsVolSlider" min="0" max="25" step="1" value="0" oninput="onVolFilter(this.value)">
+    <span class="vol-val" id="fsVolVal">0</span>
+    <div class="tsep"></div>
+    <!-- Search -->
+    <div class="srch">
+      <span class="srch-ico">⌕</span>
+      <input class="sinput" id="fsSearch" type="text" placeholder="Поиск..." oninput="onSearch(this.value)">
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:5px">
+      <button class="hbtn" onclick="openSettings()">⚙ Настройки</button>
+      <button class="hbtn" id="fsToggleScrBtn" onclick="toggleFsScreener()">▶ Список</button>
+    </div>
+  </div>
+  <div id="fsMain">
+    <div id="fsChartArea">
+      <div id="fsTop">
+        <div class="fs-tf-bar" id="fsTfBar0"><span class="fs-label">ОСНОВНОЙ:</span></div>
+        <div class="fs-chart-el" id="fsChartEl0"></div>
+      </div>
+      <div id="fsBtm">
+        <div id="fsLeft">
+          <div class="fs-tf-bar" id="fsTfBar1"><span class="fs-label">ЛЕВЫЙ:</span></div>
+          <div class="fs-chart-el" id="fsChartEl1"></div>
+        </div>
+        <div id="fsRight">
+          <div class="fs-tf-bar" id="fsTfBar2"><span class="fs-label">ПРАВЫЙ:</span></div>
+          <div class="fs-chart-el" id="fsChartEl2"></div>
+        </div>
+      </div>
+    </div>
+    <div class="spl" id="fsSpl" onmousedown="dragSpl(event,'fsSpl','fsChartArea','fsMain')"></div>
+    <div class="spanel" id="fsSpanel">
+      <div class="shdr" id="fsShdr"></div>
+      <div class="sbody" id="fsSbody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ALERT LOG PANEL -->
+<div id="alertLogPanel">
+  <div class="alp-hdr">
+    <span class="alp-title">🔔 Сработавшие алерты</span>
+    <button class="alp-clear" onclick="S.alertLog=[];renderAlertLog();">Очистить</button>
+    <button class="alp-x" onclick="toggleAlertLog()">✕</button>
+  </div>
+  <div id="alertLogList"><div style="padding:12px;color:var(--text3);font-size:9px">Алертов пока не было</div></div>
+</div>
+
+<!-- SETTINGS MODAL -->
+<div id="settingsModal">
+  <div class="smodal">
+    <div class="smodal-hdr">
+      <span class="smodal-title">⚙ Настройки</span>
+      <button class="smodal-x" onclick="closeSettings()">✕</button>
+    </div>
+    <div class="smodal-tabs">
+      <button class="smodal-tab on" id="stab-gen" onclick="switchSettingsTab('gen')">Общие</button>
+      <button class="smodal-tab" id="stab-ind" onclick="switchSettingsTab('ind')">Индикаторы</button>
+      <button class="smodal-tab" id="stab-density" onclick="switchSettingsTab('density')">Плотности</button>
+      <button class="smodal-tab" id="stab-alerts" onclick="switchSettingsTab('alerts')">Алерты</button>
+    </div>
+    <div class="smodal-body" id="smodal-body">
+      <!-- filled dynamically -->
+    </div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div id="app">
+  <div id="header">
+    <div class="logo"><div class="logo-sq">C</div>CRYPTSCREEN</div>
+    <div class="hsep"></div>
+    <div class="hright">
+      <span class="live-dot" id="ldot"></span>
+      <span id="hstatus">—</span>
+      <span id="hcount"></span>
+      <span id="htime"></span>
+      <div class="hsep"></div>
+      <button class="hbtn on" id="toggleScrBtn" onclick="toggleScreener()">▶ Список</button>
+      <button class="hbtn" onclick="toggleAlertLog()" title="История алертов">🔔<span id="alertBadge"></span></button>
+      <button class="hbtn" onclick="openSettings()">⚙ Настройки</button>
+    </div>
+  </div>
+
+  <div id="toolbar">
+    <span style="color:var(--text3);font-size:9px;flex-shrink:0">ТФ</span>
+    <div class="tsep"></div>
+    <button class="tbtn" id="tf1m" onclick="setTf('1m','tf1m')">1м</button>
+    <button class="tbtn on" id="tf5m" onclick="setTf('5m','tf5m')">5м</button>
+    <button class="tbtn" id="tf15m" onclick="setTf('15m','tf15m')">15м</button>
+    <button class="tbtn" id="tf1h" onclick="setTf('1h','tf1h')">1ч</button>
+    <button class="tbtn" id="tf4h" onclick="setTf('4h','tf4h')">4ч</button>
+    <button class="tbtn" id="tf1d" onclick="setTf('1d','tf1d')">Д</button>
+    <div class="tsep"></div>
+    <span style="color:var(--text3);font-size:9px;flex-shrink:0">СТР</span>
+    <div class="pg-wrap">
+      <button class="pg-btn" id="pgPrev" onclick="changePage(-1)" disabled>‹</button>
+      <span class="pg-info" id="pgInfo">1 / 1</span>
+      <button class="pg-btn" id="pgNext" onclick="changePage(1)" disabled>›</button>
+    </div>
+    <span class="pg-total" id="pgTotal"></span>
+    <div class="tsep"></div>
+    <div class="vol-slider-wrap">
+      <span style="font-size:9px;color:var(--text3);flex-shrink:0">ОБ≥</span>
+      <input type="range" class="vol-slider" id="volSlider" min="0" max="25" step="1" value="0" oninput="onVolFilter(this.value)">
+      <span class="vol-val" id="volVal">0</span>
+    </div>
+    <div class="tsep"></div>
+    <span style="color:var(--text3);font-size:9px;flex-shrink:0">РИСУНОК</span>
+    <button class="tbtn on" id="draw-none" onclick="setDrawMode(null)" title="Курсор">↖</button>
+    <button class="tbtn" id="draw-hray" onclick="setDrawMode('hray')" title="Горизонтальный луч">─▷</button>
+    <button class="tbtn" id="draw-tline" onclick="setDrawMode('tline')" title="Трендовая линия">╱</button>
+    <button class="tbtn" id="draw-aray" onclick="setDrawMode('aray')" title="Алерт-луч (звук при достижении %)">🔔─</button>
+    <button class="tbtn" id="draw-atline" onclick="setDrawMode('atline')" title="Алерт-линия (звук при достижении %)">🔔╱</button>
+    <div class="tsep"></div>
+    <span id="sinfo" style="font-size:9px;color:var(--text3);flex-shrink:0"></span>
+    <div class="tsep"></div>
+    <button class="tbtn" id="densityBtn" onclick="toggleDensity()" title="Плотности объёма на графике">◈ Плотность</button>
+    <div class="tright">
+      <div class="srch">
+        <span class="srch-ico">⌕</span>
+        <input class="sinput" id="sinput" type="text" placeholder="Поиск..." oninput="onSearch(this.value)">
+      </div>
+    </div>
+  </div>
+
+  <div id="body">
+    <div id="cpanel">
+      <div class="ctop">
+        <span style="font-size:9px;color:var(--text2)">ГРАФИКИ</span>
+        <span class="ctop-tf" id="ctf">5м</span>
+        <span class="ctop-hint" id="ctopHint">Топ-9 · колёсико=линейка · ПКМ=удалить у курсора · Ctrl=магнит</span>
+      </div>
+      <div id="cgrid"></div>
+    </div>
+    <div class="spl" id="spl" onmousedown="dragSpl(event,'spl','cpanel','body')"></div>
+    <div class="spanel" id="spanel">
+      <div class="shdr" id="shdr"></div>
+      <div class="sbody" id="sbody"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>

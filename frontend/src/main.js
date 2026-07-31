@@ -1,8 +1,140 @@
 import './style.css'
-import { registerGridBotScreeners } from './gridBotScreeners.js'
+import { registerGridBotScreeners, buildGridLabPayload } from './gridBotScreeners.js'
+import { registerGridSmartScreener } from './gridSmart.js'
+import {
+  openEmaEditorModal,
+  refreshEmaButtonState as refreshEmaButtonStateUi,
+  toggleEma as toggleEmaUi,
+} from './emaEditor-ui.js'
+import { cacheGetFresh, cacheSet, cacheHasIDB } from './idb-cache.js'
+import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
+import { ensureVirtualScreener } from './virtual-screener.js'
+import {
+  cloneDrawings as cloneDrawingsUi,
+  drawingLineColor as drawingLineColorUi,
+  getTradeParams as getTradeParamsUi,
+  timeToCoordX as timeToCoordXUi,
+  pixelToPoint as pixelToPointUi,
+  inferBarChartSec as inferBarChartSecUi,
+  chartLivePriceForSnap as chartLivePriceForSnapUi,
+  inferOhlcAnchor as inferOhlcAnchorUi,
+  snapPoint as snapPointUi,
+  resolveDrawPoint as resolveDrawPointUi,
+  drawingDist as drawingDistUi,
+  findDrawingNear as findDrawingNearUi,
+  findPivots as findPivotsUi,
+  trendLineTouches as trendLineTouchesUi,
+  detectAutoTrendlines as detectAutoTrendlinesUi,
+  makeDrawingCtx,
+} from './chartDrawing.js'
+import {
+  gbDepositClamp,
+  gridAdjacentStepPcts,
+  resolveGridLevelsForCfg,
+  buildRatioGridLevels,
+  gridRiskAnchorIdx,
+  buildGridRiskRows,
+  buildGridFavorableRows,
+  defaultGridLabPrefs,
+  loadGridLabPrefs,
+  saveGridLabPrefs,
+  computeRatioGridUpdate,
+  compileGridLabState,
+  runManualGridBacktest,
+  gridRiskMetaForPrice,
+  fmtGridLineTitle as fmtGridLineTitleLab,
+  captureGbLabViewport,
+  applyGbViewportFreeze,
+  gbWantBarsFromVisible,
+  GRIDLAB_PREFS_KEY,
+} from './gridLab.js'
+import {
+  pushBoundsUndo,
+  undoBounds,
+  redoBounds,
+  pushRedoFromCurrent,
+  pushUndoFromCurrent,
+  applyBoundsToPrefs,
+  readGridLabInputs as readGridLabInputsUi,
+  getGridSelectorRows as getGridSelectorRowsUi,
+  renderGridRiskProfile as renderGridRiskProfileUi,
+  renderManualBacktestPreviewUi,
+  scheduleGridLabSync as scheduleGridLabSyncUi,
+  runGridLabSync as runGridLabSyncUi,
+  collectGridLabFields,
+  detectBoundsChanges,
+  renderGridLabModal as renderGridLabModalUi,
+} from './gridLab-ui.js'
+import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
+import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
+import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
+import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
+import {
+  DEFAULT_DENSITY_SETTINGS,
+  getOrCreateDensitySettings,
+  resetDensitySettings as resetDensitySettingsMod,
+  setDensityThreshold as setDensityThresholdMod,
+  clusterOrderBook,
+  volumeStats,
+  classifyTier,
+  buildDensityZones,
+  priceBucket,
+  levelsToUsd,
+} from './density.js'
+import {
+  TIER_STYLE,
+  computeZonesForChart,
+  fetchOrderBook as fetchOrderBookUi,
+  prefetchAllOrderBooks,
+  drawZonesUi,
+  renderSettingsDensityUi,
+  toggleDensityUi,
+  setDensityVisibleUi,
+  setDensityMultUi,
+  resetDensitySettingsUi,
+} from './density-ui.js'
+import {
+  POT_FIELDS,
+  POT_FIELD_DESC,
+  POT_ABS_FIELDS,
+  clampEmaPeriod as clampEmaPeriodPp,
+  evalEmaTouchSignal,
+  evalCondition,
+  evalPreset,
+  makePreset,
+  ensureBuiltinSqueezePreset,
+  scanPresetMatches,
+  selectAlertableSymbols,
+  totalActiveMatches,
+  fmtConditionTag,
+  fmtConditionValue,
+} from './potentialPresets.js'
+import {
+  togglePotentialPanelUi,
+  renderPotentialPanelUi,
+  openPotPresetEditorUi,
+  togglePotPresetUi,
+  deletePotPresetUi,
+  addBuiltinSqueezePresetUi,
+  clearPotentialMatchesUi,
+  updatePotBadgeUi,
+} from './potentialPresets-ui.js'
 
 // API base - in dev points to local backend, in prod to your Railway URL
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
+
+// IMPORTANT: declare state-bearing `let` bindings that are accessed from
+// `calcAll()` (and other early functions) BEFORE that function is defined.
+// Otherwise terser's `mangle: { toplevel: true }` + inline/hoist rewrites can
+// turn access of these into a TDZ ReferenceError ("Cannot access 'k1' before
+// initialization") in the production build.
+/** lastFundingRate (доля, не %) по символу */
+let _fundRates = {}
+/** {oi1h, oi4h} в % от openInterestHist 1h */
+let _oiDelta = {}
+let _fundOiSymIdx = 0
+let _fundOiBusy = false
+let _fundOiInterval = null
 
 // Auth helpers
 export function getToken() { return localStorage.getItem('cs_token') }
@@ -43,7 +175,7 @@ function buildAuthUI() {
       <form id="authForm">
         <div class="auth-field"><label class="auth-label">EMAIL</label><input class="auth-input" id="authEmail" type="email" placeholder="you@example.com" autocomplete="email"></div>
         <div class="auth-field"><label class="auth-label">ПАРОЛЬ</label><input class="auth-input" id="authPass" type="password" placeholder="••••••••" autocomplete="current-password"></div>
-        <div class="auth-field" id="authPassConfirmField" style="display:none"><label class="auth-label">ПОДТВЕРДИТЕ ПАРОЛЬ</label><input class="auth-input" id="authPassConfirm" type="password" placeholder="••••••••"></div>
+        <div class="auth-field" id="authPassConfirmField" style="display:none"><label class="auth-label">ПОДТВЕРДИТЕ ПАРОЛЬ</label><input class="auth-input" id="authPassConfirm" type="password" placeholder="••••••••" autocomplete="new-password"></div>
         <button class="auth-btn" id="authSubmit" type="submit">ВОЙТИ</button>
         <div class="auth-err" id="authErr"></div>
         <div class="auth-ok" id="authOk"></div>
@@ -198,161 +330,10 @@ if (getToken()) {
 }
 
 
-// ═══════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────
 // ORIGINAL APP CODE
-// ═══════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════
-//  CONSTANTS
-// ═══════════════════════════════════════════════════════════════
-const API = 'https://fapi.binance.com/fapi/v1';
-const API_FDATA = 'https://fapi.binance.com/futures/data';
-// Timezone: offset candle times to device local time
-const TZ_OFFSET_S = -(new Date().getTimezoneOffset() * 60); // seconds to add to UTC
-function toChartTime(ms){ return Math.floor(ms/1000) + TZ_OFFSET_S; }
-const HIST_LIMIT = 500;    // свечей при подгрузке истории (листание влево)
-const HIST_INITIAL = 1200; // свечей при первоначальной загрузке графика (чтобы реже ходить в API)
-const HIST_CACHE_MAX = 2000;
-const MIN_CHART_CANDLES = 32; // меньше — считаем данные битым и перезапрашиваем
-const HIST_TRIGGER = 15;
-const FS_TFS = ['1m','3m','5m','15m','30m','1h','4h','1d','3d','1w'];
-const DRAW_HIT = 8; // px threshold for hover detection
-function hexToRgbA(hex,a){
-  if(!hex||typeof hex!=='string')return`rgba(168,85,247,${a})`;
-  let h=hex.replace('#','');
-  if(h.length===3)h=h.split('').map(c=>c+c).join('');
-  const n=parseInt(h,16);
-  if(isNaN(n))return`rgba(168,85,247,${a})`;
-  return`rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`;
-}
-
-const ALL_COLS = [
-  {id:'ch24',   l:'ИЗМ',  s:'24ч',    tip:'Изменение цены относительно цены 24 часа назад по данным Binance Futures (rolling 24h), в процентах. Положительное — рост, отрицательное — падение.'},
-  {id:'sp5',    l:'ТРНД', s:'…·30', tip:'Мини‑график последних 30 закрытий на том же таймфрейме, что и мини‑графики сетки (см. тулбар 1м/5м/15м/…). Пока нужный ТФ догружается в фоне, используется запасной ряд 5м. Сортировка — по % за отрезок (как у ИЗМ).'},
-  {id:'cday',   l:'ИЗМ',  s:'день%',  tip:'Изменение цены от первой 5-минутной свечи текущего календарного дня по локальному времени устройства до последней цены, в процентах.'},
-  {id:'rtd',    l:'РЕНЖ', s:'день',   tip:'Диапазон (макс−мин)/цена в процентах с начала локального календарного дня: 5-минутные свечи с полуночи по времени устройства.'},
-  {id:'r24',    l:'РЕНЖ', s:'24ч',    tip:'Диапазон за последние 24 часа по 5-минутным свечам: насколько широко ходила цена относительно текущей, в процентах.'},
-  {id:'r7d',    l:'РЕНЖ', s:'7д',     tip:'Диапазон за 7 дней по часовым свечам: отношение (high−low) к цене, в процентах — оценка волатильности недели.'},
-  {id:'na30',   l:'NATR', s:'1м/30',  tip:'NATR на 1м: ATR за 30 периодов, делённый на последнюю цену и умноженный на 100. Показывает типичный «размер шага» рынка относительно цены на минутном таймфрейме.'},
-  {id:'na14',   l:'NATR', s:'5м/14',  tip:'NATR на 5м: ATR(14) по пятиминутным свечам, нормализованный к цене (%). Удобно сравнивать волатильность разных монет независимо от абсолютной цены.'},
-  {id:'r1m5',   l:'РЕНЖ', s:'1м/5',   tip:'Диапазон последних пяти закрытых минутных свечей к текущей цене, в процентах — краткосрочный «микро-ренж».'},
-  {id:'tr5',    l:'СД*',  s:'5м/14',  tip:'Отношение числа сделок на последней 5-минутной свече к среднему числу сделок за предыдущие 14 закрытых пятиминуток. >1 — активность выше недавней нормы.'},
-  {id:'tr1h',   l:'СД*',  s:'1ч/24',  tip:'Отношение числа сделок на последней часовой свече к среднему за 24 предыдущих часа. Показывает всплеск или просадку торговой активности на 1ч ТФ.'},
-  {id:'vr5',    l:'ОБ*',  s:'5м/14',  tip:'Объём (в USDT) последней 5-минутной свечи, делённый на средний объём за 14 предыдущих пятиминуток. >1 — объём выше обычного для этого ТФ.'},
-  {id:'vr1h',   l:'ОБ*',  s:'1ч/24',  tip:'Объём последней часовой свечи к среднему часовому объёму за 24 закрытых часа. Индикатор всплеска или затишья на часовике.'},
-  {id:'ch7d',   l:'ИЗМ',  s:'7д',     tip:'Изменение цены за 7 дней по дневным (или агрегированным) данным, в процентах — среднесрочный тренд.'},
-  {id:'trd24',  l:'СДЛК', s:'24ч',    tip:'Суммарное число сделок (агрессивных обновлений книги) за 24 часа по данным тикера — ликвидность и интерес участников.'},
-  {id:'vol24',  l:'ОБЪЕМ',s:'24ч',    tip:'Совокупный объём торгов в USDT за 24 часа (quote volume). Сравнение ликвидности инструментов между собой.'},
-  {id:'corr',   l:'КРЛЦ', s:'24ч',    tip:'Коэффициент корреляции доходностей этой монеты и BTC за последние 24 часа по 5-минутным доходностям: ближе к 1 — движение с рынком, к 0 — своё движение.'},
-  {id:'corr14', l:'КРЛЦ', s:'5м/14',  tip:'Корреляция с BTC по последним 14 пятиминутным свечам — краткосрочное «следование» или расхождение с биткоином.'},
-  {id:'v15m',   l:'ОБ',   s:'1м/15',  tip:'Сумма объёма в USDT за последние 15 минут по минутным свечам — недавний приток/отток ликвидности без учёта направления цены.'},
-  {id:'v60m',   l:'ОБ',   s:'1м/60',  tip:'Сумма объёма в USDT за последний час по минутным свечам — более широкое окно, чем 15м, для оценки недавней активности.'},
-  {id:'fund',   l:'ФНД',  s:'8ч',     tip:'Ставка финансирования (lastFundingRate) с Binance Futures, в % за период ~8ч. Положительная — лонги платят шортам, отрицательная — наоборот. Обновляется пакетом раз в минуту.'},
-  {id:'oi1h',   l:'OIΔ',  s:'1ч%',    tip:'Изменение open interest за ~1 час по часовым снимкам Binance (openInterestHist, period=1h). Показывает приток/отток позиций относительно час назад.'},
-  {id:'oi4h',   l:'OIΔ',  s:'4ч%',    tip:'Изменение open interest за ~4 часа по тем же снимкам (сравнение с 4 барами назад). Догружается по очереди для части списка, чтобы не ловить лимиты API.'},
-];
-/** Колонки скринера по умолчанию скрытые (включаются в Настройки → Индикаторы). */
-const COLS_HIDDEN_BY_DEFAULT=new Set(['fund','oi1h','oi4h']);
-
-/** Плашки над мини-графиками и в полноэкранной шапке (отдельно от колонок скринера) */
-const CHART_HEAD_DEFS=[
-  {id:'chg', cls:'cchg', tip:'Изменение цены за 24 ч (тикер Binance Futures), %. Зелёный/красный — направление.'},
-  {id:'vol', cls:'cvol', tip:'Объём торгов в USDT за 24 ч по тикеру — ликвидность инструмента.'},
-  {id:'trd', cls:'ctrd', tip:'Число сделок за 24 ч — насколько «шумно» и часто обновляется рынок.'},
-  {id:'natr',cls:'cnatr',tip:'NATR 5м/14 (%): нормализованный ATR по пятиминуткам; типичная волатильность относительно цены.'},
-  {id:'corr',cls:'ccorr',tip:'Корреляция с BTC (краткий период или 24ч): насколько движение совпадает с биткоином.'},
-];
-const CHART_HEAD_IDS=CHART_HEAD_DEFS.map(d=>d.id);
-
-const GROUP_COLORS=['','#ef4444','#f97316','#eab308','#22c55e','#3b82f6','#8b5cf6','#ec4899'];
-const FAVORITE_GROUP_ID=8;
-const FAVORITE_GROUP_COLOR='#fbbf24';
-// index 0=none, 1=red,2=orange,3=yellow,4=green,5=blue,6=violet,7=pink
-
-function trendColShortLabel(tf){
-  const m={ '1m':'1м', '3m':'3м', '5m':'5м', '15m':'15м', '30m':'30м', '1h':'1ч', '4h':'4ч', '1d':'Д' };
-  return`${m[tf]||'5м'}·30`;
-}
-function trendKlineFetchLimit(tf){
-  if(tf==='1m')return 80;
-  if(tf==='3m')return 100;
-  if(tf==='5m')return 300;
-  if(tf==='15m')return 120;
-  if(tf==='30m')return 100;
-  if(tf==='1h')return 170;
-  if(tf==='4h')return 120;
-  if(tf==='1d')return 90;
-  return 300;
-}
-function tfToolbarBtnId(tf){
-  const m={ '1m':'tf1m', '5m':'tf5m', '15m':'tf15m', '1h':'tf1h', '4h':'tf4h', '1d':'tf1d' };
-  return m[tf]||'tf5m';
-}
-
-const S = {
-  syms:[], tk:{}, k5m:{}, k1h:{}, k1m:{}, kTrend:{}, mx:{}, btcR:[],
-  charts: Array.from({length:9},()=>mkChart()),
-  wsScreener:null, wsCharts:null, wsChartTrades:null,
-  sortId:'vol24', sortDir:'desc', sortAlpha:false,
-  tf:'5m', q:'', page:0, LC:null, bgDone:false,
-  fastMode:false,
-  drawMode:null, drawIdCounter:0,
-  symDrawings:{},      // drawings per symbol, shared between grid & FS
-  drawUndo:{},         // sym -> [drawings snapshot...]
-  drawRedo:{},         // sym -> [drawings snapshot...]
-  chartRightOffset:10, // пустые бары справа (Binance timeScale rightOffset)
-  chartVisibleBars:96, // сколько последних свечей показывать по умолчанию (масштаб)
-  minVol:0, minTrd:0, gridSize:9, gridRows:3, gridCols:3, upColor:'#1fa891', wmVisible:true, sortAbs:true,
-  screenerVisible:true, fsScreenerVisible:true,
-  colOrder: ALL_COLS.map(c=>c.id),
-  colVisible: new Set(ALL_COLS.map(c=>c.id).filter(id=>!COLS_HIDDEN_BY_DEFAULT.has(id))),
-  chartAutoSync:true,
-  /** Подсветка торговых сессий на графиках (UTC). */
-  sessionFx:{enabled:false,asia:true,london:true,ny:true},
-  showOiOnChart:false,
-  showBbOverlay:false,
-  chartHeadOrder:['chg','vol','trd','natr','corr'],
-  chartHeadVisible:new Set(['chg','vol','trd','natr']),
-  /** Цвет линий рисования по типу (не лонг/шорт) */
-  lineColors:{hray:'#e8a020',tline:'#3b82f6',aray:'#a855f7',atline:'#a855f7'},
-  fsSym:null, fsOpen:false, fsWs:null,
-  fsLayoutPreset:'three_top_wide',
-  fsChartCount:3,
-  fsChartTfs:['5m','1h','4h'],
-  fsCharts:[mkFsChart('5m'), mkFsChart('1h'), mkFsChart('4h')],
-  settingsTab:'gen',
-  showDensity:false,
-  densitySettings:{}, // per symbol: {largeMult, medMult, smallMult}
-  alertLog:[],
-  alertSettings:{repeat:true, cooldown:5, sound:true},
-  // #9: Color groups + favorites
-  symGroups:{},       // sym → groupIdx (1-7), 0=none
-  symFavorites:{},    // sym → true
-  activeGroupFilter:0,// 0=all, 1-7=color group, 8=favorites
-  lastGroupUsed:1,    // last group assigned by user
-  _savedCpW:'',_savedFsCaW:'',
-  // Potential monitor — multi-preset system
-  potentialPresets:[],
-  _potFilterPreset:null, // id of preset being used as screener filter
-  _potInterval:null,
-  _potNextId:1,
-  // EMA overlay settings
-  emaSettings:[
-    {period:9, color:'#f97316',visible:true},
-    {period:21,color:'#3b82f6',visible:true},
-    {period:50,color:'#a855f7',visible:false},
-    {period:200,color:'#e04040',visible:false},
-  ],
-  emaVisible:false,
-  emaCrossSound:true,
-  emaSymOverrides:{},
-  emaSymEnabled:{},
-  emaAlertPairs:[],
-  histCache:{}, // key: "${tf}:${sym}" -> candles[]
-};
-const DRAW_HISTORY_LIMIT=60;
-let _lastDrawSym=null;
-let _undoSymOrder=[];
-let _redoSymOrder=[];
+// ───────────────────────────────────────────────────────────
+// State, constants, formatting and network helpers are imported from modules.
 
 function loadChartViewPrefs(){
   try{
@@ -445,7 +426,7 @@ function lineColorForType(type){
 function applyDefaultChartView(ch){
   if(!ch?.lc||!ch.candles?.length)return;
   const len=ch.candles.length;
-  // Мало баров — только fit, без «логического зума» на 32+ пустых слотов
+  // Мало баров • только fit, без «логического зума» на 32+ пустых слотов
   if(len<MIN_CHART_CANDLES){
     try{ch.lc.timeScale().fitContent();}catch(e){}
     return;
@@ -464,6 +445,9 @@ function applyDefaultChartView(ch){
     ro=Math.max(0,Math.min(36,Math.round(ro*roShrink)));
   }
   try{
+    // Apply view only once per data load to avoid periodic rescaling flicker
+    if(ch._lastAppliedRangeFrom===from&&ch._lastAppliedRangeTo===len-1&&ch._lastAppliedRo===ro)return;
+    ch._lastAppliedRangeFrom=from;ch._lastAppliedRangeTo=len-1;ch._lastAppliedRo=ro;
     ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
     ch.lc.timeScale().setVisibleLogicalRange({from,to:len-1});
     ch.lc.timeScale().applyOptions({rightOffset:ro});
@@ -473,13 +457,6 @@ function applyDefaultChartView(ch){
 function applyDefaultChartViewAll(){
   S.charts.forEach(ch=>{if(ch.lc&&ch.candles?.length)applyDefaultChartView(ch);});
   if(S.fsOpen)S.fsCharts.forEach(ch=>{if(ch.lc&&ch.candles?.length)applyDefaultChartView(ch);});
-}
-
-function calcRangeFromCandles(candles){
-  if(!candles||!candles.length)return null;
-  const H=candles.reduce((m,k)=>Math.max(m,k.h),-Infinity);
-  const L=candles.reduce((m,k)=>Math.min(m,k.l),Infinity);
-  return L>0?(H-L)/L*100:null;
 }
 
 function mkChart(){
@@ -509,9 +486,9 @@ function activeCols(){
     .map(id=>ALL_COLS.find(c=>c.id===id)).filter(Boolean);
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  LOADING UI
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function ldSet(t,p,d){
   const tEl=document.getElementById('ltxt');
   const pEl=document.getElementById('lfill');
@@ -520,7 +497,7 @@ function ldSet(t,p,d){
   if(p!=null&&pEl)pEl.style.width=p+'%';
   if(d!=null&&dEl)dEl.textContent=d;
 }
-function ldErr(m){const e=document.getElementById('lerr');if(!e)return;e.style.display='block';e.innerHTML='⚠ '+String(m).replace(/\n/g,'<br>');}
+function ldErr(m){const e=document.getElementById('lerr');if(!e)return;e.style.display='block';e.innerHTML='вљ  '+String(m).replace(/\n/g,'<br>');}
 function ldHide(){
   const el=document.getElementById('ld');
   const appEl=document.getElementById('app');
@@ -533,139 +510,44 @@ function ldHide(){
 function setText(id,val){const el=document.getElementById(id);if(el)el.textContent=val;}
 function setHtml(id,val){const el=document.getElementById(id);if(el)el.innerHTML=val;}
 
-// ═══════════════════════════════════════════════════════════════
-//  FETCH
-// ═══════════════════════════════════════════════════════════════
-// Global rate limiter — track if we're banned
-let _bnBannedUntil = 0;
-const _reqQueue = []; let _reqRunning = 0; const _reqMax = 3;
+// Network helpers (fj, parseKlines, batchKlines) and metrics are imported from modules.
 
-// ── Pan state tracking — skip heavy DOM work while user is dragging charts ──
-let _anyChartPanning = false;
-let _panEndTimer = null;
-let _deferredRenderNeeded = false;
+// Local pan-state helpers that coordinate with state.js variables.
+function _panOverlayTick() {
+  if (!_anyChartPanning) {
+    setPanOverlayRaf(null);
+    return;
+  }
+  for (const ch of [...S.charts, ...S.fsCharts]) {
+    if (ch?.lc && ch.canvas) try { _rCanvasImmediate(ch); } catch (e) {}
+  }
+  setPanOverlayRaf(requestAnimationFrame(_panOverlayTick));
+}
 function _onPanStart() {
-  _anyChartPanning = true;
+  setAnyChartPanning(true);
+  if (!_panOverlayRaf) setPanOverlayRaf(requestAnimationFrame(_panOverlayTick));
   if (_panEndTimer) clearTimeout(_panEndTimer);
-  _panEndTimer = setTimeout(() => {
-    _anyChartPanning = false;
-    _panEndTimer = null;
+  setPanEndTimer(setTimeout(() => {
+    setAnyChartPanning(false);
+    setPanEndTimer(null);
+    if (_panOverlayRaf) {
+      cancelAnimationFrame(_panOverlayRaf);
+      setPanOverlayRaf(null);
+    }
+    for (const ch of [...S.charts, ...S.fsCharts]) {
+      if (ch?.lc && ch.canvas) try { _rCanvasImmediate(ch); } catch (e) {}
+    }
     if (_deferredRenderNeeded && !document.hidden) {
-      _deferredRenderNeeded = false;
+      setDeferredRenderNeeded(false);
       if (typeof requestIdleCallback !== 'undefined') {
         requestIdleCallback(() => renderTable(), { timeout: 400 });
       } else {
         setTimeout(renderTable, 0);
       }
     }
-  }, 180);
-}
-function _runQueue(){
-  while(_reqRunning < _reqMax && _reqQueue.length){
-    const {fn,res,rej} = _reqQueue.shift();
-    _reqRunning++;
-    fn().then(r=>{_reqRunning--;res(r);_runQueue();}).catch(e=>{_reqRunning--;rej(e);_runQueue();});
-  }
-}
-function fj(url,timeout=15000,retries=2){
-  return new Promise((res,rej)=>{
-    const now=Date.now();
-    if(_bnBannedUntil>now){
-      const wait=_bnBannedUntil-now;
-      console.warn(`Binance ban active, waiting ${Math.round(wait/1000)}s`);
-      setTimeout(()=>fj(url,timeout,retries).then(res).catch(rej), Math.min(wait,30000));
-      return;
-    }
-    const doFetch=()=>new Promise((rs,rj)=>{
-      const t=setTimeout(()=>rj(new Error('Timeout')),timeout);
-      fetch(url).then(async r=>{
-        clearTimeout(t);
-        const text=await r.text();
-        let data;
-        try{data=JSON.parse(text);}catch(e){rj(new Error('JSON parse error'));return;}
-        if(data?.code===-1003){
-          const until=data.msg?.match(/banned until (\d+)/)?.[1];
-          if(until){_bnBannedUntil=+until;console.warn('Binance ban until',new Date(_bnBannedUntil));}
-          else _bnBannedUntil=Date.now()+60000;
-          rj(new Error('RATE_LIMIT'));return;
-        }
-        if(!r.ok){rj(new Error('HTTP '+r.status));return;}
-        rs(data);
-      }).catch(e=>{clearTimeout(t);rj(e);});
-    });
-    const attempt=(n)=>{
-      _reqQueue.push({fn:doFetch,res:rs=>{res(rs);},rej:e=>{
-        if(e.message==='RATE_LIMIT'&&n>0){
-          setTimeout(()=>attempt(n-1), 5000+Math.random()*5000);
-        } else { rej(e); }
-      }});
-      _runQueue();
-    };
-    attempt(retries);
-  });
-}
-function parseKlines(raw){
-  // Sanitize to avoid broken candles that cause chart "spikes".
-  const out=[];
-  for(const k of(raw||[])){
-    const t=+k[0],o=+k[1],h=+k[2],l=+k[3],c=+k[4],v=+k[5],qv=+k[7],tr=+k[8];
-    if(!isFinite(t)||!isFinite(o)||!isFinite(h)||!isFinite(l)||!isFinite(c))continue;
-    const hh=Math.max(h,o,c);
-    const ll=Math.min(l,o,c);
-    out.push({t,o,h:hh,l:ll,c,v:isFinite(v)?v:0,tr:isFinite(tr)?tr:0,qv:isFinite(qv)?qv:0});
-  }
-  return out;
-}
-async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
-  const out={};
-  for(let i=0;i<syms.length;i+=bs){
-    const batch=syms.slice(i,i+bs);
-    const results=await Promise.allSettled(batch.map(s=>fj(`${API}/klines?symbol=${s}&interval=${iv}&limit=${lim}`).then(d=>[s,parseKlines(d)])));
-    for(const r of results)if(r.status==='fulfilled')out[r.value[0]]=r.value[1];
-    if(pFrom!=null)ldSet(null,pFrom+Math.round((i/syms.length)*(pTo-pFrom)),`${iv}: ${Math.min(i+bs,syms.length)}/${syms.length}`);
-    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,120+Math.random()*120));
-  }
-  return out;
+  }, 180));
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  METRICS
-// ═══════════════════════════════════════════════════════════════
-function calcATR(kl,n){if(!kl||kl.length<n+1)return null;let s=0;const f=kl.length-n;for(let i=f;i<kl.length;i++){const k=kl[i],p=kl[i-1];s+=Math.max(k.h-k.l,Math.abs(k.h-p.c),Math.abs(k.l-p.c));}return s/n;}
-function calcNATR(kl,n){const a=calcATR(kl,n);return a&&kl?a/kl[kl.length-1].c*100:null;}
-function calcRange(kl,n){if(!kl||kl.length<n)return null;const sl=kl.slice(-n);const H=sl.reduce((m,k)=>Math.max(m,k.h),-Infinity);const L=sl.reduce((m,k)=>Math.min(m,k.l),Infinity);return L>0?(H-L)/L*100:null;}
-function calcRel(kl,n,f){if(!kl||kl.length<n+1)return null;const sl=kl.slice(-n-1);const cur=sl[sl.length-1][f];let s=0;for(let i=0;i<n;i++)s+=sl[i][f];const avg=s/n;return avg>0?cur/avg:null;}
-/** Последние N закрытий свечей kl (любой ТФ) → % изменения за окно + path для SVG (viewBox 0 0 100 40). */
-function sparkTrendSnapshot(kl,n=30){
-  if(!kl||kl.length<6)return{sp5:null,sp5d:''};
-  const sl=kl.slice(-Math.min(n,kl.length));
-  if(sl.length<6)return{sp5:null,sp5d:''};
-  const closes=[];
-  for(const k of sl){
-    const c=+k.c;
-    if(isFinite(c)&&c>0)closes.push(c);
-  }
-  if(closes.length<6)return{sp5:null,sp5d:''};
-  const first=closes[0],last=closes[closes.length-1];
-  const chg=first>0?(last/first-1)*100:null;
-  let lo=Math.min(...closes),hi=Math.max(...closes);
-  if(hi<=lo)hi=lo+1e-9*Math.abs(lo||1);
-  const padY=5,padX=1;
-  const W=100,H=40;
-  const n1=closes.length-1||1;
-  const pts=closes.map((c,i)=>{
-    const x=padX+(i/n1)*(W-2*padX);
-    const y=padY+(1-(c-lo)/(hi-lo))*(H-2*padY);
-    return x.toFixed(2)+','+y.toFixed(2);
-  });
-  return{sp5:chg,sp5d:'M'+pts.join(' L')};
-}
-function sparkHeatBackground(pct){
-  if(pct==null||isNaN(pct))return'transparent';
-  const t=Math.max(-6,Math.min(6,pct))/6;
-  if(t>=0)return`rgba(34,197,94,${0.06+t*0.26})`;
-  return`rgba(239,68,68,${0.06+(-t)*0.26})`;
-}
 /** Последние period закрытий на k5 → SMA, полосы Боллинджера, относительная ширина полос. */
 function bollingerOnTail(k5,period=20,mult=2){
   if(!k5||k5.length<period)return null;
@@ -673,35 +555,14 @@ function bollingerOnTail(k5,period=20,mult=2){
   const closes=w.map(x=>+x.c).filter(c=>isFinite(c)&&c>0);
   if(closes.length<period)return null;
   const sma=closes.reduce((a,b)=>a+b,0)/period;
-  let v=0;for(const x of closes)v+=(x-sma)*(x-sma);
-  const sd=Math.sqrt(v/period);
+  let variance=0;for(const x of closes)variance+=(x-sma)*(x-sma);
+  const sd=Math.sqrt(variance/period);
   const upper=sma+mult*sd,lower=sma-mult*sd;
   if(!isFinite(sma)||sma<=0)return null;
   return{sma,upper,lower,width:(upper-lower)/sma,lastC:closes[closes.length-1]};
 }
 /** Узкая полоса vs предыдущий бар + всплеск vr5 + выход за полосу на последней свече. */
-function calcSqueezePop(k5,vr5){
-  const period=20,mult=2;
-  if(!k5||k5.length<period+3||vr5==null||!isFinite(vr5))return 0;
-  const cur=bollingerOnTail(k5,period,mult);
-  const prev=bollingerOnTail(k5.slice(0,-1),period,mult);
-  if(!cur||!prev)return 0;
-  const squeezed=cur.width<prev.width*0.88&&cur.width<0.045;
-  const breakout=cur.lastC>cur.upper*1.00005||cur.lastC<cur.lower*0.99995;
-  return(squeezed&&vr5>=1.25&&breakout)?1:0;
-}
-function calcBbSignals(k5,vr5){
-  const period=20,mult=2;
-  if(!k5||k5.length<period+4)return{bbSqz:0,bbBreak:0,bbWidth:null,bbUpper:null,bbLower:null};
-  const cur=bollingerOnTail(k5,period,mult);
-  const prev=bollingerOnTail(k5.slice(0,-1),period,mult);
-  if(!cur||!prev)return{bbSqz:0,bbBreak:0,bbWidth:null,bbUpper:null,bbLower:null};
-  const bbSqz=(cur.width<prev.width*0.88&&cur.width<0.045)?1:0;
-  const breakUp=cur.lastC>cur.upper*1.00005;
-  const breakDn=cur.lastC<cur.lower*0.99995;
-  const bbBreak=breakUp?1:breakDn?-1:0;
-  return{bbSqz,bbBreak,bbWidth:cur.width,bbUpper:cur.upper,bbLower:cur.lower,volImpulse:(vr5!=null&&vr5>=1.25)?1:0};
-}
+
 function buildBbSeries(candles,period=20,mult=2){
   if(!Array.isArray(candles)||candles.length<period)return{upper:[],lower:[]};
   const upper=[],lower=[];
@@ -723,32 +584,62 @@ function oiPeriodForTf(tf){
   if(tf==='4h')return'4h';
   return'1h';
 }
-async function fetchOiHistoryForChart(sym,tf){
+async function fetchOiHistoryForChart(sym,tf,firstCandleMs=null){
   const period=oiPeriodForTf(tf);
-  const limit=Math.max(60,Math.min(240,Math.round(HIST_INITIAL/3)));
-  const raw=await fj(`${API_FDATA}/openInterestHist?symbol=${encodeURIComponent(sym)}&period=${period}&limit=${limit}`,12000,0);
-  if(!Array.isArray(raw)||raw.length<2)return[];
-  const base=+raw[0]?.sumOpenInterest;
-  if(!isFinite(base)||base<=0)return[];
-  const out=[];
-  for(const row of raw){
-    const oi=+row.sumOpenInterest;
-    const ts=+row.timestamp;
-    if(!isFinite(oi)||!isFinite(ts)||ts<=0)continue;
-    out.push({time:toChartTime(ts),value:(oi/base-1)*100});
+  const targetT=firstCandleMs!=null&&isFinite(+firstCandleMs)?toChartTime(+firstCandleMs):null;
+  const merged=[];
+  const seen=new Set();
+  let endTime=null;
+  for(let page=0;page<14;page++){
+    let url=`${API_FDATA}/openInterestHist?symbol=${encodeURIComponent(sym)}&period=${period}&limit=500`;
+    if(endTime!=null)url+=`&endTime=${endTime}`;
+    const raw=await fj(url,12000,0);
+    if(!Array.isArray(raw)||raw.length<2)break;
+    for(const row of raw){
+      const oi=+row.sumOpenInterest;
+      const ts=+row.timestamp;
+      if(!isFinite(oi)||!isFinite(ts)||ts<=0)continue;
+      const tim=toChartTime(ts);
+      if(seen.has(tim))continue;
+      seen.add(tim);
+      merged.push({time:tim,oi});
+    }
+    merged.sort((a,b)=>a.time-b.time);
+    if(raw.length<500)break;
+    if(targetT==null)break;
+    const oldest=merged[0]?.time;
+    if(oldest!=null&&oldest<=targetT)break;
+    const batchOldest=+raw[0]?.timestamp;
+    if(!isFinite(batchOldest))break;
+    endTime=batchOldest-1;
+    await new Promise(r=>setTimeout(r,35+Math.random()*45));
   }
-  return out;
+  if(merged.length<2)return[];
+  return merged;
 }
+/** Линейная интерполяция OI по времени под каждую свечу; % изменения относительно OI на первом баре окна. */
 function alignOiToCandles(candles,oiRaw){
   if(!Array.isArray(candles)||!candles.length||!Array.isArray(oiRaw)||!oiRaw.length)return[];
-  const src=oiRaw.slice().sort((a,b)=>a.time-b.time);
+  const pts=oiRaw.slice().filter(p=>p&&isFinite(p.oi)&&p.time!=null).sort((a,b)=>a.time-b.time);
+  if(pts.length<2)return[];
+  function oiAtChartTime(tv){
+    if(tv<=pts[0].time)return pts[0].oi;
+    const last=pts[pts.length-1];if(tv>=last.time)return last.oi;
+    let lo=0,hi=pts.length-1;
+    while(lo+1<hi){
+      const mid=(lo+hi)>>1;
+      if(pts[mid].time<=tv)lo=mid;else hi=mid;
+    }
+    const a=pts[lo],b=pts[lo+1];
+    const w=(tv-a.time)/Math.max(1,(b.time-a.time));
+    return a.oi+w*(b.oi-a.oi);
+  }
+  const base=Math.max(1e-12,oiAtChartTime(toChartTime(candles[0].t)));
   const out=[];
-  let j=0;
-  let cur=src[0].value;
   for(const c of candles){
     const t=toChartTime(c.t);
-    while(j<src.length&&src[j].time<=t){cur=src[j].value;j++;}
-    if(isFinite(cur))out.push({time:t,value:cur});
+    const oi=oiAtChartTime(t);
+    out.push({time:t,value:(oi/base-1)*100});
   }
   return out;
 }
@@ -778,7 +669,8 @@ async function refreshChartOiSeries(ch,tf,sym){
   if(ch._oiFetching&&now-(ch._oiFetchStartedAt||0)<12000)return;
   ch._oiFetching=true;ch._oiFetchStartedAt=now;
   try{
-    const raw=await fetchOiHistoryForChart(sym,tf);
+    const anchorMs=ch.candles?.length?ch.candles[0].t:null;
+    const raw=await fetchOiHistoryForChart(sym,tf,anchorMs);
     ch._oiRaw=raw;
     ch._oiHist=alignOiToCandles(ch.candles,raw);
     ch._oiLastFetchTs=Date.now();
@@ -794,16 +686,6 @@ function getSessionKindByUtcHour(h){
   if(S.sessionFx.asia!==false&&h>=0&&h<9)return'as';
   return'dead';
 }
-function calcNATRFlexible(kl,n){
-  if(!kl||kl.length<3)return null;
-  const p=Math.min(n,Math.max(2,kl.length-1));
-  return calcNATR(kl,p);
-}
-function calcRangeFlexible(kl,n){
-  if(!kl||kl.length<2)return null;
-  return calcRange(kl,Math.min(n,kl.length));
-}
-function calcRets(kl){if(!kl||kl.length<2)return[];const r=[];for(let i=1;i<kl.length;i++)r.push((kl[i].c-kl[i-1].c)/kl[i-1].c);return r;}
 function calcCorr(a,b){if(!a||!b||a.length<5)return null;const n=Math.min(a.length,b.length);const x=a.slice(-n),y=b.slice(-n);let mx=0,my=0;for(let i=0;i<n;i++){mx+=x[i];my+=y[i];}mx/=n;my/=n;let num=0,sx=0,sy=0;for(let i=0;i<n;i++){const xa=x[i]-mx,ya=y[i]-my;num+=xa*ya;sx+=xa*xa;sy+=ya*ya;}const d=Math.sqrt(sx*sy);return d>0?num/d:null;}
 
 function updateLiveKlineSeries(kl,intervalMs,price,nowMs){
@@ -835,6 +717,7 @@ function updateLiveKlineSeries(kl,intervalMs,price,nowMs){
 }
 
 function applyLiveKlineUpdate(sym,price,nowMs){
+  if(!sym)return;
   updateLiveKlineSeries(S.k1m[sym],60000,price,nowMs);
   updateLiveKlineSeries(S.k5m[sym],300000,price,nowMs);
   updateLiveKlineSeries(S.k1h[sym],3600000,price,nowMs);
@@ -857,7 +740,8 @@ function appendCandleWithGaps(arr,candle,stepMs){
     }
     for(let ts=prev.t+stepMs;ts<candle.t;ts+=stepMs){
       const base=arr[arr.length-1]?.c??prev.c;
-      arr.push({t:ts,o:base,h:base,l:base,c:base,v:0,tr:0,qv:0,_synthetic:true});
+      const carryQv=+(arr[arr.length-1]?.qv??prev.qv??0)||0;
+      arr.push({t:ts,o:base,h:base,l:base,c:base,v:0,tr:0,qv:carryQv,_synthetic:true});
     }
   }
   arr.push(candle);
@@ -867,9 +751,10 @@ function calcAll(){
   const btc5=S.k5m['BTCUSDT'];
   S.btcR=btc5?calcRets(btc5):[];
   const btcR14=btc5&&btc5.length>=15?calcRets(btc5.slice(-15)):[];
-  S.mx={};
   const nowMs=Date.now();
-  const dayStartMs=new Date(new Date().toDateString()).getTime();
+  const dayStartMs=new Date(nowMs).setHours(0,0,0,0);
+  const prevMx=S.mx;
+  const nextMx={};
   for(const sym of S.syms){
     const t=S.tk[sym];if(!t)continue;
     const k5=S.k5m[sym],k1h=S.k1h[sym],k1m=S.k1m[sym];
@@ -885,12 +770,15 @@ function calcAll(){
     const kt=S.kTrend[sym];
     const sparkKl=(kt&&kt.length>=6)?kt:k5;
     const sp=sparkTrendSnapshot(sparkKl,30);
+    const volSpark=sparkVolSnapshot(sparkKl,30);
     const vr5v=calcRel(k5,14,'qv');
     const oiE=_oiDelta[sym];
     const bb=calcBbSignals(k5,vr5v);
     const m={
       sym,price:t.p,ch24:t.c24,cday,
       sp5:sp.sp5,sp5d:sp.sp5d,
+      spVol:volSpark.spVol,spVold:volSpark.spVold,
+      spv:volSpark.spVol,
       rtd,
       r24:calcRange(k5,288),r7d:calcRange(k1h,168),
       na30:calcNATRFlexible(k1m,30),na14:calcNATRFlexible(k5,14),r1m5:calcRangeFlexible(k1m,5),
@@ -900,9 +788,9 @@ function calcAll(){
       bbSqz:bb.bbSqz,
       bbBreak:bb.bbBreak,
       volImpulse:bb.volImpulse??0,
-      fund:_fundRates[sym]??null,
-      oi1h:oiE?.oi1h??null,
-      oi4h:oiE?.oi4h??null,
+      fund:_fundRates[sym]??prevMx[sym]?.fund??null,
+      oi1h:oiE?.oi1h??prevMx[sym]?.oi1h??null,
+      oi4h:oiE?.oi4h??prevMx[sym]?.oi4h??null,
       ch7d:null,trd24:t.tr,vol24:t.qv,
       corr:S.btcR.length>10&&k5?calcCorr(calcRets(k5),S.btcR):null,
       corr14,
@@ -910,20 +798,19 @@ function calcAll(){
       v60m:k1m&&k1m.length>=2?k1m.slice(-Math.min(60,k1m.length)).reduce((a,k)=>a+k.qv,0):null,
     };
     if(k1h&&k1h.length>=168){const old=k1h[k1h.length-168];m.ch7d=(t.p-old.c)/old.c*100;}
-    S.mx[sym]=m;
+    nextMx[sym]=m;
   }
+  S.mx=nextMx;
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  FORMAT HELPERS
-// ═══════════════════════════════════════════════════════════════
-function fn(v,d=1){return(v==null||isNaN(v))?'—':v.toFixed(d);}
-function fk(v){if(v==null||isNaN(v))return'—';const a=Math.abs(v);if(a>=1e9)return(v/1e9).toFixed(1)+'B';if(a>=1e6)return(v/1e6).toFixed(1)+'M';if(a>=1e3)return(v/1e3).toFixed(0)+'K';return v.toFixed(0);}
+// ───────────────────────────────────────────────────────────────
 function fv(v,id){
-  if(v==null||isNaN(v))return'—';
-  if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5')return(v>0?'+':'')+fn(v,2)+'%';
-  if(id==='fund')return(v==null||!isFinite(v))?'—':(v*100).toFixed(3)+'%';
-  if(id==='oi1h'||id==='oi4h')return(v==null||!isFinite(v))?'—':(v>0?'+':'')+fn(v,2)+'%';
+  if(v==null||isNaN(v))return'•';
+  if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5'||id==='spv')return(v>0?'+':'')+fn(v,2)+'%';
+  if(id==='fund')return(v==null||!isFinite(v))?'•':(v*100).toFixed(3)+'%';
+  if(id==='oi1h'||id==='oi4h')return(v==null||!isFinite(v))?'•':(v>0?'+':'')+fn(v,2)+'%';
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return fn(v,1);
   if(id==='na30'||id==='na14')return fn(v,2);
   if(id==='tr5'||id==='tr1h'||id==='vr5'||id==='vr1h')return fn(v,1)+'×';
@@ -934,12 +821,13 @@ function fv(v,id){
 }
 function fc(v,id){
   if(v==null||isNaN(v))return'd';
-  if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5')return v>0?'p':v<0?'n':'w';
+  if(id==='ch24'||id==='ch7d'||id==='cday'||id==='sp5'||id==='spv')return v>0?'p':v<0?'n':'w';
   if(id==='fund')return'w';
   if(id==='oi1h'||id==='oi4h')return v>0?'p':v<0?'n':'w';
   if(id==='rtd'||id==='r24'||id==='r7d'||id==='r1m5')return v>15?'y':'w';
   if(id==='na30'||id==='na14')return v>0.5?'y':'w';
   if(id==='corr'||id==='corr14')return v>0.75?'d':v<-0.2?'n':'w';
+  if(['tr5','tr1h','vr5','vr1h'].includes(id))return'w';
   return'w';
 }
 function fh(v,id){
@@ -952,36 +840,31 @@ function fh(v,id){
     return'';
   }
   if(!['tr5','tr1h','vr5','vr1h'].includes(id))return'';
-  if(v>4)return'hv3';if(v>2.5)return'hv2';if(v>1.5)return'hv1';if(v<0.3)return'hr3';if(v<0.5)return'hr2';if(v<0.7)return'hr1';return'';
+  // Gradient green from >0.7 up to >3; base cells stay default/neutral at <=0.7
+  if(v>=3)return'hv3';if(v>=2)return'hv2';if(v>=1.4)return'hv1';if(v>=0.7)return'hv0';
+  return'';
 }
 
-function fmtPrice(p){
-  if(p==null||isNaN(p)||p===0)return'—';
-  const a=Math.abs(p);
-  let s='—';
-  if(a<0.0001)s=p.toFixed(8);else if(a<0.001)s=p.toFixed(7);else if(a<0.01)s=p.toFixed(6);
-  else if(a<0.1)s=p.toFixed(5);else if(a<1)s=p.toFixed(4);else if(a<100)s=p.toFixed(3);
-  else if(a<10000)s=p.toFixed(2);else s=p.toFixed(1);
-  return Number(s)===0?'0':s;
+function escapeHtml(str){
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
 }
-function getPriceMinMove(p){
-  if(!p||p<=0)return 0.00001;if(p<0.0001)return 1e-8;if(p<0.001)return 1e-7;
-  if(p<0.01)return 1e-6;if(p<0.1)return 1e-5;if(p<1)return 1e-4;
-  if(p<10)return 0.001;if(p<1000)return 0.01;return 0.1;
+function svgPathAttr(str){
+  // SVG path data should only contain a very narrow character set.
+  return String(str).replace(/[^\d\s\.,\-MLHVCSQTAZmlhvcsqtaz]/g,'');
 }
-function formatDuration(s){s=Math.abs(s);if(s<60)return Math.round(s)+'с';if(s<3600)return Math.floor(s/60)+'м '+Math.round(s%60)+'с';if(s<86400)return Math.floor(s/3600)+'ч '+Math.floor((s%3600)/60)+'м';return Math.floor(s/86400)+'д '+Math.floor((s%86400)/3600)+'ч';}
+
 
 function copyTicker(sym){
-  // Accept short name (ETH) or full (ETHUSDT) — always copy full USDT form
-  if(!sym||sym==='—')return;
-  const full=sym.endsWith('USDT')?sym:sym+'USDT';
+  // Accept short name (ETH) or full (ETHUSDT) • always copy full USDT form
+  if(!sym||sym==='•')return;
+  const full=String(sym).endsWith('USDT')?String(sym):String(sym)+'USDT';
   navigator.clipboard.writeText(full).then(()=>{
     // Brief visual toast
     let t=document.getElementById('copyToast');
     if(!t){t=document.createElement('div');t.id='copyToast';
       t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg4);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:5px 14px;font-size:10px;z-index:9999;pointer-events:none;transition:opacity .3s';
       document.body.appendChild(t);}
-    t.textContent=`📋 ${full} скопировано`;t.style.opacity='1';
+    t.textContent=`${full} скопировано`;t.style.opacity='1';
     clearTimeout(t._to);t._to=setTimeout(()=>{t.style.opacity='0';},1200);
   }).catch(()=>{});
 }
@@ -990,6 +873,7 @@ function showConfirmModal(text,{title='Подтверждение',okText='По�
   const old=document.getElementById('csConfirmModal');if(old)old.remove();
   const ov=document.createElement('div');ov.id='csConfirmModal';
   ov.style.cssText='position:fixed;inset:0;z-index:1200;background:rgba(0,0,0,.58);display:flex;align-items:center;justify-content:center;';
+  ov.setAttribute('role','dialog');ov.setAttribute('aria-modal','true');
   const box=document.createElement('div');
   box.style.cssText='width:min(420px,92vw);background:var(--bg2);border:1px solid var(--border2);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.65);padding:12px;';
   const ttl=document.createElement('div');
@@ -1013,11 +897,12 @@ function showConfirmModal(text,{title='Подтверждение',okText='По�
   ov.appendChild(box);
   ov.addEventListener('mousedown',e=>{if(e.target===ov)ov.remove();});
   document.body.appendChild(ov);
+  ok.focus();
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  CHART GRID BUILD
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function buildChartGrid(){
   const g=document.getElementById('cgrid');g.innerHTML='';
   const n=S.gridSize;
@@ -1031,11 +916,11 @@ function buildChartGrid(){
         <div class="chead">
           <span class="chart-cg-dot cg-dot" id="cgd${i}" title="Цветовая группа" onclick="showChartGroupPicker(S.charts[${i}].sym,this)"></span>
           <img class="coin-icon" id="ci${i}" src="" alt="" style="display:none;width:14px;height:14px;border-radius:50%;flex-shrink:0">
-          <span class="csym" id="cs${i}" title="Нажмите для копирования" onclick="copyTicker(this.textContent)" style="cursor:pointer">—</span>
+          <span class="csym" id="cs${i}" title="Нажмите для копирования" onclick="copyTicker(this.textContent)" style="cursor:pointer">•</span>
           <span class="cprc" id="cp${i}"></span>
           <div class="chead-stats" id="chs${i}"></div>
           <span class="chead-gap"></span>
-          <button class="fs-open-btn" onclick="openFullscreen(${i})" title="На весь экран">⤡</button>
+          <button class="fs-open-btn" onclick="openFullscreen(${i})" title="На весь экран">⛶</button>
         </div>
         <div class="cbody" id="cb${i}">
           <div class="cph"><span class="cph-n">${i+1}</span><span style="font-size:9px;color:var(--text3)">ожидание</span></div>
@@ -1087,7 +972,7 @@ function clearChartHeadValues(slot){
   }
 }
 
-// Coin icon cache and loader — multi-CDN with fallback chain
+// Coin icon cache and loader • multi-CDN with fallback chain
 const _iconCache={};
 function setCoinIcon(elId,sym){
   const rawBase=sym.replace(/USDT$/,'').toUpperCase();
@@ -1096,7 +981,7 @@ function setCoinIcon(elId,sym){
   const el=document.getElementById(elId);if(!el)return;
   if(_iconCache[base]===false){el.style.display='none';return;}
   if(_iconCache[base]){el.src=_iconCache[base];el.style.display='';return;}
-  // CDN priority list — try each in order
+  // CDN priority list • try each in order
   const cdns=[
     `https://bin.bnbstatic.com/static/assets/logos/${base}.png`,
     `https://assets.coincap.io/assets/icons/${base.toLowerCase()}@2x.png`,
@@ -1116,9 +1001,9 @@ function setCoinIcon(elId,sym){
   tryNext();
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  CHART INIT
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function initLCChart(slot,isFs=false,fsIdx=null){
   if(!S.LC)return false;
   const ch=isFs?S.fsCharts[fsIdx]:S.charts[slot];
@@ -1142,7 +1027,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       horzLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#1c1c22',labelVisible:false}
     },
     rightPriceScale:{borderColor:'#252530',textColor:'#606070'},
-    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false},
+    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false,fixRightEdge:false},
     handleScroll:{mouseWheel:true,pressedMouseMove:true},
     handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
     localization:{priceFormatter:p=>fmtPrice(p),timeFormatter:t=>{const d=new Date(t*1000);const pad=n=>n.toString().padStart(2,'0');return`${pad(d.getUTCFullYear())}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;}},
@@ -1234,7 +1119,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(drawSym)pushDrawUndo(drawSym);
     const stroke={id:++S.drawIdCounter,type:'brush',pts:[pt],color:_brushColor,width:_brushWidth,opacity:0.85};
     ch.drawings.push(stroke);
-    _lastDrawSym=drawSym||_lastDrawSym;
+    setLastDrawSym();
     ch._brushStroke=stroke;
   });
   interact.addEventListener('mousemove',e=>{
@@ -1259,8 +1144,28 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   });
   container.appendChild(interact);ch.interact=interact;
 
+  // Container-level listeners use abortable signal (cleanup on re-init / chart rebuild)
+  const ab=new AbortController();
+  const sig=ab.signal;
+  ch._ab=ab;
+
+  interact.addEventListener('wheel',e=>{
+    if(!S.drawMode)return;
+    const{x}=getCoords(container,e.clientX,e.clientY);
+    const drawW=Math.max(1,container.clientWidth-PRICE_AXIS_W);
+    if(x>=drawW)return;
+    const chartRoot=container.firstElementChild;
+    if(!chartRoot||typeof WheelEvent==='undefined')return;
+    chartRoot.dispatchEvent(new WheelEvent('wheel',{
+      deltaY:e.deltaY,deltaX:e.deltaX,deltaZ:e.deltaZ,
+      clientX:e.clientX,clientY:e.clientY,
+      bubbles:true,cancelable:true,view:window,
+      ctrlKey:e.ctrlKey,shiftKey:e.shiftKey,altKey:e.altKey,metaKey:e.metaKey,
+    }));
+    e.preventDefault();
+  },{passive:false,signal:sig});
+
   // Container-level listeners (always active regardless of draw mode)
-  const ab=new AbortController();const sig=ab.signal;ch._ab=ab;
   // Track LMB press on the chart container to flag pan state immediately
   container.addEventListener('mousedown',e=>{
     if(e.button===0&&!S.drawMode&&!ch.draggingDraw)_onPanStart();
@@ -1295,7 +1200,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.addEventListener('contextmenu',e=>{
     if(S.drawMode)return; // already handled by interact
     e.preventDefault();
-    // Check if RMB is near ruler — if so, remove ruler
+    // Check if RMB is near ruler • if so, remove ruler
     if(ch.ruler&&ch.ruler.p1&&ch.ruler.p2){
       const{x,y}=getCoords(container,e.clientX,e.clientY);
       if(isNearRuler(ch,x,y)){
@@ -1323,7 +1228,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     }
   },{signal:sig});
 
-  // Drag drawing points — cursor mode
+  // Drag drawing points • cursor mode
   // For long/short: drag entry, TP, or SL line independently
   container.addEventListener('mousedown',e=>{
     if(e.button!==0||S.drawMode)return;
@@ -1395,7 +1300,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       const drawSym=getChartSym(ch);
       if(drawSym)pushDrawUndo(drawSym);
       ch.draggingDraw._undoPushed=true;
-      _lastDrawSym=drawSym||_lastDrawSym;
+      setLastDrawSym();
     }
     const{x,y}=getCoords(container,e.clientX,e.clientY);
     const d=ch.drawings[ch.draggingDraw.drawIdx];
@@ -1403,7 +1308,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     if(ch.draggingDraw.pointKey==='trade'){
       const{isLong}=getTradeParams(d);
       const part=ch.draggingDraw.tradePart;
-      // Horizontal drags — use raw X coordinate
+      // Horizontal drags • use raw X coordinate
       if(part==='left'||part==='right'||part==='body'){
         const timePerPx=getTimePerPx(ch);
         const dx=x-ch.draggingDraw.dragStartX;
@@ -1415,7 +1320,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
           d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt};
         } else if(part==='right'){
           d.p2={...d.p2,time:ch.draggingDraw.orig_p2_time+dt};
-        } else { // body — move whole rect horizontally
+        } else { // body • move whole rect horizontally
           d.p1={...d.p1,time:ch.draggingDraw.orig_p1_time+dt,price:ch.draggingDraw.orig_entry+dPrice};
           d.p2={...d.p2,time:ch.draggingDraw.orig_p2_time+dt};
           d.slPrice=ch.draggingDraw.orig_sl+dPrice;
@@ -1423,8 +1328,8 @@ function initLCChart(slot,isFs=false,fsIdx=null){
         }
         rCanvas(ch);return;
       }
-      // Vertical drags — use price coordinate
-      const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
+      // Vertical drags • Ctrl: OHLC/live; иначе вертикаль к свече, цена от курсора
+      const pt=e.ctrlKey?snapPoint(ch,x,y,true):snapPoint(ch,x,y,false);
       if(!pt)return;
       if(part==='entry'){
         const slDist=Math.abs(ch.draggingDraw.orig_sl-ch.draggingDraw.orig_entry);
@@ -1438,11 +1343,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
         d.tpPrice=pt.price; // TP moves independently
       }
     } else {
-      const pt=e.ctrlKey?snapPoint(ch,x,y,true):pixelToPoint(ch,x,y);
+      const pt=e.ctrlKey?snapPoint(ch,x,y,true):snapPoint(ch,x,y,false);
       if(!pt)return;
       d[ch.draggingDraw.pointKey]=pt;checkAlerts(ch,d);
     }
-    rCanvas(ch);
+    _rCanvasImmediate(ch);
   },{capture:true,signal:sig});
   container.addEventListener('mouseup',e=>{
     if(e.button!==0||!ch.draggingDraw)return;
@@ -1462,29 +1367,31 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   ro.observe(container);
   ch._ro=ro;
 
+  const onVisibleRangePan=()=>{_onPanStart();rCanvas(ch,{immediate:true});};
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
     if(range&&range.from<HIST_TRIGGER){
       if(isFs)loadMoreFsHistory(fsIdx);else loadMoreHistory(slot);
     }
-    _onPanStart();
-    rCanvas(ch);
+    onVisibleRangePan();
   });
+  try{
+    if(typeof lc.timeScale().subscribeVisibleTimeRangeChange==='function'){
+      lc.timeScale().subscribeVisibleTimeRangeChange(onVisibleRangePan);
+    }
+  }catch(e){}
 
   ch.lc=lc;ch.cs=cs;ch.vs=vs;ch.oiLine=oiLine;ch.bbUpperLine=bbUpperLine;ch.bbLowerLine=bbLowerLine;
   return true;
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  CHART LOAD
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function getSymDrawings(sym){
   if(!S.symDrawings[sym])S.symDrawings[sym]=[];
   return S.symDrawings[sym];
 }
-function cloneDrawings(drawings){
-  if(typeof structuredClone==='function')return structuredClone(drawings||[]);
-  return JSON.parse(JSON.stringify(drawings||[]));
-}
+function cloneDrawings(drawings){ return cloneDrawingsUi(drawings); }
 
 let _persistSettingsTimer=null;
 let _drawPersistTimer=null;
@@ -1525,6 +1432,8 @@ function collectUserSettings(){
     potentialPresets:Array.isArray(S.potentialPresets)?JSON.parse(JSON.stringify(S.potentialPresets)):[],
     potFilterPreset:S._potFilterPreset||null,
     draw:{brushColor:_brushColor,brushWidth:_brushWidth},
+    autoTrend:{...S.autoTrend},
+    fastMode:true,
   };
 }
 
@@ -1598,7 +1507,7 @@ function _getDrawStack(map,sym){
 function pushDrawUndo(sym){
   if(!sym)return;
   S.drawRedo={};
-  _redoSymOrder=[];
+  _redoSymOrder.splice(0,_redoSymOrder.length,...([]));
   const st=_getDrawStack(S.drawUndo,sym);
   st.push(cloneDrawings(getSymDrawings(sym)));
   if(st.length>DRAW_HISTORY_LIMIT)st.shift();
@@ -1613,7 +1522,7 @@ function undoLastDrawingAction(){
     _undoSymOrder.pop();
     _getDrawStack(S.drawRedo,sym).push(cloneDrawings(getSymDrawings(sym)));
     applySymDrawings(sym,st.pop());
-    _lastDrawSym=sym;
+    setLastDrawSym();
     _redoSymOrder.push(sym);
     return true;
   }
@@ -1627,7 +1536,7 @@ function redoLastDrawingAction(){
     _redoSymOrder.pop();
     _getDrawStack(S.drawUndo,sym).push(cloneDrawings(getSymDrawings(sym)));
     applySymDrawings(sym,rst.pop());
-    _lastDrawSym=sym;
+    setLastDrawSym();
     _undoSymOrder.push(sym);
     return true;
   }
@@ -1668,7 +1577,7 @@ async function loadChart(slot,sym){
   if(!sym){
     ch.sym=null;ch.candles=[];ch.drawings=[];ch._histBootstrapDone=false;
     setSlotLoading(slot,false);
-    setText(`cs${slot}`,'—');
+    setText(`cs${slot}`,'•');
     clearChartHeadValues(slot);
     const cb=document.getElementById(`cb${slot}`);
     if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
@@ -1695,23 +1604,29 @@ async function loadChart(slot,sym){
     ch.candles=cached.slice(-HIST_CACHE_MAX);
     paintSlotData(slot);
     refreshChartOiSeries(ch,S.tf,sym);
-    if(S.showDensity)fetchOrderBook(sym);
+    if(S.showDensity)fetchOrderBookUi(sym, densityDeps);
     return;
   }
   if(Array.isArray(cached)&&cached.length&&cached.length<MIN_CHART_CANDLES)delete S.histCache[cacheKey];
   try{
-    let raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
+    // Prefer parallel fetch of initial + next chunk so big charts fill faster.
+    const tfM=tfMs(S.tf);
+    const [raw1,raw2]=await Promise.all([
+      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`),
+      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${Date.now()-HIST_INITIAL*tfM}`)
+    ]);
     if(ch.sym!==sym)return;
-    ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+    const merged=mergeKlineChunks(parseKlines(raw1),parseKlines(raw2));
+    ch.candles=merged.slice(-HIST_CACHE_MAX);
     if(ch.candles.length<MIN_CHART_CANDLES){
-      raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
       if(ch.sym!==sym)return;
       ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
     }
     if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[cacheKey]=ch.candles.slice();
     paintSlotData(slot);
     refreshChartOiSeries(ch,S.tf,sym);
-    if(S.showDensity)fetchOrderBook(sym); // #1: pre-fetch OB for density
+    if(S.showDensity)fetchOrderBookUi(sym, densityDeps); // #1: pre-fetch OB for density
   }catch(e){
     if(cb&&ch.sym===sym)cb.innerHTML=`<div class="cph"><span style="color:var(--red);font-size:10px">Ошибка загрузки</span></div>`;
     // If network briefly drops, retry once after a short delay (prevents "dead" chart tiles).
@@ -1752,6 +1667,8 @@ function paintSlotData(slot){
     repaintBbSeries(ch);
     repaintOiSeries(ch);
     syncLivePriceLabel(ch,lp,ch.candles[ch.candles.length-1].o);
+    // Reset range guard on fresh data so applyDefaultChartView actually applies
+    ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
     applyDefaultChartView(ch);
     updateChartHeader(slot,ch.sym);
     rCanvas(ch);
@@ -1769,7 +1686,7 @@ function updateChartHeader(slot,sym){
     }else{elChg.textContent='';elChg.className='cchg';}
   }
   const elVol=document.getElementById(`chs${slot}-vol`);
-  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
+  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◼</span>${fk(t.qv)}`:'';
   const elTrd=document.getElementById(`chs${slot}-trd`);
   if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const elNatr=document.getElementById(`chs${slot}-natr`);
@@ -1779,7 +1696,7 @@ function updateChartHeader(slot,sym){
   }
   const corVal=m.corr14??m.corr;
   const elCorr=document.getElementById(`chs${slot}-corr`);
-  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∞</span>${fn(corVal,2)}`:'';
   const dot=document.getElementById(`cgd${slot}`);
   if(dot)styleGroupDot(dot,sym);
   // If stats wrap into two lines, tighten spacing to avoid clipping.
@@ -1802,7 +1719,20 @@ async function loadMoreHistory(slot){
     const raw=await fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${ch.candles[0].t-1}`);
     if(!raw||!raw.length){ch.histLoading=false;return;}
     const nc=parseKlines(raw);if(!ch.cs||!ch.lc)return;
-    const vr=ch.lc.timeScale().getVisibleRange();
+    const tsApi=ch.lc.timeScale();
+    let logRange=null,vTime=null;
+    try{
+      logRange=(typeof tsApi.getVisibleLogicalRange==='function')?tsApi.getVisibleLogicalRange():null;
+    }catch(e){}
+    try{
+      if(typeof tsApi.getVisibleRange==='function')vTime=tsApi.getVisibleRange();
+    }catch(e){}
+    let pr=null;
+    try{
+      const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
+      if(ps&&typeof ps.getVisibleRange==='function')pr=ps.getVisibleRange();
+    }catch(e){}
+    const prepended=nc.length;
     ch.candles=[...nc,...ch.candles].slice(-HIST_CACHE_MAX);
     // Keep cache bounded and avoid persisting too-short histories (causes inconsistent visible bars on next load).
     const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
@@ -1814,7 +1744,21 @@ async function loadMoreHistory(slot){
       try{
         ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-        if(vr)try{ch.lc.timeScale().setVisibleRange(vr);}catch(e){}
+        const tsScale=ch.lc.timeScale();
+        const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+        try{tsScale.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
+        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
+          try{tsScale.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+        }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{tsScale.setVisibleRange(vTime);}catch(e){}}
+        try{
+          const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
+          if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
+        }catch(e){}
+        // Reset range guard so applyDefaultChartView can run again when new data settles
+        ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
+        repaintBbSeries(ch);
+        if(S.showOiOnChart&&ch.sym)void refreshChartOiSeries(ch,S.tf,ch.sym);
+        else{ch._oiHist=alignOiToCandles(merged,ch._oiRaw||[]);repaintOiSeries(ch);}
       }catch(e){}
     };
     // Wait for pan to finish before doing expensive setData so we don't freeze a drag in progress
@@ -1827,125 +1771,72 @@ async function loadMoreHistory(slot){
   }catch(e){}finally{ch.histLoading=false;}
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  CANVAS DRAWING SYSTEM
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function getCoords(container,cx,cy){const r=container.getBoundingClientRect();return{x:cx-r.left,y:cy-r.top};}
 
-// Convert chart time → canvas X, extrapolating beyond last candle
-function timeToCoordX(ch,time){
-  if(!ch.lc)return null;
-  const ts=ch.lc.timeScale();
-  const x=ts.timeToCoordinate(time);
-  if(x!=null)return x;
-  // Extrapolate using spacing between last two candles
-  if(ch.candles.length>=2){
-    const last=ch.candles[ch.candles.length-1];
-    const prev=ch.candles[ch.candles.length-2];
-    const t2=toChartTime(last.t),t1=toChartTime(prev.t);
-    const x2=ts.timeToCoordinate(t2),x1=ts.timeToCoordinate(t1);
-    if(x2!=null&&x1!=null&&t2!==t1){
-      return x2+(time-t2)*(x2-x1)/(t2-t1);
-    }
-    // fallback: use last known x
-    if(x2!=null)return x2+50;
-  }
-  return null;
-}
+function timeToCoordX(ch,time){ return timeToCoordXUi(ch,time); }
 
-function pixelToPoint(ch,x,y){
-  if(!ch.lc||!ch.cs)return null;
-  let time=ch.lc.timeScale().coordinateToTime(x);
-  const price=ch.cs.coordinateToPrice(y);
-  if(price==null)return null;
-  // Extrapolate time if cursor is to the right of the last candle
-  if(time==null&&ch.candles.length>=2){
-    const ts=ch.lc.timeScale();
-    const last=ch.candles[ch.candles.length-1];
-    const prev=ch.candles[ch.candles.length-2];
-    const t1=toChartTime(prev.t),t2=toChartTime(last.t);
-    const x1=ts.timeToCoordinate(t1),x2=ts.timeToCoordinate(t2);
-    if(x1!=null&&x2!=null&&Math.abs(x2-x1)>0){
-      const secPerPx=(t2-t1)/(x2-x1);
-      time=Math.round(t2+(x-x2)*secPerPx);
-    }
-  }
-  if(time==null)return null;
-  return{time,price};
-}
+function pixelToPoint(ch,x,y){ return pixelToPointUi(ch,x,y); }
 
-function snapPoint(ch,x,y,ctrl){
-  const raw=pixelToPoint(ch,x,y);if(!raw)return null;
-  if(!ctrl)return raw;
-  const tMs=raw.time;let best=null,bd=Infinity;
-  for(const c of ch.candles){const d=Math.abs(toChartTime(c.t)-tMs);if(d<bd){bd=d;best=c;}}
-  if(!best)return raw;
-  const ohlc=[best.o,best.h,best.l,best.c];let sp=ohlc[0],sd=Infinity;
-  for(const p of ohlc){const d=Math.abs(p-raw.price);if(d<sd){sd=d;sp=p;}}
-  return{time:toChartTime(best.t),price:sp};
+function chartLivePriceForSnap(ch){ const __dctx = makeDrawingCtx({ tk: S.tk, fsSym: S.fsSym, fsCharts: S.fsCharts||[], tf: S.tf, lineColors: S.lineColors||{} }); return chartLivePriceForSnapUi(ch, __dctx); }
+
+function inferBarChartSec(ch){ const __dctx = makeDrawingCtx({ tk: S.tk, fsSym: S.fsSym, fsCharts: S.fsCharts||[], tf: S.tf, lineColors: S.lineColors||{} }); return inferBarChartSecUi(ch, __dctx); }
+
+function snapPoint(ch,x,y,ctrl){ const __dctx = makeDrawingCtx({ tk: S.tk, fsSym: S.fsSym, fsCharts: S.fsCharts||[], tf: S.tf, lineColors: S.lineColors||{} }); return snapPointUi(ch,x,y,ctrl,__dctx); }
+
+function _inferOhlcAnchor(candle,price){ return inferOhlcAnchorUi(candle,price); }
+
+function resolveDrawPoint(ch,pt){ return resolveDrawPointUi(ch,pt); }
+
+function _findPivots(candles,lb){ return findPivotsUi(candles,lb); }
+function _trendLineTouches(candles,i0,p0,i1,p1,touchPct,side){ return trendLineTouchesUi(candles,i0,p0,i1,p1,touchPct,side); }
+function detectAutoTrendlines(candles,opt){ return detectAutoTrendlinesUi(candles, { ...S.autoTrend, ...(opt||{}) }); }
+function applyAutoTrendlinesToChart(ch,replace=false){
+  if(!ch?.candles?.length)return 0;
+  const sym=getChartSym(ch);
+  const lines=detectAutoTrendlines(ch.candles,S.autoTrend);
+  if(!lines.length)return 0;
+  if(sym)pushDrawUndo(sym);
+  if(replace){
+    ch.drawings=ch.drawings.filter(d=>!d.autoTrend);
+  }
+  const col=S.lineColors.autotl||'#38bdf8';
+  for(const ln of lines){
+    ch.drawings.push({
+      id:++S.drawIdCounter,
+      type:'tline',
+      p1:ln.p1,
+      p2:ln.p2,
+      color:col,
+      autoTrend:true,
+      trendSide:ln.side,
+    });
+  }
+  if(sym)schedulePersistDrawings(sym);
+  rCanvas(ch,{immediate:true});
+  return lines.length;
+}
+function runAutoTrendlinesOnVisibleCharts(){
+  let n=0;
+  const targets=S.fsOpen?[...S.fsCharts.filter(c=>c.lc&&c.candles?.length),...S.charts.filter(c=>c.sym&&c.candles?.length)]
+    :S.charts.filter(c=>c.sym&&c.candles?.length);
+  for(const ch of targets){
+    n+=applyAutoTrendlinesToChart(ch,true);
+  }
+  return n;
+}
+function setAutoTrendSetting(key,val){
+  if(!S.autoTrend)S.autoTrend={};
+  S.autoTrend[key]=val;
+  schedulePersistUserSettings();
 }
 
 // Distance from point to drawing (screen pixels)
-function drawingDist(ch,d,px,py){
-  if(!ch.cs||!ch.lc)return Infinity;
-  if(d.type==='hray'||d.type==='aray'){
-    const y=ch.cs.priceToCoordinate(d.p1.price);
-    if(y===null)return Infinity;
-    const x0=timeToCoordX(ch,d.p1.time)??0;
-    if(px<x0-4)return Infinity;
-    return Math.abs(py-y);
-  }
-  if(d.type==='tline'||d.type==='atline'){
-    const x1=timeToCoordX(ch,d.p1.time);
-    const y1=ch.cs.priceToCoordinate(d.p1.price);
-    const x2=timeToCoordX(ch,d.p2.time);
-    const y2=ch.cs.priceToCoordinate(d.p2.price);
-    if(x1===null||y1===null||x2===null||y2===null)return Infinity;
-    const dx=x2-x1,dy=y2-y1,len2=dx*dx+dy*dy;
-    if(len2===0)return Math.hypot(px-x1,py-y1);
-    const t=Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/len2));
-    return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
-  }
-  if(d.type==='brush'){
-    // Check distance to any segment of the stroke
-    if(!d.pts||d.pts.length<2)return Infinity;
-    let best=Infinity;
-    for(let i=1;i<d.pts.length;i++){
-      const ax=timeToCoordX(ch,d.pts[i-1].time),ay=ch.cs.priceToCoordinate(d.pts[i-1].price);
-      const bx=timeToCoordX(ch,d.pts[i].time),by=ch.cs.priceToCoordinate(d.pts[i].price);
-      if(ax==null||ay==null||bx==null||by==null)continue;
-      const dx=bx-ax,dy=by-ay,len2=dx*dx+dy*dy;
-      let dist;
-      if(len2===0){dist=Math.hypot(px-ax,py-ay);}
-      else{const t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/len2));dist=Math.hypot(px-(ax+t*dx),py-(ay+t*dy));}
-      if(dist<best)best=dist;
-    }
-    return best;
-  }
-  if(d.type==='long'||d.type==='short'){
-    if(!d.p1||!d.p2||!ch.cs||!ch.lc)return Infinity;
-    const{entryPrice,tpPrice,slPrice}=getTradeParams(d);
-    const lrx1=timeToCoordX(ch,d.p1.time),lrx2=timeToCoordX(ch,d.p2.time);
-    if(lrx1==null||lrx2==null)return Infinity;
-    const yE=ch.cs.priceToCoordinate(entryPrice);
-    const yT=ch.cs.priceToCoordinate(tpPrice);
-    const yS=ch.cs.priceToCoordinate(slPrice);
-    if(yE==null||yT==null||yS==null)return Infinity;
-    const lx=Math.min(lrx1,lrx2),rx=Math.max(lrx1,lrx2);
-    if(px<lx-8||px>rx+8)return Infinity;
-    return Math.min(Math.abs(py-yE),Math.abs(py-yT),Math.abs(py-yS));
-  }
-  return Infinity;
-}
+function drawingDist(ch,d,px,py){ return drawingDistUi(ch,d,px,py); }
 
-function findDrawingNear(ch,px,py){
-  let bestIdx=-1,bestDist=DRAW_HIT;
-  for(let i=0;i<ch.drawings.length;i++){
-    const d=drawingDist(ch,ch.drawings[i],px,py);
-    if(d<bestDist){bestDist=d;bestIdx=i;}
-  }
-  return bestIdx;
-}
+function findDrawingNear(ch,px,py){ return findDrawingNearUi(ch,px,py,window.__drawHit||DRAW_HIT); }
 
 function isNearRuler(ch,px,py){
   const r=ch.ruler;if(!r?.p1||!r?.p2||!ch.cs||!ch.lc)return false;
@@ -1965,95 +1856,34 @@ function removeDrawingAtCursor(ch){
     const drawSym=getChartSym(ch);
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.splice(idx,1);ch.hoveredIdx=-1;
-    _lastDrawSym=drawSym||_lastDrawSym;
+    setLastDrawSym();
     rCanvas(ch);
     if(drawSym)schedulePersistDrawings(drawSym);
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  DENSITY (ORDER BOOK CLUSTERS) — Fix #1: uses real depth API
-// ═══════════════════════════════════════════════════════════════
-const OB_CACHE={}; // sym → {bids:[[price,usdVal],...], asks:[[...]], ts}
-const OB_TTL=45000; // refresh every 45s
-const _densityFirstSeen=new Map(); // key: "sym:tier:bucket" -> first seen chart time (sec)
-
-async function fetchOrderBook(sym){
-  try{
-    const data=await fj(`${API}/depth?symbol=${sym}&limit=1000`,10000);
-    // Convert to [price, USDT value] — Fix #1: in dollars, not coin qty
-    const toUsd=levels=>levels.map(([p,q])=>[+p,+p*+q]);
-    OB_CACHE[sym]={bids:toUsd(data.bids),asks:toUsd(data.asks),ts:Date.now()};
-    _densityCache.delete(sym); // invalidate density cache
-    if(S.showDensity)[...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
-  }catch(e){console.warn('OB fetch',sym,e);}
-}
-
-function getOrFetchOB(sym){
-  const cached=OB_CACHE[sym];
-  if(!cached||Date.now()-cached.ts>OB_TTL)fetchOrderBook(sym); // background refresh
-  return cached||null;
-}
-
-function computeDensities(ch){
-  const sym=ch.sym||S.fsSym;if(!sym)return[];
-  const ob=getOrFetchOB(sym);if(!ob)return[];
-  const all=[...ob.bids,...ob.asks].sort((a,b)=>a[0]-b[0]);
-  if(all.length<5)return[];
-  let pMin=Infinity,pMax=-Infinity;
-  if(ch.candles.length>0){
-    const cp=ch.candles[ch.candles.length-1].c;
-    pMin=cp*0.7;pMax=cp*1.3; // ±30% from current price — narrower, more relevant
-  }else{all.forEach(([p])=>{pMin=Math.min(pMin,p);pMax=Math.max(pMax,p);});}
-  const relevant=all.filter(([p])=>p>=pMin&&p<=pMax);
-  if(relevant.length<3)return[];
-  // Cluster: 0.3% width — slightly larger clusters = fewer, more meaningful
-  const CLUSTER_PCT=0.003;
-  const clusters=[];let cur=null;
-  for(const[price,usdVal]of relevant){
-    if(!cur||price>cur.centerPrice*(1+CLUSTER_PCT)){
-      if(cur)clusters.push(cur);
-      cur={centerPrice:price,totalUsd:usdVal,count:1};
-    }else{
-      cur.totalUsd+=usdVal;cur.count++;
-      cur.centerPrice=(cur.centerPrice*(cur.count-1)+price)/cur.count;
-    }
-  }
-  if(cur)clusters.push(cur);
-  if(!clusters.length)return[];
-  const vols=clusters.map(c=>c.totalUsd).sort((a,b)=>a-b);
-  const mean=vols.reduce((s,v)=>s+v,0)/vols.length;
-  const std=Math.sqrt(vols.reduce((s,v)=>s+(v-mean)**2,0)/vols.length);
-  // Use persisted settings if available
-  const ds=getDensitySettings(sym);
-  const largeMult=ds.largeMult,medMult=ds.medMult,smallMult=ds.smallMult;
-  const seenAt=ch.candles.length?toChartTime(ch.candles[ch.candles.length-1].t):(Math.floor(Date.now()/1000)+TZ_OFFSET_S);
-  const baseStep=Math.max(1e-8,(ch.candles[ch.candles.length-1]?.c||1)*0.0015); // 0.15% bucket
-  const activeKeys=new Set();
-  // Only show top-tier clusters to avoid noise
-  const zones=clusters
-    .filter(c=>c.totalUsd>=mean+std*smallMult)
-    .map(c=>({
-      _bucket:Math.round(c.centerPrice/baseStep),
-      price:c.centerPrice,
-      vol:c.totalUsd,
-      tier:c.totalUsd>=mean+std*largeMult?'large':c.totalUsd>=mean+std*medMult?'medium':'small',
-    }));
-  for(const z of zones){
-    const key=`${sym}:${z.tier}:${z._bucket}`;
-    activeKeys.add(key);
-    if(!_densityFirstSeen.has(key))_densityFirstSeen.set(key,seenAt);
-    z.time=_densityFirstSeen.get(key);
-  }
-  // Trim stale keys for this symbol so map does not grow forever.
-  for(const k of _densityFirstSeen.keys()){
-    if(k.startsWith(sym+':')&&!activeKeys.has(k))_densityFirstSeen.delete(k);
-  }
-  return zones;
-}
-
+// ───────────────────────────────────────────────────────────────
+//  DENSITY (ORDER BOOK CLUSTERS) • Fix #1: uses real depth API
+// ───────────────────────────────────────────────────────────────
+// _obCache, _obQueue, _obPending, _densityFirstSeen and the order-book
+// cache live as state fields on S (initialised lazily by the density
+// module). _densityCache is the in-render cache.
+// NB: must be declared BEFORE densityDeps, because the object literal
+// below reads it at module-evaluation time (TDZ otherwise).
 const _densityCache=new Map(); // sym → {ts, zones}
-const _DENSITY_CACHE_TTL=30000; // recompute every 30s max
+
+// Shared deps for density module (order-book fetch + cache).
+const densityDeps = {
+  S,
+  API,
+  fetchJSON: fj,
+  fmtPrice,
+  fk,
+  rCanvas,
+  timeToCoordX,
+  densityCache: _densityCache,
+  consoleWarn: (...args) => console.warn(...args),
+};
 
 function drawSessionZones(ctx,ch,W,H){
   if(!S.sessionFx?.enabled||!ch?.lc)return;
@@ -2104,41 +1934,10 @@ function drawSessionZones(ctx,ch,W,H){
 }
 
 function drawDensities(ctx,ch,W,H){
-  if(!ch.cs||!ch.lc)return;
-  const sym=ch.sym||S.fsSym;if(!sym)return;
-  // Use cached zones if fresh
-  const now=Date.now();
-  const cached=_densityCache.get(sym);
-  let zones;
-  if(cached&&now-cached.ts<_DENSITY_CACHE_TTL){zones=cached.zones;}
-  else{zones=computeDensities(ch);_densityCache.set(sym,{ts:now,zones});}
-  if(!zones.length)return;
-  ctx.save();
-  for(const z of zones){
-    const y=ch.cs.priceToCoordinate(z.price);if(y===null||y<0||y>H-TIME_AXIS_H)continue;
-    const x0=Math.max(0,timeToCoordX(ch,z.time)??0);
-    let col,alpha;
-    if(z.tier==='large'){col='#e04040';alpha=0.75;}
-    else if(z.tier==='medium'){col='#e8a020';alpha=0.55;}
-    else{col='#606080';alpha=0.35;}
-    ctx.beginPath();ctx.strokeStyle=col;ctx.globalAlpha=alpha;
-    ctx.lineWidth=z.tier==='large'?1.8:z.tier==='medium'?1.3:0.9;
-    ctx.setLineDash(z.tier==='small'?[3,4]:[]);
-    ctx.moveTo(x0,y);ctx.lineTo(W,y);ctx.stroke();
-    ctx.setLineDash([]);ctx.globalAlpha=1;
-    ctx.fillStyle=col;ctx.globalAlpha=alpha+0.2;
-    ctx.font=`${z.tier==='large'?9:8}px JetBrains Mono,monospace`;
-    ctx.textAlign='right';
-    // Fix #1: show in USDT (fk already formats)
-    ctx.fillText(`${fmtPrice(z.price)}  ${fk(z.vol)}$`,W-3,y-(z.tier==='large'?4:3));
-    ctx.textAlign='left';ctx.globalAlpha=1;
-    ctx.beginPath();ctx.fillStyle=col;ctx.globalAlpha=alpha+0.1;
-    ctx.arc(x0,y,z.tier==='large'?3.5:2.5,0,Math.PI*2);ctx.fill();ctx.globalAlpha=1;
-  }
-  ctx.restore();
+  drawZonesUi(ctx,ch,W,H,densityDeps);
 }
 
-// Track Ctrl key globally — Fix #5
+// Track Ctrl key globally • Fix #5
 let _ctrlHeld=false;
 document.addEventListener('keydown',e=>{if(e.key==='Control'||e.key==='Meta')_ctrlHeld=true;});
 document.addEventListener('keyup',e=>{if(e.key==='Control'||e.key==='Meta')_ctrlHeld=false;});
@@ -2147,10 +1946,15 @@ document.addEventListener('keyup',e=>{if(e.key==='Control'||e.key==='Meta')_ctrl
 const PRICE_AXIS_W=65;
 const TIME_AXIS_H=22;
 
-// ── Render canvas ──────────────────────────────────────────────
+// ”Ђ”Ђ Render canvas ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 // Per-chart RAF guard: only one pending rCanvas per chart at a time
-function rCanvas(ch){
-  if(ch._rCanvasRaf)return; // already scheduled
+function rCanvas(ch,opts){
+  if(_anyChartPanning||opts?.immediate){
+    ch._rCanvasRaf=false;
+    _rCanvasImmediate(ch);
+    return;
+  }
+  if(ch._rCanvasRaf)return;
   ch._rCanvasRaf=true;
   requestAnimationFrame(()=>{
     ch._rCanvasRaf=false;
@@ -2158,7 +1962,64 @@ function rCanvas(ch){
   });
 }
 
+function _rCanvasGridLabImmediate(ch){
+  const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs)return;
+  const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  const drawW=Math.max(1,W-PRICE_AXIS_W);
+  const drawH=Math.max(1,H-TIME_AXIS_H);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
+  if(ch.ruler)drawRuler(ctx,ch);
+  let dragPr=null,dgKind=null;
+  try{
+    const modal=document.getElementById('gridLabModal');
+    const body=modal?.querySelector('#gridLabBody');
+    const gctx=body?._gbChartCtx;
+    const dg=gctx?._gbDrag;
+    if(dg&&(dg.kind==='high'||dg.kind==='low')&&dg.previewPrice!=null&&isFinite(+dg.previewPrice)){
+      dragPr=+dg.previewPrice;
+      dgKind=dg.kind;
+    }
+  }catch(e){}
+  if(dragPr!=null){
+    const yy=ch.cs.priceToCoordinate(dragPr);
+    if(yy!=null&&!isNaN(yy)){
+      ctx.save();
+      ctx.strokeStyle=dgKind==='high'?'rgba(239,68,68,.78)':'rgba(52,211,153,.75)';
+      ctx.lineWidth=1.5;
+      ctx.setLineDash([5,5]);
+      ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(drawW,yy);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+  let anchPr=null;
+  try{
+    const modal=document.getElementById('gridLabModal');
+    const bod=modal?.querySelector('#gridLabBody');
+    const ap=bod?._gbChartCtx?._gbAnchorPreviewPrice;
+    if(ap!=null&&isFinite(+ap))anchPr=+ap;
+  }catch(e){}
+  if(anchPr!=null){
+    const yyA=ch.cs.priceToCoordinate(anchPr);
+    if(yyA!=null&&!isNaN(yyA)){
+      ctx.save();
+      ctx.strokeStyle='rgba(245,158,11,.88)';
+      ctx.lineWidth=2;
+      ctx.setLineDash([4,3]);
+      ctx.beginPath();ctx.moveTo(0,yyA);ctx.lineTo(drawW,yyA);ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+  if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
+    drawCustomCrosshair(ctx,ch,drawW,H);
+  }
+}
+
 function _rCanvasImmediate(ch){
+  if(ch._gridLabChart)return _rCanvasGridLabImmediate(ch);
   const canvas=ch.canvas;if(!canvas||!ch.lc||!ch.cs||!ch.vs)return;
   ch._emaHoverZones=[];
   const ctx=canvas.getContext('2d');const W=canvas.width,H=canvas.height;
@@ -2208,23 +2069,20 @@ function _rCanvasImmediate(ch){
   drawEMAs(ctx,ch,drawW,drawH);
   if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
-  // Custom crosshair: always visible when cursor is on chart
-  // In cursor mode: free (no snap). In draw mode or Ctrl: snap to candle OHLC
+  // Custom crosshair: всегда при X к свече; без Ctrl • Y свободно; с Ctrl • Y к O/H/L/C или к цене.
   if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
     drawCustomCrosshair(ctx,ch,drawW,H);
   }
 }
 
-// Custom crosshair drawn on canvas
-// - Cursor mode, no Ctrl: free (grey, no snap)
-// - Ctrl held or draw mode: snap to candle OHLC (blue dot)
+// Custom crosshair: без Ctrl • вертикаль к свече, горизонталь свободна; с Ctrl • + магнит по цене к OHLC/текущей.
 function drawCustomCrosshair(ctx,ch,W,H){
   const x=ch.hoverX,y=ch.hoverY;
-  const shouldSnap=_ctrlHeld;
-  const snapped=shouldSnap?snapPoint(ch,x,y,true):null;
-  const dx=snapped?(timeToCoordX(ch,snapped.time)??x):x;
-  const dy=snapped?(ch.cs.priceToCoordinate(snapped.price)??y):y;
-  const col=snapped?'#3b82f6aa':'#60607088';
+  const ptV=snapPoint(ch,x,y,false);
+  const dx=ptV?(timeToCoordX(ch,ptV.time)??x):x;
+  const ptH=_ctrlHeld?snapPoint(ch,x,y,true):null;
+  const dy=ptH?(ch.cs.priceToCoordinate(ptH.price)??y):y;
+  const col='#60607088';
   ctx.save();
   ctx.setLineDash([3,3]);
   ctx.strokeStyle=col;
@@ -2233,18 +2091,15 @@ function drawCustomCrosshair(ctx,ch,W,H){
   ctx.beginPath();ctx.moveTo(dx,0);ctx.lineTo(dx,H);ctx.stroke();
   ctx.setLineDash([]);
   // Price label
-  const price=snapped?snapped.price:ch.cs?.coordinateToPrice(y);
+  const price=ptH?ptH.price:ch.cs?.coordinateToPrice(y);
   if(price!=null){
     const label=fmtPrice(price);
     ctx.font='9px JetBrains Mono,monospace';
     const tw=ctx.measureText(label).width+8;
-    ctx.fillStyle=snapped?'#3b82f6':'#252530';
+    ctx.fillStyle='#252530';
     ctx.fillRect(W-tw-2,dy-9,tw+2,14);
-    ctx.fillStyle=snapped?'#fff':'#80809a';
+    ctx.fillStyle='#80809a';
     ctx.textAlign='right';ctx.fillText(label,W-4,dy+1);ctx.textAlign='left';
-  }
-  if(snapped){
-    ctx.beginPath();ctx.fillStyle='#3b82f6';ctx.arc(dx,dy,4,0,Math.PI*2);ctx.fill();
   }
   // Time label on X axis
   if(ch.lc){
@@ -2261,7 +2116,7 @@ function drawCustomCrosshair(ctx,ch,W,H){
       // time is in "local chart seconds" (UTC + TZ_OFFSET_S). Convert to real UTC ms for Date constructor.
       const d=new Date((time-TZ_OFFSET_S)*1000);
       const pad=n=>n.toString().padStart(2,'0');
-      // Use LOCAL timezone methods (getDate/getHours) — browser converts automatically
+      // Use LOCAL timezone methods (getDate/getHours) • browser converts automatically
       const tStr=`${pad(d.getDate())}.${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       let volStr='';
       const tMs=(time-TZ_OFFSET_S)*1000;
@@ -2271,11 +2126,11 @@ function drawCustomCrosshair(ctx,ch,W,H){
       ctx.save();ctx.font='9px JetBrains Mono,monospace';
       const tw=Math.max(ctx.measureText(tStr).width,volStr?ctx.measureText(volStr).width:0)+8;
       const lx=Math.min(Math.max(dx-tw/2,0),W-tw);
-      ctx.fillStyle=snapped?'#3b82f6':'#1c1c28';
+      ctx.fillStyle='#1c1c28';
       const lblH=volStr?24:14;
       const y0=H-lblH;
       ctx.fillRect(lx,y0,tw,lblH);
-      ctx.fillStyle=snapped?'#fff':'#80809a';
+      ctx.fillStyle='#80809a';
       ctx.textAlign='left';
       ctx.fillText(tStr,lx+4,y0+10);
       if(volStr)ctx.fillText(volStr,lx+4,y0+20);
@@ -2285,15 +2140,10 @@ function drawCustomCrosshair(ctx,ch,W,H){
   ctx.restore();
 }
 
-function drawingLineColor(d){
-  if(d?.color&&typeof d.color==='string'&&d.color.startsWith('#'))return d.color;
-  const k=d.type==='hray'?'hray':d.type==='tline'?'tline':d.type==='aray'?'aray':d.type==='atline'?'atline':null;
-  if(k){const c=lineColorForType(k);if(c)return c;}
-  return'#888888';
-}
+function drawingLineColor(d){ const __dctx = makeDrawingCtx({ tk: S.tk, fsSym: S.fsSym, fsCharts: S.fsCharts||[], tf: S.tf, lineColors: S.lineColors||{} }); return drawingLineColorUi(d, __dctx); }
 
 function emaHoverTip(period){
-  return`EMA ${period} — экспоненциальная скользящая средняя по ${period} закрытиям свечи. Сглаживает ценовой шум и показывает локальный тренд; расхождение и пересечение нескольких EMA помогают оценить силу движения.`;
+  return`EMA ${period} • экспоненциальная скользящая средняя по ${period} закрытиям свечи. Сглаживает ценовой шум и показывает локальный тренд; расхождение и пересечение нескольких EMA помогают оценить силу движения.`;
 }
 
 function hideChartIndTooltip(){
@@ -2325,8 +2175,9 @@ function updateChartIndTooltip(ch,clientX,clientY,container){
 }
 
 function drawHRay(ctx,ch,d,W,hov){
-  const y=ch.cs.priceToCoordinate(d.p1.price);if(y===null)return;
-  const x0=timeToCoordX(ch,d.p1.time)??0;
+  const p1=resolveDrawPoint(ch,d.p1);
+  const y=ch.cs.priceToCoordinate(p1.price);if(y===null)return;
+  const x0=timeToCoordX(ch,p1.time)??0;
   const col=drawingLineColor(d);
   // Clamp x0 so ray always starts left-of or at current position, draws rightward
   const xs=Math.max(0,x0);
@@ -2335,16 +2186,17 @@ function drawHRay(ctx,ch,d,W,hov){
   ctx.beginPath();ctx.strokeStyle=col;ctx.lineWidth=hov?2:1;
   ctx.moveTo(xs,y);ctx.lineTo(W,y);ctx.stroke();
   ctx.fillStyle=col;ctx.font='9px JetBrains Mono,monospace';ctx.textAlign='right';
-  ctx.fillText(fmtPrice(d.p1.price),W-3,y-3);ctx.textAlign='left';
+  ctx.fillText(fmtPrice(p1.price),W-3,y-3);ctx.textAlign='left';
   ctx.beginPath();ctx.arc(xs,y,3,0,Math.PI*2);ctx.fill();
   ctx.restore();
 }
 
 function drawTLine(ctx,ch,d,hov){
-  const x1=timeToCoordX(ch,d.p1.time);
-  const y1=ch.cs.priceToCoordinate(d.p1.price);
-  const x2=timeToCoordX(ch,d.p2.time);
-  const y2=ch.cs.priceToCoordinate(d.p2.price);
+  const p1=resolveDrawPoint(ch,d.p1),p2=resolveDrawPoint(ch,d.p2);
+  const x1=timeToCoordX(ch,p1.time);
+  const y1=ch.cs.priceToCoordinate(p1.price);
+  const x2=timeToCoordX(ch,p2.time);
+  const y2=ch.cs.priceToCoordinate(p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
   const col=drawingLineColor(d);
   ctx.save();
@@ -2376,10 +2228,11 @@ function drawRuler(ctx,ch){
   ctx.restore();
 }
 
-// ── Alert Ray ─────────────────────────────────────────────────
+// ”Ђ”Ђ Alert Ray ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function drawAlertRay(ctx,ch,d,W,hov){
-  const y=ch.cs.priceToCoordinate(d.p1.price);if(y===null)return;
-  const x0=timeToCoordX(ch,d.p1.time)??0;
+  const p1=resolveDrawPoint(ch,d.p1);
+  const y=ch.cs.priceToCoordinate(p1.price);if(y===null)return;
+  const x0=timeToCoordX(ch,p1.time)??0;
   const xs=Math.max(0,x0);
   const col=drawingLineColor(d);
   ctx.save();
@@ -2401,10 +2254,11 @@ function drawAlertRay(ctx,ch,d,W,hov){
 }
 
 function drawAlertTLine(ctx,ch,d,hov){
-  const x1=timeToCoordX(ch,d.p1.time);
-  const y1=ch.cs.priceToCoordinate(d.p1.price);
-  const x2=timeToCoordX(ch,d.p2.time);
-  const y2=ch.cs.priceToCoordinate(d.p2.price);
+  const p1=resolveDrawPoint(ch,d.p1),p2=resolveDrawPoint(ch,d.p2);
+  const x1=timeToCoordX(ch,p1.time);
+  const y1=ch.cs.priceToCoordinate(p1.price);
+  const x2=timeToCoordX(ch,p2.time);
+  const y2=ch.cs.priceToCoordinate(p2.price);
   if(x1===null||y1===null||x2===null||y2===null)return;
   const col=drawingLineColor(d);
   ctx.save();
@@ -2413,10 +2267,10 @@ function drawAlertTLine(ctx,ch,d,hov){
   if(d.alertPct!=null&&d.alertPct>0){
     const factor=d.alertPct/100;
     // Upper band points (prices * (1+factor))
-    const y1u=ch.cs.priceToCoordinate(d.p1.price*(1+factor));
-    const y2u=ch.cs.priceToCoordinate(d.p2.price*(1+factor));
-    const y1l=ch.cs.priceToCoordinate(d.p1.price*(1-factor));
-    const y2l=ch.cs.priceToCoordinate(d.p2.price*(1-factor));
+    const y1u=ch.cs.priceToCoordinate(p1.price*(1+factor));
+    const y2u=ch.cs.priceToCoordinate(p2.price*(1+factor));
+    const y1l=ch.cs.priceToCoordinate(p1.price*(1-factor));
+    const y2l=ch.cs.priceToCoordinate(p2.price*(1-factor));
     if(y1u!=null&&y2u!=null&&y1l!=null&&y2l!=null){
       // Filled polygon
       ctx.beginPath();
@@ -2443,7 +2297,7 @@ function drawAlertTLine(ctx,ch,d,hov){
   ctx.restore();
 }
 
-// ── Brush stroke ──────────────────────────────────────────────
+// ”Ђ”Ђ Brush stroke ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function drawBrushStroke(ctx,ch,d,hov){
   if(!d.pts||d.pts.length<2)return;
   if(!ch.cs||!ch.lc)return;
@@ -2470,19 +2324,9 @@ function drawBrushStroke(ctx,ch,d,hov){
 let _brushColor='#f97316';
 let _brushWidth=2;
 
-// ── Trade helpers ──────────────────────────────────────────────
+// ”Ђ”Ђ Trade helpers ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 // Returns entry/tp/sl as absolute prices (migrates old rr-based format)
-function getTradeParams(d){
-  const isLong=d.type==='long';
-  const entryPrice=d.p1.price;
-  if(d.slPrice==null){
-    const slDist=Math.abs(entryPrice-(d.p2?.price??entryPrice));
-    const rr=d.rr??2;
-    d.slPrice=isLong?entryPrice-slDist:entryPrice+slDist;
-    d.tpPrice=isLong?entryPrice+slDist*rr:entryPrice-slDist*rr;
-  }
-  return{isLong,entryPrice,tpPrice:d.tpPrice,slPrice:d.slPrice};
-}
+function getTradeParams(d){ return getTradeParamsUi(d); }
 // Seconds per canvas pixel (for horizontal time drag)
 function getTimePerPx(ch){
   if(!ch.lc||ch.candles.length<2)return 60;
@@ -2495,7 +2339,7 @@ function getTimePerPx(ch){
   return(t2-t1)/(x2-x1);
 }
 
-// ── Trade Rectangle (Long / Short simulation) ──────────────────
+// ”Ђ”Ђ Trade Rectangle (Long / Short simulation) ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function drawTradeRect(ctx,ch,d,hov,preview=false){
   if(!d.p1||!d.p2||!ch.cs||!ch.lc)return;
   const{isLong,entryPrice,tpPrice,slPrice}=getTradeParams(d);
@@ -2539,8 +2383,12 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
 
   // Labels
   ctx.font='bold 9px JetBrains Mono,monospace';
-  const pctTp=((tpPrice-entryPrice)/entryPrice*100);
-  const pctSl=((slPrice-entryPrice)/entryPrice*100);
+  const pctTp=isLong
+    ?((tpPrice-entryPrice)/entryPrice*100)
+    :((entryPrice-tpPrice)/entryPrice*100);
+  const pctSl=isLong
+    ?((slPrice-entryPrice)/entryPrice*100)
+    :((entryPrice-slPrice)/entryPrice*100);
   ctx.fillStyle=tpCol;ctx.globalAlpha=0.9;ctx.textAlign='left';
   ctx.fillText(`TP ${fmtPrice(tpPrice)} (${pctTp>=0?'+':''}${pctTp.toFixed(2)}%)`,rx+4,yTp+3);
   ctx.fillStyle=slCol;
@@ -2548,11 +2396,11 @@ function drawTradeRect(ctx,ch,d,hov,preview=false){
   ctx.fillStyle='#ffffff88';ctx.font='9px JetBrains Mono,monospace';
   ctx.fillText(`Вход ${fmtPrice(entryPrice)} · R:R ${rr.toFixed(1)}:1`,lx+3,yEntry-4);
   ctx.fillStyle=dirCol;ctx.font='bold 10px JetBrains Mono,monospace';ctx.textAlign='center';
-  ctx.fillText(isLong?'▲ ЛОНГ':'▼ ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
+  ctx.fillText(isLong?'–І ЛОНГ':'–ј ШОРТ',(lx+rx)/2,(yTp+yEntry)/2+3);
   ctx.globalAlpha=1;ctx.restore();
 }
 
-// ── EMA overlay ────────────────────────────────────────────────
+// ”Ђ”Ђ EMA overlay ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 // EMA settings per chart (shared via S.emaSettings)
 const EMA_DEFAULTS=[
   {period:9, color:'#f97316',visible:true},
@@ -2568,7 +2416,7 @@ function calcEMA(candles,period){
   let ema=candles.slice(0,period).reduce((s,c)=>s+c.c,0)/period;
   for(let i=period;i<candles.length;i++){
     ema=candles[i].c*k+ema*(1-k);
-    result.push({t:candles[i].t,v:ema});
+    result.push({t:candles[i].t,val:ema});
   }
   return result;
 }
@@ -2580,6 +2428,7 @@ function calcEMACached(candles,period){
   // Include candle identity to avoid cache collisions between different symbols/TFs.
   const first=candles[0],last=candles[candles.length-1];
   const key=[
+    'e2',
     period,
     candles.length,
     first.t,first.c,
@@ -2623,9 +2472,9 @@ function drawEMAs(ctx,ch,W,H){
     let lastPy=null;
     for(let i=startVal;i<=endVal;i++){
       if(i<0||i>=vals.length)continue;
-      const{t,v}=vals[i];
+      const{t,val:emaVal}=vals[i];
       const px=timeToCoordX(ch,toChartTime(t));
-      const py=ch.cs.priceToCoordinate(v);
+      const py=ch.cs.priceToCoordinate(emaVal);
       if(px==null||py==null){started=false;continue;}
       if(px<-W||px>W*2){started=false;continue;}
       if(!started){ctx.moveTo(px,py);started=true;}
@@ -2646,7 +2495,7 @@ function drawEMAs(ctx,ch,W,H){
   ctx.globalAlpha=1;ctx.restore();
 }
 
-// ── EMA Crossover alerts ────────────────────────────────────────
+// ”Ђ”Ђ EMA Crossover alerts ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 // Check last 2 EMA values: if they cross, fire alert
 let _emaCrossAlerted={}; // key="sym_aXb" → last alert ts
 function checkEMACrossovers(ch){
@@ -2669,8 +2518,8 @@ function checkEMACrossovers(ch){
       const va=calcEMACached(ch.candles,a.period);
       const vb=calcEMACached(ch.candles,b.period);
       if(va.length<2||vb.length<2)continue;
-      const a1=va[va.length-1].v,a2=va[va.length-2].v;
-      const b1=vb[vb.length-1].v,b2=vb[vb.length-2].v;
+      const a1=va[va.length-1].val,a2=va[va.length-2].val;
+      const b1=vb[vb.length-1].val,b2=vb[vb.length-2].val;
       const waAbove=a2>b2,isAbove=a1>b1;
       if(waAbove===isAbove)continue; // no cross
       const key=`${sym}_${tf}_${a.period}x${b.period}`;
@@ -2682,7 +2531,7 @@ function checkEMACrossovers(ch){
       if(S.emaCrossSound)playAlert(isAbove?880:440);
       S.alertLog.unshift({ts:now,sym,curPrice:a1,linePrice:b1,distPct:0,
         type:'ema_cross',alertPct:0,
-        presetName:`[${tf}] EMA${a.period} ${dir} EMA${b.period} — ${label}`});
+        presetName:`[${tf}] EMA${a.period} ${dir} EMA${b.period} • ${label}`});
       if(S.alertLog.length>50)S.alertLog.pop();
       renderAlertLog();
       const badge=document.getElementById('alertBadge');
@@ -2691,7 +2540,7 @@ function checkEMACrossovers(ch){
   }
 }
 
-// ── Alert Sound ────────────────────────────────────────────────
+// ”Ђ”Ђ Alert Sound ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 let _alertCtx=null;
 function playAlert(freq=880){
   try{
@@ -2828,10 +2677,18 @@ function showAlertPctInput(ch,drawing,container){
   setTimeout(()=>document.addEventListener('mousedown',function h(e){if(!wrap.contains(e.target)){confirm();document.removeEventListener('mousedown',h);}},true),100);
 }
 
-// ── Interact events ────────────────────────────────────────────
+// ”Ђ”Ђ Interact events ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
 function onInteractMove(ch,e,container){
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   ch.hoverX=x;ch.hoverY=y;
+  // Mirror container-level hover detection in draw mode so alert rays highlight correctly.
+  if(!ch.draggingDraw){
+    const now=performance.now();
+    if(now-(ch._lastHoverCheckTs||0)>32){
+      ch.hoveredIdx=findDrawingNear(ch,x,y);
+      ch._lastHoverCheckTs=now;
+    }
+  }
   rCanvas(ch);
 }
 
@@ -2853,7 +2710,7 @@ function onInteractClick(ch,e,container){
   if(S.drawMode==='hray'){
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push({id:++S.drawIdCounter,type:'hray',p1:pt,color:S.lineColors.hray});
-    _lastDrawSym=drawSym||_lastDrawSym;
+    setLastDrawSym();
     if(drawSym)schedulePersistDrawings(drawSym);
     rCanvas(ch);
     setDrawMode(null);
@@ -2862,7 +2719,7 @@ function onInteractClick(ch,e,container){
     else{
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push({id:++S.drawIdCounter,type:'tline',p1:ch.pendingP1,p2:pt,color:S.lineColors.tline});
-      _lastDrawSym=drawSym||_lastDrawSym;
+      setLastDrawSym();
       if(drawSym)schedulePersistDrawings(drawSym);
       ch.pendingP1=null;rCanvas(ch);
       setDrawMode(null);
@@ -2871,7 +2728,7 @@ function onInteractClick(ch,e,container){
     const d={id:++S.drawIdCounter,type:'aray',p1:pt,alertPct:null,_lastAlert:0,color:S.lineColors.aray};
     if(drawSym)pushDrawUndo(drawSym);
     ch.drawings.push(d);rCanvas(ch);
-    _lastDrawSym=drawSym||_lastDrawSym;
+    setLastDrawSym();
     if(drawSym)schedulePersistDrawings(drawSym);
     showAlertPctInput(ch,d,container);
     setDrawMode(null);
@@ -2881,7 +2738,7 @@ function onInteractClick(ch,e,container){
       const d={id:++S.drawIdCounter,type:'atline',p1:ch.pendingP1,p2:pt,alertPct:null,_lastAlert:0,color:S.lineColors.atline};
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
-      _lastDrawSym=drawSym||_lastDrawSym;
+      setLastDrawSym();
       if(drawSym)schedulePersistDrawings(drawSym);
       showAlertPctInput(ch,d,container);
       setDrawMode(null);
@@ -2898,7 +2755,7 @@ function onInteractClick(ch,e,container){
       const d={id:++S.drawIdCounter,type:S.drawMode,p1:ch.pendingP1,p2:pt,slPrice,tpPrice};
       if(drawSym)pushDrawUndo(drawSym);
       ch.drawings.push(d);ch.pendingP1=null;rCanvas(ch);
-      _lastDrawSym=drawSym||_lastDrawSym;
+      setLastDrawSym();
       if(drawSym)schedulePersistDrawings(drawSym);
       setDrawMode(null);
     }
@@ -2935,162 +2792,42 @@ function setDrawMode(mode){
   });
 }
 
-function refreshEMAButtonState(){
-  const hasSymEnabled=S.fsSym?!!S.emaSymEnabled[S.fsSym]:false;
-  const active=S.emaVisible||hasSymEnabled;
-  const btn=document.getElementById('emaBtn');if(btn)btn.classList.toggle('on',active);
-  const fsBtn=document.getElementById('fsEmaBtn');if(fsBtn)fsBtn.classList.toggle('on',active);
-}
+function refreshEMAButtonState(){ refreshEmaButtonStateUi({ S }); }
 
 function toggleEMA(){
-  S.emaVisible=!S.emaVisible;
-  refreshEMAButtonState();
-  _emaCache.clear();
-  [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
+  toggleEmaUi({ S, clearEmaCache: () => _emaCache.clear(), rCanvas });
 }
 
 function openEMAEditor(mode='auto'){
-  const old=document.getElementById('emaEditorModal');if(old)old.remove();
-  const modal=document.createElement('div');modal.id='emaEditorModal';
-  modal.style.cssText='position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.65);display:flex;align-items:center;justify-content:center;';
-  const box=document.createElement('div');
-  box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:300px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 32px rgba(0,0,0,.8)';
-
-  const EMA_COLORS=['#f97316','#3b82f6','#a855f7','#e04040','#1fa891','#eab308','#ec4899','#22c55e'];
-  let _editSym=(mode==='symbol'&&S.fsSym)?S.fsSym:null; // null=global, string=per-symbol
-
-  const render=()=>{
-    const activeSym=_editSym||(S.fsSym||S.charts.find(c=>c.sym)?.sym||null);
-    const targetSymEnabled=activeSym?!!S.emaSymEnabled[activeSym]:false;
-    box.innerHTML=`
-      <div style="display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">EMA линии и алерты</span>
-        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('emaEditorModal').remove()">✕</button>
-      </div>
-      <div id="emaList" style="flex:1;overflow-y:auto;padding:8px 14px;display:flex;flex-direction:column;gap:6px;min-height:0"></div>
-      <div style="padding:6px 14px;border-top:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <label style="font-size:9px;color:var(--text3)">Показывать EMA:</label>
-        <button id="emaGlobalBtn" class="tbtn${S.emaVisible?' on':''}" title="Показывать EMA на всех монетах">Все</button>
-        <button id="emaSymOnlyBtn" class="tbtn${targetSymEnabled?' on':''}" title="Показывать EMA только для выбранной монеты">Текущая монета</button>
-        <label style="font-size:9px;color:var(--text3)">Звук при пересечении:</label>
-        <button id="emaSoundBtn" class="tbtn${S.emaCrossSound?' on':''}">${S.emaCrossSound?'● Вкл':'○ Выкл'}</button>
-        <span style="flex:1"></span>
-        <label style="font-size:9px;color:var(--text3)" title="Задать отдельные EMA для текущей монеты">Режим:</label>
-        <button id="emaSymBtn" class="tbtn${_editSym?' on':''}">${_editSym?'📌 '+_editSym.replace(/USDT$/,''):'🌍 Глобал'}</button>
-      </div>
-      <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
-        <div style="font-size:9px;color:var(--text3)">Алерты пересечения EMA (добавляются в Алерты с ТФ):</div>
-        <div id="emaPairsList" style="display:flex;flex-wrap:wrap;gap:6px"></div>
-      </div>
-      <div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:6px;flex-shrink:0">
-        <button class="tbtn" style="flex:1" id="addEmaBtn">＋ Добавить EMA</button>
-        <button class="tbtn on" style="flex:1" onclick="document.getElementById('emaEditorModal').remove();refreshEMAButtonState()">✓ Готово</button>
-      </div>`;
-
-    const list=box.querySelector('#emaList');
-    if(_editSym&&!S.emaSymOverrides[_editSym])S.emaSymOverrides[_editSym]=[...S.emaSettings.map(c=>({...c}))];
-    const _activeSettings=_editSym?S.emaSymOverrides[_editSym]:S.emaSettings;
-    _activeSettings.forEach((cfg,i)=>{
-      const row=document.createElement('div');
-      row.style.cssText='display:flex;align-items:center;gap:6px;background:var(--bg3);border-radius:4px;padding:5px 8px;';
-      // Color picker dots
-      const colorPicker=document.createElement('div');colorPicker.style.cssText='display:flex;gap:3px;flex-wrap:wrap;';
-      EMA_COLORS.forEach(col=>{
-        const dot=document.createElement('div');
-        dot.style.cssText=`width:10px;height:10px;border-radius:50%;background:${col};cursor:pointer;border:2px solid ${cfg.color===col?'#fff':'transparent'};transition:transform .1s`;
-        dot.onmouseenter=()=>dot.style.transform='scale(1.3)';
-        dot.onmouseleave=()=>dot.style.transform='scale(1)';
-        dot.onclick=()=>{cfg.color=col;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
-        colorPicker.appendChild(dot);
-      });
-      row.appendChild(colorPicker);
-      // Period input
-      const pInp=document.createElement('input');
-      pInp.type='number';pInp.min='2';pInp.max='500';pInp.value=cfg.period;
-      pInp.style.cssText='width:50px;background:var(--bg4);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 4px;text-align:center';
-      pInp.onchange=()=>{const v=parseInt(pInp.value);if(v>=2){cfg.period=v;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));}};
-      row.appendChild(pInp);
-      // Visible toggle
-      const visBtn=document.createElement('button');
-      visBtn.style.cssText=`background:${cfg.visible?cfg.color+'22':'transparent'};border:1px solid ${cfg.visible?cfg.color:'var(--border2)'};border-radius:3px;color:${cfg.visible?cfg.color:'var(--text3)'};font:inherit;font-size:9px;padding:2px 5px;cursor:pointer`;
-      visBtn.textContent=cfg.visible?'Вкл':'Выкл';
-      visBtn.onclick=()=>{cfg.visible=!cfg.visible;_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
-      row.appendChild(visBtn);
-      // Delete
-      const delBtn=document.createElement('button');
-      delBtn.style.cssText='background:none;border:none;color:var(--text3);cursor:pointer;font-size:14px;padding:0 2px;margin-left:auto';
-      delBtn.textContent='✕';delBtn.title='Удалить';
-      delBtn.onclick=()=>{_activeSettings.splice(i,1);_emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
-      row.appendChild(delBtn);
-      list.appendChild(row);
-    });
-
-    if(!_activeSettings.length){
-      list.innerHTML='<div style="font-size:9px;color:var(--text3);text-align:center;padding:12px">Нет EMA линий. Нажми ＋ чтобы добавить.</div>';
-    }
-    const pairsEl=box.querySelector('#emaPairsList');
-    const visiblePeriods=[...new Set(_activeSettings.filter(c=>c.visible).map(c=>c.period))].sort((a,b)=>a-b);
-    if(visiblePeriods.length<2){
-      pairsEl.innerHTML='<span style="font-size:9px;color:var(--text3)">Нужно минимум 2 активные EMA линии</span>';
-    }else{
-      pairsEl.innerHTML='';
-      for(let i=0;i<visiblePeriods.length;i++){
-        for(let j=i+1;j<visiblePeriods.length;j++){
-          const a=visiblePeriods[i],b=visiblePeriods[j];
-          let pair=S.emaAlertPairs.find(p=>p.a===a&&p.b===b);
-          if(!pair){pair={a,b,enabled:false};S.emaAlertPairs.push(pair);}
-          const pbtn=document.createElement('button');
-          pbtn.className='tbtn'+(pair.enabled?' on':'');
-          pbtn.textContent=`EMA${a}×EMA${b}`;
-          pbtn.onclick=()=>{pair.enabled=!pair.enabled;render();};
-          pairsEl.appendChild(pbtn);
-        }
-      }
-    }
-
-    box.querySelector('#addEmaBtn').onclick=()=>{
-      const used=_activeSettings.map(c=>c.color);
-      const col=EMA_COLORS.find(c=>!used.includes(c))||'#f97316';
-      _activeSettings.push({period:9,color:col,visible:true});
-      _emaCache.clear();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();
-    };
-    // Fix: bind closures via addEventListener (inline onclick can't access local `render` / `_editSym`)
-    const soundBtn=box.querySelector('#emaSoundBtn');
-    if(soundBtn)soundBtn.onclick=()=>{S.emaCrossSound=!S.emaCrossSound;render();};
-    const gBtn=box.querySelector('#emaGlobalBtn');
-    if(gBtn)gBtn.onclick=()=>{S.emaVisible=!S.emaVisible;refreshEMAButtonState();[...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));render();};
-    const symOnlyBtn=box.querySelector('#emaSymOnlyBtn');
-    if(symOnlyBtn)symOnlyBtn.onclick=()=>{
-      const sym=activeSym;
-      if(!sym)return;
-      S.emaSymEnabled[sym]=!S.emaSymEnabled[sym];
-      refreshEMAButtonState();
-      [...S.charts,...S.fsCharts].forEach(c=>rCanvas(c));
-      render();
-    };
-    const symBtn=box.querySelector('#emaSymBtn');
-    if(symBtn)symBtn.onclick=()=>{
-      _editSym=_editSym?null:activeSym;
-      render();
-    };
-  };
-  render();
-  modal.appendChild(box);document.body.appendChild(modal);
-  modal.addEventListener('mousedown',e=>{if(e.target===modal)modal.remove();});
+  openEmaEditorModal(mode, {
+    S,
+    rCanvas,
+    clearEmaCache: () => _emaCache.clear(),
+    schedulePersistUserSettings,
+  });
 }
-
 window.openEMAEditor=openEMAEditor;
 
-// ── Ruler ──────────────────────────────────────────────────────
+// ”Ђ”Ђ Ruler ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ”Ђ
+function clearAllRulers(){
+  const tt=document.getElementById('rulerTooltip');
+  if(tt)tt.style.display='none';
+  for(const ch of [...S.charts,...S.fsCharts]){
+    if(ch?.ruler)ch.ruler=null;
+  }
+}
+
 function onRulerStart(ch,e,container){
   if(!ch.lc||!ch.cs)return;
   const{x,y}=getCoords(container,e.clientX,e.clientY);
   const pt=snapPoint(ch,x,y,e.ctrlKey)||pixelToPoint(ch,x,y);if(!pt)return;
-  // Clear rulers on charts from opposite context
-  [...S.charts,...S.fsCharts].forEach((c,i)=>{if(c!==ch&&c.ruler){c.ruler=null;rCanvas(c);}});
+  // Clear rulers on charts from opposite context (не трогаем основные графики из Grid Lab)
+  if(!ch._gridLabChart){
+    [...S.charts,...S.fsCharts].forEach((c)=>{if(c!==ch&&c.ruler){c.ruler=null;rCanvas(c);}});
+  }
   ch.ruler={active:true,p1:pt,p2:pt,mouseX:e.clientX,mouseY:e.clientY};
-  ch._rulerIsFsChart=S.fsCharts.includes(ch);
-  rCanvas(ch);
+  ch._rulerIsFsChart=!ch._gridLabChart&&S.fsCharts.includes(ch);
+  _rCanvasImmediate(ch);
 }
 function onRulerMove(ch,e,container){
   if(!ch.ruler?.active)return;
@@ -3103,10 +2840,27 @@ function onRulerMove(ch,e,container){
       if(fc===ch)return;
       if(!fc.lc||!fc.cs)return;
       fc.ruler={active:true,p1:{...ch.ruler.p1},p2:{...ch.ruler.p2},mouseX:e.clientX,mouseY:e.clientY,_mirror:true};
-      requestAnimationFrame(()=>rCanvas(fc));
+      scheduleRulerRedraw(fc);
     });
   }
-  requestAnimationFrame(()=>{_rCanvasImmediate(ch);updateRulerTooltip(ch);});
+  scheduleRulerRedraw(ch);
+  // Tooltip (NATR/vol/trades) is heavier • throttle independently
+  const now=performance.now();
+  if(!ch._lastRulerTipTs||now-ch._lastRulerTipTs>50){
+    ch._lastRulerTipTs=now;
+    updateRulerTooltip(ch);
+  }
+}
+
+// rAF-throttled ruler redraw • caps redraws at the browser's frame rate even
+// when the mouse fires at 120Hz+. Each chart redraws at most once per frame.
+function scheduleRulerRedraw(ch){
+  if(ch._rulerRafPending)return;
+  ch._rulerRafPending=true;
+  requestAnimationFrame(()=>{
+    ch._rulerRafPending=false;
+    _rCanvasImmediate(ch);
+  });
 }
 function onRulerEnd(ch){
   if(!ch.ruler)return;
@@ -3115,77 +2869,122 @@ function onRulerEnd(ch){
     S.fsCharts.forEach(fc=>{
       if(fc===ch||!fc.ruler)return;
       fc.ruler.active=false;
-      rCanvas(fc);
+      _rCanvasImmediate(fc);
     });
   }
   updateRulerTooltip(ch);
 }
 
+// Cached ruler-tooltip DOM nodes. The old version called
+// getElementById 9× per mousemove which forces style/layout invalidation
+// and is a big chunk of why the tooltip felt slow on the mini-charts.
+let _rtNodes=null;
+function _rtDom(){
+  if(_rtNodes)return _rtNodes;
+  _rtNodes={
+    tt:document.getElementById('rulerTooltip'),
+    pct:document.getElementById('rtPct'),
+    bars:document.getElementById('rtBars'),
+    time:document.getElementById('rtTime'),
+    vol:document.getElementById('rtVol'),
+    vr:document.getElementById('rtVr'),
+    tr:document.getElementById('rtTr'),
+    natr:document.getElementById('rtNatr'),
+  };
+  return _rtNodes;
+}
+// Binary search for first candle index with t >= target. Candles are
+// sorted by time, so this turns the old O(n) findIndex into O(log n).
+function _lowerBound(arr,t,lo,hi){
+  while(lo<hi){const mid=(lo+hi)>>>1;if(arr[mid].t<t)lo=mid+1;else hi=mid;}
+  return lo;
+}
+
 function updateRulerTooltip(ch){
-  const tt=document.getElementById('rulerTooltip');
-  if(!ch.ruler?.p1||!ch.ruler?.p2){tt.style.display='none';return;}
+  const d=_rtDom();
+  if(!d.tt||!ch.ruler?.p1||!ch.ruler?.p2){if(d.tt)d.tt.style.display='none';return;}
   const r=ch.ruler;
   const pct=(r.p2.price-r.p1.price)/r.p1.price*100;
   const isUp=pct>=0;const col=isUp?'#1fa891':'#e04040';
-  const tMin=(Math.min(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000,tMax=(Math.max(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000;
+  const tMin=(Math.min(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000;
+  const tMax=(Math.max(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000;
+  // Binary search the start index instead of scanning the whole candle
+  // array — O(log n) instead of O(n) on every mouse move.
+  const cnd=ch.candles;
+  const n=cnd.length;
   let bars=0,vol=0,sumTr=0;
-  const rangeCl=[];
-  for(const c of ch.candles)if(c.t>=tMin&&c.t<=tMax){bars++;vol+=c.qv;sumTr+=c.tr||0;rangeCl.push(c);}
+  let startIdx=_lowerBound(cnd,tMin,0,n);
+  let endIdx=_lowerBound(cnd,tMax+1,startIdx,n);
+  const rangeLen=endIdx-startIdx;
+  for(let i=startIdx;i<endIdx;i++){vol+=cnd[i].qv;sumTr+=cnd[i].tr||0;}
+  bars=rangeLen;
 
-  // NATR of the range
-  let natrTxt='—';
-  if(rangeCl.length>=2){
-    const natr=calcNATR(rangeCl,rangeCl.length-1);
-    if(natr!=null)natrTxt=fn(natr,2)+'%';
+  // NATR of the range. Inline to avoid slicing `cnd` on every mousemove
+  // (slice would allocate a new array and the existing calcNATR expects
+  // a full candle array, not a sub-range). With a sub-range we need the
+  // ATR over just [startIdx..endIdx).
+  let natrTxt='•';
+  if(rangeLen>=2){
+    let atrSum=0;
+    for(let i=startIdx+1;i<endIdx;i++){
+      const k=cnd[i],p=cnd[i-1];
+      atrSum+=Math.max(k.h-k.l,Math.abs(k.h-p.c),Math.abs(k.l-p.c));
+    }
+    const natr=atrSum/(rangeLen-1);
+    const lastClose=cnd[endIdx-1].c;
+    if(lastClose>0)natrTxt=fn(natr/lastClose*100,2)+'%';
   }
 
   // Volume spike: avg vol of range candles vs avg of preceding N candles
-  let vrTxt='—', trTxt='—';
-  if(rangeCl.length>0&&ch.candles.length>bars){
-    const idx0=ch.candles.findIndex(c=>c.t===rangeCl[0].t);
-    if(idx0>0){
-      const preN=Math.min(idx0,bars*3,50);
-      const pre=ch.candles.slice(Math.max(0,idx0-preN),idx0);
-      if(pre.length>0){
-        const avgVol=pre.reduce((s,c)=>s+c.qv,0)/pre.length;
-        const avgTr=pre.reduce((s,c)=>s+(c.tr||0),0)/pre.length;
-        const rangeAvgVol=vol/rangeCl.length;
-        const rangeAvgTr=sumTr/rangeCl.length;
-        if(avgVol>0)vrTxt=fn(rangeAvgVol/avgVol,2)+'×';
-        if(avgTr>0)trTxt=fn(rangeAvgTr/avgTr,2)+'×';
-      }
-    }
+  let vrTxt='•', trTxt='•';
+  if(rangeLen>0&&startIdx>0){
+    const preN=Math.min(startIdx,bars*3,50);
+    let avgVol=0,avgTr=0;
+    for(let i=startIdx-preN;i<startIdx;i++){avgVol+=cnd[i].qv;avgTr+=cnd[i].tr||0;}
+    avgVol/=preN;avgTr/=preN;
+    if(avgVol>0)vrTxt=fn((vol/rangeLen)/avgVol,2)+'×';
+    if(avgTr>0)trTxt=fn((sumTr/rangeLen)/avgTr,2)+'×';
   }
 
-  setText('rtPct',(isUp?'+':'')+pct.toFixed(3)+'%');
-  document.getElementById('rtPct').style.color=col;
-  setText('rtBars',`Баров: ${bars}`);
-  setText('rtTime',`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`);
-  setText('rtVol',`Объём: ${fk(vol)} USDT`);
-  // Candle-based change: open of first candle → close of last candle in range
-  let cndPctTxt='—';
-  if(rangeCl.length>=1){
-    const openPrice=rangeCl[0].o;
-    const closePrice=rangeCl[rangeCl.length-1].c;
+  // All DOM writes batched below — no getElementById in the hot path.
+  const pctTxt=(isUp?'+':'')+pct.toFixed(3)+'%';
+  if(d.pct.textContent!==pctTxt)d.pct.textContent=pctTxt;
+  if(d.pct.style.color!==col)d.pct.style.color=col;
+  const barsTxt=`Баров: ${bars}`;
+  if(d.bars.textContent!==barsTxt)d.bars.textContent=barsTxt;
+  const timeTxt=`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`;
+  if(d.time.textContent!==timeTxt)d.time.textContent=timeTxt;
+  const volTxt=`Объём: ${fk(vol)} USDT`;
+  if(d.vol.textContent!==volTxt)d.vol.textContent=volTxt;
+  if(rangeLen>=1){
+    const openPrice=cnd[startIdx].o;
+    const closePrice=cnd[endIdx-1].c;
     const cndPct=(closePrice-openPrice)/openPrice*100;
     const cndCol=cndPct>=0?'#1fa891':'#e04040';
-    setText('rtNatr',`Свечи: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`);
-    document.getElementById('rtNatr').style.color=cndCol;
+    const natrTxt2=`Свечи: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`;
+    if(d.natr.textContent!==natrTxt2)d.natr.textContent=natrTxt2;
+    if(d.natr.style.color!==cndCol)d.natr.style.color=cndCol;
   } else {
-    setText('rtNatr','Свечи: —');
-    document.getElementById('rtNatr').style.color='';
+    if(d.natr.textContent!=='Свечи: •')d.natr.textContent='Свечи: •';
+    if(d.natr.style.color!=='')d.natr.style.color='';
   }
-  setText('rtVr',`NATR: ${natrTxt}`);
-  setText('rtTr',`ОБ*: ${vrTxt}  СД*: ${trTxt}`);
+  const vrTxt2=`NATR: ${natrTxt}`;
+  if(d.vr.textContent!==vrTxt2)d.vr.textContent=vrTxt2;
+  const trTxt2=`ОБ*: ${vrTxt}  СД*: ${trTxt}`;
+  if(d.tr.textContent!==trTxt2)d.tr.textContent=trTxt2;
+  // Position via transform: translate3d — keeps the tooltip on its own
+  // composited layer (CSS already has will-change:transform) and skips
+  // layout entirely. The old style.left/top forced a layout pass per move.
   const tw=175,th=120;
-  tt.style.left=Math.min(r.mouseX+18,window.innerWidth-tw-8)+'px';
-  tt.style.top=Math.max(r.mouseY-th-8,4)+'px';
-  tt.style.display='block';
+  const x=Math.min(r.mouseX+18,window.innerWidth-tw-8);
+  const y=Math.max(r.mouseY-th-8,4);
+  d.tt.style.transform=`translate3d(${x}px, ${y}px, 0)`;
+  d.tt.style.display='block';
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  БЫСТРЫЙ ПОИСК МОНЕТЫ (печать с клавиатуры)
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function ensureQuickFindUI(){
   if(document.getElementById('quickFindModal'))return;
   const d=document.createElement('div');
@@ -3194,15 +2993,28 @@ function ensureQuickFindUI(){
   d.innerHTML=`<div style="background:#111113;border:1px solid #252530;border-radius:8px;width:min(440px,94vw);box-shadow:0 12px 40px #000;">
   <div style="padding:10px 12px;border-bottom:1px solid #252530;font-size:11px;color:#80808f">Переход к монете</div>
   <div style="padding:10px 12px">
-    <input id="qfInput" type="text" autocomplete="off" spellcheck="false" placeholder="Начните вводить тикер…"
+    <input id="qfInput" type="text" autocomplete="off" spellcheck="false" placeholder="Начните вводить тикервЂ¦"
       style="width:100%;box-sizing:border-box;background:#161619;border:1px solid #252530;border-radius:4px;padding:8px 10px;color:#e2e8f0;font:inherit;font-size:12px;outline:none">
     <div id="qfList" style="max-height:240px;overflow:auto;margin-top:8px;font-size:11px"></div>
-    <div style="font-size:9px;color:#454555;margin-top:8px">Enter — выбрать первую · Esc — закрыть</div>
+    <div style="font-size:9px;color:#454555;margin-top:8px">Enter • выбрать первую · Esc • закрыть</div>
   </div></div>`;
   document.body.appendChild(d);
   d.addEventListener('mousedown',ev=>{if(ev.target===d)closeQuickFind();});
   const inp=document.getElementById('qfInput');
-  inp.addEventListener('input',renderQuickFindList);
+  inp.addEventListener('input',()=>{
+    // Mirror the top search behaviour: if the user typed a Cyrillic char
+    // on a Russian layout, remap it to the matching English key before
+    // we filter. This lets people type tickers (BTC, ETH, ...) without
+    // having to switch keyboard layout first.
+    const raw=inp.value;
+    const mapped=mapRuKeyboardToEn(raw);
+    if(mapped!==raw){
+      const pos=inp.selectionStart;
+      inp.value=mapped;
+      try{inp.setSelectionRange(pos,pos);}catch(e){}
+    }
+    renderQuickFindList();
+  });
   inp.addEventListener('keydown',ev=>{
     if(ev.key==='Enter'){
       const first=document.querySelector('#qfList .qf-item');
@@ -3214,10 +3026,31 @@ function openQuickFind(seed){
   ensureQuickFindUI();
   const m=document.getElementById('quickFindModal');
   const inp=document.getElementById('qfInput');
-  inp.value=seed!=null&&seed!==''?String(seed).slice(0,24):'';
+  // Map RU→EN layout so users typing on a Russian keyboard get the
+  // English ticker they actually wanted (same logic as the top search).
+  const mapped=mapRuKeyboardToEn(seed!=null&&seed!==''?String(seed):'').slice(0,24);
+  inp.value=mapped;
   renderQuickFindList();
   m.style.display='flex';
-  inp.focus();inp.select();
+  // Place the caret at the END so the next keystroke appends. Chromium
+  // tends to select-all on focus() of a freshly-rendered input, so we
+  // blur+focus to force a "fresh" focus state, then deselect. We do this
+  // both synchronously and after a frame, because the modal is still
+  // settling its layout when the sync block runs.
+  try{ inp.blur(); }catch(e){}
+  try{ inp.focus({preventScroll:true}); }catch(e){ try{inp.focus();}catch(_){} }
+  const placeCaret=()=>{
+    try{
+      if(document.activeElement!==inp){
+        try{inp.focus({preventScroll:true});}catch(_){inp.focus();}
+      }
+      const len=inp.value.length;
+      inp.setSelectionRange(len,len);
+    }catch(e){}
+  };
+  placeCaret();
+  requestAnimationFrame(placeCaret);
+  setTimeout(placeCaret,0);
 }
 function closeQuickFind(){
   const m=document.getElementById('quickFindModal');
@@ -3244,23 +3077,44 @@ function renderQuickFindList(){
 }
 function jumpToSymbol(sym,{openFs=false}={}){
   if(!sym)return;
+  // Try to find the symbol in the filtered/sorted list first (so the screener
+  // can land on the right page). If filters (volume/trades/group/preset) hide
+  // the symbol, fall back to opening it directly without touching the screener •
+  // the user explicitly chose it from the quick-find popup.
   const rows=sortedRows();
   let idx=rows.findIndex(r=>r.sym===sym);
   if(idx<0){
-    if(S.syms.includes(sym)){
-      S.q=sym.replace(/USDT$/i,'');
-      S.page=0;
-      closeQuickFind();
-      updateCharts();renderTable();
-      if(openFs)openFullscreenBySym(sym);
-      return;
+    // Look up the symbol in the raw screener so we can still navigate to its page
+    const raw=(S.mx[sym])?[S.mx[sym]]:S.syms.filter(s=>s===sym).map(s=>({sym:s}));
+    if(raw.length){
+      const allSyms=Object.values(S.mx);
+      if(allSyms.length){
+        // Recompute the row set with the SAME sort but WITHOUT filters/group/preset
+        // so we get the symbol's position under the active sort.
+        const sorted=[...allSyms];
+        const sortId=S.sortId,sortDir=S.sortDir,sortAlpha=S.sortAlpha,sortAbs=S.sortAbs;
+        sorted.sort((a,b)=>{
+          if(sortAlpha)return sortDir==='asc'?a.sym.localeCompare(b.sym):b.sym.localeCompare(a.sym);
+          const sortKey=sortId==='spv'?'spVol':sortId;
+          let va=a[sortKey],vb=b[sortKey];
+          if(sortAbs&&(sortId==='ch24'||sortId==='ch7d'||sortId==='cday'||sortId==='sp5'||sortId==='spv'||sortId==='oi1h'||sortId==='oi4h')){
+            va=va!=null&&!isNaN(va)?Math.abs(va):va;vb=vb!=null&&!isNaN(vb)?Math.abs(vb):vb;
+          }
+          if(va==null||isNaN(va))return 1;if(vb==null||isNaN(vb))return-1;
+          return sortDir==='desc'?vb-va:va-vb;
+        });
+        idx=sorted.findIndex(r=>r.sym===sym);
+      }
     }
-    closeQuickFind();
-    return;
   }
-  S.page=Math.floor(idx/S.charts.length);
+  if(idx>=0)S.page=Math.floor(idx/S.charts.length);
   closeQuickFind();
-  updateCharts();renderTable();
+  if(idx>=0){
+    updateCharts();renderTable();
+  }else{
+    // Symbol not in screener at all • still honour the openFs request
+    renderTable();
+  }
   if(openFs)openFullscreenBySym(sym);
 }
 
@@ -3296,13 +3150,20 @@ document.addEventListener('keydown',e=>{
     return;
   }
   if(mod&&!e.altKey&&(isZ||isY)&&!editable)return;
-  if(!qfOpen&&!editable&&!S.drawMode&&!mod&&!e.altKey&&e.key.length===1&&/[a-z0-9]/i.test(e.key)){
-    const rulerOn=[...S.charts,...S.fsCharts].some(c=>c.ruler?.active);
-    const blocks=document.getElementById('settingsModal')?.classList.contains('open')||!!document.getElementById('emaEditorModal')||!!document.getElementById('alertPctOverlay');
-    if(!blocks&&!rulerOn){
-      openQuickFind(e.key);
-      e.preventDefault();
-      return;
+  if(!qfOpen&&!editable&&!S.drawMode&&!mod&&!e.altKey&&e.key.length===1){
+    // Open quickfind if either the raw key or its RU→EN mapping is a
+    // Latin alphanum. This way typing on a Russian keyboard (where the
+    // first char might be Cyrillic, e.g. "й" instead of "q") still
+    // opens the panel and remaps to "q" downstream.
+    const mapped=mapRuKeyboardToEn(e.key);
+    if(/[a-z0-9]/i.test(mapped)){
+      const rulerOn=[...S.charts,...S.fsCharts].some(c=>c.ruler?.active);
+      const blocks=document.getElementById('settingsModal')?.classList.contains('open')||!!document.getElementById('emaEditorModal')||!!document.getElementById('alertPctOverlay');
+      if(!blocks&&!rulerOn){
+        openQuickFind(e.key);
+        e.preventDefault();
+        return;
+      }
     }
   }
   if(e.key==='Escape'){
@@ -3346,28 +3207,24 @@ async function backfillChartGap(ch,sym,tf,limit=500){
   ch.candles=[...byT.values()].sort((a,b)=>a.t-b.t).slice(-HIST_CACHE_MAX);
 }
 async function backfillVisibleCharts(limit=900){
-  const tasks=[];
   for(const ch of S.charts){
     if(!ch.sym||!ch.cs||!ch.candles.length)continue;
-    tasks.push((async()=>{
-      try{
-        await backfillChartGap(ch,ch.sym,S.tf,limit);
-        if(ch.cs&&ch.lc)repaintChartSeries(ch,`${S.tf}:${ch.sym}`);
-      }catch(e){}
-    })());
+    try{
+      await backfillChartGap(ch,ch.sym,S.tf,limit);
+      if(ch.cs&&ch.lc)repaintChartSeries(ch,`${S.tf}:${ch.sym}`);
+      else if(ch.canvas)_rCanvasImmediate(ch);
+    }catch(e){}
   }
   if(S.fsOpen&&S.fsSym){
-    for(const fch of S.fsCharts){
-      if(!fch.cs||!fch.candles.length)continue;
-      tasks.push((async()=>{
-        try{
-          await backfillChartGap(fch,S.fsSym,fch.tf,limit);
-          if(fch.cs&&fch.lc)repaintChartSeries(fch,`${fch.tf}:${S.fsSym}`);
-        }catch(e){}
-      })());
-    }
+    const fsTasks=S.fsCharts.map(async fch=>{
+      if(!fch.cs||!fch.candles.length)return;
+      try{
+        await backfillChartGap(fch,S.fsSym,fch.tf,limit);
+        if(fch.cs&&fch.lc)repaintChartSeries(fch,`${fch.tf}:${S.fsSym}`);
+      }catch(e){}
+    });
+    await Promise.all(fsTasks);
   }
-  await Promise.all(tasks);
 }
 function closeAllRealtimeSockets(){
   if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
@@ -3379,23 +3236,58 @@ async function handleResumeRecovery(reason='resume'){
   const now=Date.now();
   if(now-_resumeRecoveryAt<3000)return;
   _resumeRecoveryAt=now;
+  const idleMs=_lastHiddenAt>0?now-_lastHiddenAt:0;
   console.log(`Resume recovery: ${reason}`);
   closeAllRealtimeSockets();
   updateHeaderStreamStatus();
-  await backfillVisibleCharts(1000);
+  if(idleMs>120000){
+    for(const ch of S.charts){
+      if(ch.sym)delete S.histCache[`${S.tf}:${ch.sym}`];
+    }
+  }
+  await backfillVisibleCharts(idleMs>60000?1400:1000);
+  try{
+    calcAll();
+    if(!document.hidden)renderTable();
+  }catch(e){}
   try{await refreshMetricKlinesSlice();}catch(e){}
+  for(const ch of S.charts){
+    if(ch.lc&&ch.cs)try{_rCanvasImmediate(ch);}catch(e){}
+  }
   setTimeout(()=>{
     restartChartStreams(0);
     startScreenerWS();
     updateHeaderStreamStatus();
-  },450);
+    if(!document.hidden)renderTable();
+  },idleMs>60000?200:450);
 }
 function repaintChartSeries(ch,cacheKey=''){
   if(!ch?.cs||!ch?.vs||!ch?.candles?.length)return;
   ch._histBootstrapDone=ch.candles.length>=MIN_CHART_CANDLES;
+  let logRange=null,vTime=null,pRange=null;
+  if(ch._histBootstrapDone&&ch.lc){
+    try{logRange=(typeof ch.lc.timeScale().getVisibleLogicalRange==='function')?ch.lc.timeScale().getVisibleLogicalRange():null;}catch(e){}
+    try{if(typeof ch.lc.timeScale().getVisibleRange==='function')vTime=ch.lc.timeScale().getVisibleRange();}catch(e){}
+    try{
+      const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
+      if(ps&&typeof ps.getVisibleRange==='function')pRange=ps.getVisibleRange();
+    }catch(e){}
+  }
   ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+  const roR=Math.max(0,Math.min(36,S.chartRightOffset|0));
+  try{ch.lc.timeScale().applyOptions({rightOffset:roR,fixRightEdge:false});}catch(e){}
+  if(vTime&&vTime.from!=null&&vTime.to!=null){
+    try{ch.lc.timeScale().setVisibleRange(vTime);}catch(e){}
+  }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
+    try{if(typeof ch.lc.timeScale().setVisibleLogicalRange==='function')ch.lc.timeScale().setVisibleLogicalRange(logRange);}catch(e){}
+  }
+  try{
+    const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
+    if(pRange&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pRange);
+  }catch(e){}
   repaintBbSeries(ch);
+  ch._oiHist=alignOiToCandles(ch.candles,ch._oiRaw||[]);
   repaintOiSeries(ch);
   const lc=ch.candles[ch.candles.length-1];
   if(lc)syncLivePriceLabel(ch,lc.c,lc.o);
@@ -3406,7 +3298,7 @@ function repaintChartSeries(ch,cacheKey=''){
 document.addEventListener('visibilitychange',()=>{
   if(document.hidden){_lastHiddenAt=Date.now();updateHeaderStreamStatus();return;}
   const hiddenMs=Date.now()-_lastHiddenAt;
-  if(hiddenMs<2000)return; // ignore ultra-short switches
+  if(hiddenMs<400)return;
   handleResumeRecovery(`visibility ${Math.round(hiddenMs/1000)}s`);
 });
 
@@ -3415,9 +3307,9 @@ window.addEventListener('online',()=>{
   handleResumeRecovery('network-online');
 });
 
-// ═══════════════════════════════════════════════════════════════
-//  WEBSOCKETS — generation counter pattern prevents reconnect storms
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
+//  WEBSOCKETS • generation counter pattern prevents reconnect storms
+// ───────────────────────────────────────────────────────────────
 let _wsChartsGen=0; // increment on each start to invalidate old callbacks
 let _wsScreenerGen=0;
 let _wsChartsReconnectTimer=null;
@@ -3456,8 +3348,14 @@ function startChartWS(){
     const slot=S.charts.findIndex(c=>c.sym===symU);if(slot===-1)return;
     const ch=S.charts[slot];if(!ch.cs||!ch._histBootstrapDone)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q,v:+k.v,tr:+k.n};
-    if(ch.candles.length&&ch.candles[ch.candles.length-1].t===candle.t)ch.candles[ch.candles.length-1]=candle;
-    else if(ch.candles.length&&candle.t>ch.candles[ch.candles.length-1].t)appendCandleWithGaps(ch.candles,candle,tfMs(S.tf));
+    const lastC=ch.candles[ch.candles.length-1];
+    if(lastC&&lastC.t===candle.t){
+      // Update existing candle only if close differs meaningfully (avoid jitter from identical re-broadcasts)
+      if(lastC.c!==candle.c||lastC.h!==candle.h||lastC.l!==candle.l||lastC.o!==candle.o||lastC.qv!==candle.qv){
+        ch.candles[ch.candles.length-1]=candle;
+      }
+    }
+    else if(lastC&&candle.t>lastC.t)appendCandleWithGaps(ch.candles,candle,tfMs(S.tf));
     ch._lastRtUpdateTs=Date.now();
     S.histCache[`${S.tf}:${symU}`]=ch.candles.slice(-HIST_CACHE_MAX);
     ch._pendingCandle=candle;
@@ -3555,6 +3453,34 @@ function syncLivePriceLabel(ch,price,openPrice=null){
   }catch(e){}
 }
 
+/** Живое обновление последней цены на графике Grid Lab (без добавления символа в streams сделок). */
+function pulseGridLabFromTicker(symU,price,tsMs){
+  const modal=document.getElementById('gridLabModal');
+  const body=modal?.querySelector('#gridLabBody');
+  const ctx=body?._gbChartCtx;
+  if(!ctx?.cs||!ctx.merged?.length||ctx.sym!==symU)return;
+  const tf=ctx.tf||'5m';
+  const pseudo={candles:ctx.merged,cs:ctx.cs};
+  if(price==null||!isFinite(price))return;
+  if(!applyLivePriceToCandle(pseudo,tf,price,tsMs)){return;}
+  const lc=pseudo.candles[pseudo.candles.length-1];
+  try{
+    ctx.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
+  }catch(e){}
+}
+function kickGridLabPricePoll(symU){
+  const m=document.getElementById('gridLabModal');
+  const body=m?.querySelector('#gridLabBody');
+  const ctx=body?._gbChartCtx;
+  if(ctx?._pollTimer){clearInterval(ctx._pollTimer);ctx._pollTimer=null;}
+  if(!symU)return;
+  ctx._pollTimer=setInterval(()=>{
+    if(!document.getElementById('gridLabModal'))return;
+    const p=S.tk[symU]?.p;
+    if(p!=null&&isFinite(+p))pulseGridLabFromTicker(symU,+p,Date.now());
+  },460);
+}
+
 function startChartTradesWS(){
   if(_wsChartTradesReconnectTimer){clearTimeout(_wsChartTradesReconnectTimer);_wsChartTradesReconnectTimer=null;}
   closeChartTradesSockets();
@@ -3572,11 +3498,12 @@ function startChartTradesWS(){
     else if(isFinite(bid)&&bid>0)price=bid;
     else if(isFinite(ask)&&ask>0)price=ask;
     if(price==null)return;
+    const ts=+(d.T||d.E)||Date.now();
+    pulseGridLabFromTicker(symU,price,ts);
     const slot=S.charts.findIndex(c=>c.sym===symU);
     if(slot===-1)return;
     const ch=S.charts[slot];
     if(!ch?.cs||!ch._histBootstrapDone||!ch.candles?.length)return;
-    const ts=+(d.T||d.E)||Date.now();
     if(!applyLivePriceToCandle(ch,S.tf,price,ts))return;
     ch._lastRtUpdateTs=Date.now();
     S.histCache[`${S.tf}:${symU}`]=ch.candles.slice(-HIST_CACHE_MAX);
@@ -3628,20 +3555,21 @@ function startRealtimeWatchdog(){
     _watchdogPrevNow=now;
     if(jump>45000){
       handleResumeRecovery(`clock-jump ${Math.round(jump/1000)}s`);
+      return;
     }
     if(!document.hidden){
-      if(S.wsScreener&&_lastScreenerWsMsgAt&&now-_lastScreenerWsMsgAt>20000){
+      if(S.wsScreener&&_lastScreenerWsMsgAt&&now-_lastScreenerWsMsgAt>25000){
         console.warn('Screener WS stale, restarting');
         try{S.wsScreener.close();}catch(e){}
       }
-      if(S.wsCharts&&_lastChartWsMsgAt&&now-_lastChartWsMsgAt>20000){
+      if(S.wsCharts&&_lastChartWsMsgAt&&now-_lastChartWsMsgAt>25000){
         console.warn('Chart WS stale, restarting');
         try{S.wsCharts.close();}catch(e){}
         closeChartTradesSockets();
       }
     }
     updTime();
-  },1000);
+  },2000);
   if(S._rtCandleFallback)return;
   S._rtCandleFallback=setInterval(()=>{
     if(document.hidden)return;
@@ -3694,7 +3622,7 @@ function startRealtimeWatchdog(){
   },2500);
 }
 
-// ── Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) ──
+// ”Ђ”Ђ Web Worker for heavy JSON parsing (Fix #7 #8: eliminates main thread freezes) ”Ђ”Ђ
 const _tickerWorkerCode=`
 self.onmessage=function(e){
   try{
@@ -3723,22 +3651,17 @@ function getTickerWorker(){
 // Throttle screener WS updates
 let _wsBatchTimer=null;
 let _metricsRecalcTimer=null;
-const SCREENER_BATCH_MS_NORMAL=250;
 const SCREENER_BATCH_MS_FAST=100;
-let SCREENER_BATCH_MS=SCREENER_BATCH_MS_NORMAL;
+let SCREENER_BATCH_MS=SCREENER_BATCH_MS_FAST;
 const METRICS_RECALC_DEBOUNCE_MS=250;
 let _metricsSyncBusy=false;
 let _metricsSyncCursor=0;
 let _metricsSyncInterval=null;
 let _tickerRestFallbackInterval=null;
 let _lastTickerRestAt=0;
-/** lastFundingRate (доля, не %) по символу */
-let _fundRates={};
-/** {oi1h, oi4h} в % от openInterestHist 1h */
-let _oiDelta={};
-let _fundOiSymIdx=0;
-let _fundOiBusy=false;
-let _fundOiInterval=null;
+// NOTE: _fundRates, _oiDelta, _fundOiSymIdx, _fundOiBusy, _fundOiInterval
+// are declared at the top of this module so they are available to calcAll()
+// and other early-defined functions. See top-of-file comment.
 
 async function refreshPremiumFundingAll(){
   if(document.hidden)return;
@@ -3844,7 +3767,7 @@ async function refreshMetricKlinesSlice(){
     if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
     calcAll();
     if(!document.hidden){
-      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
+      if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
       else scheduleRender();
     }
     if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
@@ -3860,7 +3783,7 @@ function ensureMetricsSyncLoop(){
   _metricsSyncInterval=setInterval(()=>{
     if(document.hidden)return;
     refreshMetricKlinesSlice();
-  },12000);
+  },20000);
 }
 
 async function refreshTicker24hrFallback(){
@@ -3895,12 +3818,12 @@ async function refreshTicker24hrFallback(){
     }
     calcAll();
     if(!document.hidden){
-      if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
+      if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
       else scheduleRender();
     }
     if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
   }catch(e){
-    // Silent fallback — WS is still the primary source.
+    // Silent fallback • WS is still the primary source.
   }
 }
 
@@ -3933,7 +3856,7 @@ function scheduleRealtimeMetricRecalc(gen){
         }
         calcAll();
         if(!document.hidden){
-          if(_anyChartPanning||_scrolling)_deferredRenderNeeded=true;
+          if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
           else scheduleRender();
         }
         if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
@@ -3941,7 +3864,7 @@ function scheduleRealtimeMetricRecalc(gen){
         console.warn('realtime metric recalc failed',e);
       }
     };
-    if(typeof requestIdleCallback!=='undefined')requestIdleCallback(run,{timeout:1200});
+    if(typeof requestIdleCallback!=='undefined')requestIdleCallback(run,{timeout:600});
     else setTimeout(run,0);
   },METRICS_RECALC_DEBOUNCE_MS);
 }
@@ -4006,11 +3929,15 @@ function _applyTickerUpdate(arr,gen){
   let changed=false;
   const nowMs=Date.now();
   for(const t of arr){
-    const tk=S.tk[t.s];const mx=S.mx[t.s];
+    if(!t||!t.s)continue;
+    const sym=t.s;
+    const tk=S.tk[sym];const mx=S.mx[sym];
     if(!tk)continue;
-    if(tk.p!==t.c||tk.c24!==t.P){tk.p=t.c;tk.c24=t.P;tk.qv=t.q;tk.tr=t.n||tk.tr;changed=true;}
-    if(mx){mx.price=t.c;mx.ch24=t.P;mx.vol24=t.q;mx.trd24=t.n||mx.trd24;}
-    applyLiveKlineUpdate(t.s,t.c,nowMs);
+    const q=isFinite(+t.q)?+t.q:tk.qv;
+    const n=isFinite(+t.n)?+t.n:tk.tr;
+    if(tk.p!==t.c||tk.c24!==t.P){tk.p=+t.c;tk.c24=+t.P;tk.qv=q;tk.tr=n;changed=true;}
+    if(mx){mx.price=tk.p;mx.ch24=tk.c24;mx.vol24=tk.qv;mx.trd24=tk.tr;}
+    applyLiveKlineUpdate(sym,tk.p,nowMs);
   }
   if(!changed)return;
   scheduleRealtimeMetricRecalc(gen);
@@ -4021,17 +3948,12 @@ function _applyTickerUpdate(arr,gen){
       updTime();
       if(!document.hidden){
         if(_anyChartPanning||_scrolling){
-          // User is dragging — defer heavy DOM work until after pan ends
-          _deferredRenderNeeded=true;
+          setDeferredRenderNeeded();
         } else {
-          // In fast mode: render on next frame; otherwise use idle callback.
-          if(S.fastMode){requestAnimationFrame(()=>renderTable());}
-          else if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(()=>renderTable(),{timeout:400});}
-          else{setTimeout(renderTable,0);} // yield to event loop first
+          scheduleRender();
         }
       }
       if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
-      // Only run alert checks when not panning — they also touch DOM
       if(!_anyChartPanning)checkAllAlerts();
     },SCREENER_BATCH_MS);
   }
@@ -4079,7 +4001,7 @@ function updateFsHeaderValues(){
     }else{elChg.textContent='';elChg.className='cchg fs-stat';}
   }
   const elVol=document.getElementById('fsStat-vol');
-  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◈</span>${fk(t.qv)}`:'';
+  if(elVol)elVol.innerHTML=t.qv?`<span style="opacity:.55">◼</span>${fk(t.qv)}`:'';
   const elTrd=document.getElementById('fsStat-trd');
   if(elTrd)elTrd.innerHTML=t.tr?`<span style="opacity:.55">⚡</span>${fk(t.tr)}`:'';
   const elNatr=document.getElementById('fsStat-natr');
@@ -4089,17 +4011,17 @@ function updateFsHeaderValues(){
   }
   const corVal=m.corr14??m.corr;
   const elCorr=document.getElementById('fsStat-corr');
-  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∿</span>${fn(corVal,2)}`:'';
+  if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∞</span>${fn(corVal,2)}`:'';
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  SCREENER TABLE (shared for main & FS)
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function buildScreenerHeader(hdrEl){
   hdrEl.innerHTML='';
   const tickCol=document.createElement('div');
   tickCol.className='tick-col';tickCol.title='Сортировать по тикеру';
-  tickCol.innerHTML='<span class="tick-lbl">ТИКЕР '+(S.sortAlpha?(S.sortDir==='asc'?'▲':'▼'):'')+' </span>';
+  tickCol.innerHTML='<span class="tick-lbl">ТИКЕР '+(S.sortAlpha?(S.sortDir==='asc'?'–І':'–ј'):'')+' </span>';
   tickCol.onclick=()=>doSort('sym');
   hdrEl.appendChild(tickCol);
   const ms=document.createElement('div');ms.className='mscroll';
@@ -4108,7 +4030,7 @@ function buildScreenerHeader(hdrEl){
   cols.forEach(c=>{
     const d=document.createElement('div');
     d.className='mhcol';d.id=`hc-${c.id}`;d.title=c.tip;d.style.flex='1';d.style.minWidth='32px';
-    if(c.id==='sp5'){
+    if(c.id==='sp5'||c.id==='spv'){
       d.classList.add('mhcol-fixed-sp5');
       d.style.flex='0 0 90px';
       d.style.minWidth='90px';
@@ -4120,7 +4042,7 @@ function buildScreenerHeader(hdrEl){
       d.style.maxWidth='64px';
       d.style.width='64px';
     }
-    const sub=(c.id==='sp5')?trendColShortLabel(S.tf):c.s;
+    const sub=(c.id==='sp5'||c.id==='spv')?trendColShortLabel(S.tf):c.s;
     d.innerHTML=`<div class="ht">${c.l}</div><div class="hb">${sub}</div>`;
     d.onclick=()=>doSort(c.id);mg.appendChild(d);
   });
@@ -4131,7 +4053,7 @@ function buildScreenerHeader(hdrEl){
 
 function sortedRows(){
   let rows=Object.values(S.mx);
-  // Подмешиваем монеты без записи в mx (гонка calcAll / partial tk) — иначе пустые слоты и «—».
+  // Подмешиваем монеты без записи в mx (гонка calcAll / partial tk) • иначе пустые слоты и «•».
   if(S.syms.length){
     const have=new Set(rows.map(r=>r.sym));
     for(const sym of S.syms){
@@ -4141,11 +4063,13 @@ function sortedRows(){
         sym,price:t.p??null,ch24:t.c24??null,cday:null,rtd:null,r24:null,r7d:null,
         na30:null,na14:null,r1m5:null,tr5:null,tr1h:null,vr5:null,vr1h:null,
         ch7d:null,trd24:t.tr??null,vol24:t.qv??null,corr:null,corr14:null,v15m:null,v60m:null,
-        sp5:null,sp5d:'',fund:null,oi1h:null,oi4h:null,sqzPop:0,bbSqz:0,bbBreak:0,volImpulse:0
+        sp5:null,sp5d:'',spVol:null,spVold:'',spv:null,fund:null,oi1h:null,oi4h:null,sqzPop:0,bbSqz:0,bbBreak:0,volImpulse:0
       });
     }
   }
-  if(S.q){const q=S.q.toUpperCase();rows=rows.filter(r=>r.sym.includes(q));}
+  // Search is purely visual (search-hidden class in renderScreenerRow). It must never
+  // narrow the row set, otherwise mini-charts and the FS screener would collapse to
+  // a single symbol after typing in the search input.
   const bypassGroup=(sym)=>S.activeGroupFilter>0&&symbolInGroup(sym,S.activeGroupFilter);
   if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||bypassGroup(r.sym));
   if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||bypassGroup(r.sym));
@@ -4161,8 +4085,9 @@ function sortedRows(){
     if(S.sortAlpha){
       const r=a.sym.localeCompare(b.sym);return S.sortDir==='asc'?r:-r;
     }
-    let va=a[S.sortId],vb=b[S.sortId];
-    if(S.sortAbs&&(S.sortId==='ch24'||S.sortId==='ch7d'||S.sortId==='cday'||S.sortId==='sp5'||S.sortId==='oi1h'||S.sortId==='oi4h')){
+    const sortKey=S.sortId==='spv'?'spVol':S.sortId;
+    let va=a[sortKey],vb=b[sortKey];
+    if(S.sortAbs&&(S.sortId==='ch24'||S.sortId==='ch7d'||S.sortId==='cday'||S.sortId==='sp5'||S.sortId==='spv'||S.sortId==='oi1h'||S.sortId==='oi4h')){
       va=va!=null&&!isNaN(va)?Math.abs(va):va;vb=vb!=null&&!isNaN(vb)?Math.abs(vb):vb;
     }
     if(va==null||isNaN(va))return 1;if(vb==null||isNaN(vb))return-1;
@@ -4174,50 +4099,45 @@ function sortedRows(){
 function renderScreenerInto(bodyEl,rows){
   if(!bodyEl)return;
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
-  const start=S.page*S.charts.length;
   const cols=activeCols();
   const colsKey=cols.map(c=>c.id).join(',');
+  // Lazily set up the virtualized list once per bodyEl. The dataset.colsKey
+  // attribute survives innerHTML replacement because it lives on bodyEl itself.
   if(bodyEl.dataset.colsKey!==colsKey){
-    bodyEl.innerHTML='';
+    if(bodyEl._vs){bodyEl._vs.invalidate();}
     bodyEl._rowMap=new Map();
     bodyEl.dataset.colsKey=colsKey;
   }
-  if(!bodyEl._rowMap)bodyEl._rowMap=new Map();
-  const rowMap=bodyEl._rowMap;
-  const frag=document.createDocumentFragment();
-  for(const m of rows){
-    let row=rowMap.get(m.sym);
-    if(!row){
-      row=buildScreenerRow(m,cols);
-      rowMap.set(m.sym,row);
-    }
-    updateScreenerRow(row,m,cols,inChart);
-    frag.appendChild(row);
-  }
-  bodyEl.replaceChildren(frag);
+  const vs=ensureVirtualScreener(bodyEl,{build:buildScreenerRow,update:updateScreenerRow});
+  // Keep legacy _rowMap reference in sync for any code that still reads it.
+  bodyEl._rowMap=vs.getRowMap();
+  vs.setData(rows,cols,inChart);
+  // Clean up stale entries (rows whose symbol no longer exists in S.mx).
+  const rowMap=vs.getRowMap();
   for(const sym of Array.from(rowMap.keys())){
     if(!(sym in S.mx))rowMap.delete(sym);
   }
 }
 
 function buildScreenerRow(m,cols){
+  const sym=m.sym;
   const row=document.createElement('div');
   row.className='srow';
-  row.onclick=()=>openFullscreenBySym(m.sym);
-  row._sym=m.sym;
+  row.onclick=()=>openFullscreenBySym(sym);
+  row._sym=sym;
   const rt=document.createElement('div');rt.className='rtick';
   const gdot=document.createElement('span');gdot.className='cg-dot';
   gdot.title='Группа/избранное';
-  gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
+  gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(sym,gdot);};
   rt.appendChild(gdot);
   const fstar=document.createElement('span');
   fstar.className='cg-fstar';
-  fstar.textContent='★';
+  fstar.textContent='★…';
   fstar.title='Избранное';
   rt.appendChild(fstar);
-  const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=m.sym.replace(/USDT$/,'');
+  const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=sym.replace(/USDT$/,'');
   nameSpan.title='Нажмите для копирования';nameSpan.style.cursor='pointer';
-  nameSpan.onclick=ev=>{ev.stopPropagation();copyTicker(m.sym.replace(/USDT$/,''));openFullscreenBySym(m.sym);};
+  nameSpan.onclick=ev=>{ev.stopPropagation();copyTicker(sym.replace(/USDT$/,''));openFullscreenBySym(sym);};
   rt.appendChild(nameSpan);
   row._gdot=gdot;row._fstar=fstar;row._name=nameSpan;row.appendChild(rt);
   const rg=document.createElement('div');rg.className='rmgrid';
@@ -4225,7 +4145,7 @@ function buildScreenerRow(m,cols){
   for(const c of cols){
     const cell=document.createElement('div');
     cell.className='mc d';
-    if(c.id==='sp5'){
+    if(c.id==='sp5'||c.id==='spv'){
       cell.classList.add('spark-col');
       cell.style.flex='0 0 90px';
       cell.style.minWidth='90px';
@@ -4244,25 +4164,28 @@ function buildScreenerRow(m,cols){
 }
 
 function updateScreenerRow(row,m,cols,inChart){
-  const grp=getSymGroup(m.sym);
+  const sym=m.sym;
+  const grp=getSymGroup(sym);
   const grpCol=GROUP_COLORS[grp]||'';
-  const newCls='srow'+(inChart.has(m.sym)?' inchart':'')+(S.fsOpen&&S.fsSym===m.sym?' infullscreen':'');
+  const q=S.q?S.q.toUpperCase():'';
+  const matchesSearch=!q||sym.includes(q);
+  const newCls='srow'+(inChart.has(sym)?' inchart':'')+(S.fsOpen&&S.fsSym===sym?' infullscreen':'')+(matchesSearch?'':' search-hidden');
   if(row.className!==newCls)row.className=newCls;
-  row._sym=m.sym;
+  row._sym=sym;
   const gdot=row._gdot;
   if(gdot){
-    styleGroupDot(gdot,m.sym);
-    gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(m.sym,gdot);};
+    styleGroupDot(gdot,sym);
+    gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(sym,gdot);};
   }
   const fstar=row._fstar;
   if(fstar){
-    const on=isSymFavorite(m.sym);
+    const on=isSymFavorite(sym);
     fstar.style.display=on?'inline-block':'none';
   }
-  const nameTxt=m.sym.replace(/USDT$/,'');
+  const nameTxt=sym.replace(/USDT$/,'');
   if(row._name&&row._name.textContent!==nameTxt)row._name.textContent=nameTxt;
   if(row._name){
-    row._name.onclick=ev=>{ev.stopPropagation();copyTicker(nameTxt);openFullscreenBySym(m.sym);};
+    row._name.onclick=ev=>{ev.stopPropagation();copyTicker(nameTxt);openFullscreenBySym(sym);};
   }
   if(row._stripe){row._stripe.remove();row._stripe=null;}
   const rt=row.firstChild;
@@ -4273,7 +4196,7 @@ function updateScreenerRow(row,m,cols,inChart){
     for(const c of cols){
       const cell=document.createElement('div');
       cell.className='mc d';
-      if(c.id==='sp5'){
+      if(c.id==='sp5'||c.id==='spv'){
         cell.classList.add('spark-col');
         cell.style.flex='0 0 90px';
         cell.style.minWidth='90px';
@@ -4294,35 +4217,55 @@ function updateScreenerRow(row,m,cols,inChart){
     if(c.id==='sp5'){
       const hasPath=m.sp5d&&String(m.sp5d).length>8;
       const chgDisp=(m.sp5!=null&&!isNaN(m.sp5))?m.sp5:(m.ch24!=null&&!isNaN(m.ch24)?m.ch24:null);
-      const dLine=hasPath?m.sp5d:'M1,20 L99,20';
-      const sig=`${chgDisp}|${hasPath?m.sp5d:'flat'}`;
+      const dLine=hasPath?String(m.sp5d):'M1,20 L99,20';
+      const sig=`${chgDisp}|${dLine}`;
       if(cell._sparkSig!==sig){
         cell._sparkSig=sig;
-        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'—';
+        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'•';
         const ud=(chgDisp!=null&&chgDisp<0)?'down':'up';
         const bg=sparkHeatBackground(chgDisp);
-        cell.innerHTML=`<div class="spark-inner ${ud}" style="background:${bg}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${dLine}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${pct}</span></div>`;
+        cell.innerHTML=`<div class="spark-inner ${escapeHtml(ud)}" style="background:${escapeHtml(bg)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${svgPathAttr(dLine)}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${escapeHtml(pct)}</span></div>`;
       }
       const clsBase='mc spark-col '+(chgDisp==null||isNaN(chgDisp)?'d':fc(chgDisp,'ch24'));
       if(cell.className!==clsBase)cell.className=clsBase;
       return;
     }
-    const v=m[c.id];
-    const newTxt=fv(v,c.id);
-    const newCls='mc '+fc(v,c.id)+' '+fh(v,c.id);
+    if(c.id==='spv'){
+      const hasPath=m.spVold&&String(m.spVold).length>8;
+      const chgDisp=(m.spVol!=null&&!isNaN(m.spVol))?m.spVol:null;
+      const dLine=hasPath?String(m.spVold):'M1,20 L99,20';
+      const sig=`spv|${chgDisp}|${dLine}`;
+      if(cell._sparkSig!==sig){
+        cell._sparkSig=sig;
+        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'•';
+        const ud=(chgDisp!=null&&chgDisp<0)?'down':'up';
+        const bg=sparkHeatBackground(chgDisp);
+        cell.innerHTML=`<div class="spark-inner ${escapeHtml(ud)}" style="background:${escapeHtml(bg)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${svgPathAttr(dLine)}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${escapeHtml(pct)}</span></div>`;
+      }
+      const clsBase='mc spark-col '+(chgDisp==null||isNaN(chgDisp)?'d':fc(chgDisp,'spv'));
+      if(cell.className!==clsBase)cell.className=clsBase;
+      return;
+    }
+    const val=m[c.id];
+    const newTxt=fv(val,c.id);
+    const newCls='mc '+fc(val,c.id)+' '+fh(val,c.id);
     // While some derived metrics are being (re)computed, keep the previous value instead of flashing zeros/dashes.
     // This is especially noticeable for СД*/ОБ* ratios.
     const holdDuringRecalc = (c.id==='tr5'||c.id==='tr1h'||c.id==='vr5'||c.id==='vr1h');
     const holdOiDuring = (_fundOiBusy&&(c.id==='oi1h'||c.id==='oi4h'));
     if(holdDuringRecalc){
-      const vBad = (v==null||!isFinite(v)) || (_metricsSyncBusy && v===0);
-      if(vBad && cell.textContent && cell.textContent!=='—'){
+      const vBad = (val==null||!isFinite(val)) || (_metricsSyncBusy && val===0);
+      if(vBad && cell.textContent && cell.textContent!=='•'){
+        if(cell.className!==newCls)cell.className=newCls;
         return;
       }
     }
     if(holdOiDuring){
-      const vBad=v==null||!isFinite(v);
-      if(vBad&&cell.textContent&&cell.textContent!=='—')return;
+      const vBad=val==null||!isFinite(val);
+      if(vBad&&cell.textContent&&cell.textContent!=='•'){
+        if(cell.className!==newCls)cell.className=newCls;
+        return;
+      }
     }
     if(cell.textContent!==newTxt)cell.textContent=newTxt;
     if(cell.className!==newCls)cell.className=newCls;
@@ -4339,12 +4282,18 @@ function _scheduleUi(cb){
 let _renderScheduled=false;
 function scheduleRender(){
   if(_renderScheduled)return;
+  // Throttle: never schedule more often than _renderMinMs to avoid DOM thrashing during WS bursts.
+  const now=performance.now();
+  const due=Math.max(0,S._renderMinMs-(now-S._renderTs));
   _renderScheduled=true;
-  _scheduleUi(()=>{
+  const run=()=>{
     _renderScheduled=false;
-    if(_anyChartPanning){_deferredRenderNeeded=true;return;} // defer until pan ends
+    S._renderTs=performance.now();
+    if(_anyChartPanning){setDeferredRenderNeeded();return;} // defer until pan ends
     if(!_scrolling&&!document.hidden)renderTable();
-  });
+  };
+  if(due<=1)_scheduleUi(run);
+  else setTimeout(()=>_scheduleUi(run),due);
 }
 // Skip DOM rebuild while user is scrolling the screener
 let _scrolling=false,_scrollEnd=null;
@@ -4403,14 +4352,13 @@ function updatePagination(total){
 function updSortHdr(){
   document.querySelectorAll('.mhcol').forEach(e=>e.classList.remove('sa','sd'));
   document.querySelectorAll(`#hc-${S.sortId}`).forEach(el=>el.classList.add(S.sortDir==='desc'?'sd':'sa'));
-  const c=ALL_COLS.find(x=>x.id===S.sortId);
   const si=document.getElementById('sinfo');
-  if(si)si.textContent=S.sortAlpha?`Тикер ${S.sortDir==='asc'?'▲':'▼'}`:(c?`Сорт: ${c.l} ${c.s} ${S.sortDir==='desc'?'↓':'↑'}`:'');
+  if(si)si.textContent='';
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  CONTROLS
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function doSort(id){
   if(id==='sym'){
     S.sortAlpha=true;S.sortId='sym';
@@ -4428,6 +4376,7 @@ function doSort(id){
 }
 
 function changePage(delta){
+  clearAllRulers();
   const rows=sortedRows();
   const tp=Math.max(1,Math.ceil(rows.length/S.charts.length));
   S.page=Math.max(0,Math.min(tp-1,S.page+delta));
@@ -4435,6 +4384,7 @@ function changePage(delta){
 }
 
 function setTf(tf,btnId){
+  clearAllRulers();
   S.tf=tf;
   S.kTrend={};
   document.querySelectorAll('#toolbar .tbtn').forEach(b=>{
@@ -4454,7 +4404,35 @@ function setTf(tf,btnId){
   schedulePersistUserSettings();
 }
 
-function onSearch(q){S.q=q;S.page=0;updateCharts();renderTable();}
+/** Русская раскладка → латиница (поиск тикера как на EN-клавиатуре). */
+function mapRuKeyboardToEn(s){
+  const ru='ёйцукенгшщзхъфывапролджэячсмитьбюЁЙЦУКЕНГШЩЗХЪФЫВАПРОЛДЖЭЯЧСМИТЬБЮ';
+  const en='`qwertyuiop[]asdfghjkl;\'zxcvbnm,./~QWERTYUIOP{}ASDFGHJKL:"ZXCVBNM<>?';
+  let out='';
+  for(const ch of String(s||'')){
+    const i=ru.indexOf(ch);
+    out+=i>=0?en[i]:ch;
+  }
+  return out;
+}
+function onSearchInput(inp){
+  if(!inp)return;
+  const raw=inp.value;
+  const mapped=mapRuKeyboardToEn(raw);
+  if(mapped!==raw){
+    const pos=inp.selectionStart;
+    inp.value=mapped;
+    try{inp.setSelectionRange(pos,pos);}catch(e){}
+  }
+  onSearch(mapped);
+}
+function onSearch(q){
+  const clean=mapRuKeyboardToEn(q).trim();
+  S.q=clean;
+  S.page=0;
+  renderTable();
+  // Search only highlights the row in the right-side screener; it never filters the list.
+}
 
 function onVolFilter(val){
   S.minVol=+val*10;
@@ -4498,7 +4476,7 @@ function _setHeaderLiveDot(mode){
   dot.className='live-dot'+(mode==='warn'?' live-dot-warn':mode==='err'?' live-dot-err':mode==='pause'?' live-dot-pause':'');
 }
 
-/** Статус Binance WS (тикер + мини‑графики): свежий / подключение / нет данных >20с */
+/** Статус Binance WS (тикер + минивЂ‘графики): свежий / подключение / нет данных >20с */
 function updateHeaderStreamStatus(){
   const hs=document.getElementById('hstatus');
   if(!hs)return;
@@ -4513,16 +4491,11 @@ function updateHeaderStreamStatus(){
     _setHeaderLiveDot('err');
     return;
   }
+  // Skip the "Подключение потокавЂ¦" indicator • it was always showing on first paint
+  // and adding visual noise without telling the user anything actionable.
   const wantChart=S.charts.some(c=>c.sym);
   const scrConn=!!S.wsScreener;
   const chartConn=wantChart&&!!S.wsCharts;
-  const scrPending=scrConn&&!_lastScreenerWsMsgAt;
-  const chartPending=wantChart&&(!S.wsCharts||!_lastChartWsMsgAt);
-  if(scrPending||chartPending){
-    hs.textContent='Подключение потока…';
-    _setHeaderLiveDot('warn');
-    return;
-  }
   let worst=0;
   let any=false;
   if(scrConn&&_lastScreenerWsMsgAt){any=true;worst=Math.max(worst,now-_lastScreenerWsMsgAt);}
@@ -4543,21 +4516,12 @@ function updateHeaderStreamStatus(){
 }
 
 function syncFastBtnUi(){
-  const btn=document.getElementById('fastBtn');
-  if(!btn)return;
-  btn.classList.toggle('on',S.fastMode);
-  btn.textContent=S.fastMode?('⚡ Fast · ВКЛ'):'⚡ Fast';
-  btn.title=S.fastMode
-    ?(`Fast включён: обновление списка ~${SCREENER_BATCH_MS_FAST}мс, синхрон мини‑графиков чаще. Нажмите снова — выключить.`)
-    :(`Fast выключен (~${SCREENER_BATCH_MS_NORMAL}мс). Включить — отзывчивее UI, выше нагрузка на CPU.`);
+  S.fastMode=true;
+  SCREENER_BATCH_MS=SCREENER_BATCH_MS_FAST;
 }
 
 function toggleFastMode(){
-  S.fastMode=!S.fastMode;
-  SCREENER_BATCH_MS=S.fastMode?SCREENER_BATCH_MS_FAST:SCREENER_BATCH_MS_NORMAL;
   syncFastBtnUi();
-  // Force a quick refresh.
-  if(!document.hidden)renderTable();
 }
 
 function syncChartSyncBtnUi(){
@@ -4567,7 +4531,7 @@ function syncChartSyncBtnUi(){
   b.textContent=S.chartAutoSync?'Графы·авто':'Графы·стоп';
   b.title=S.chartAutoSync
     ?'Вкл: мини-графики 3×3 подстраиваются под текущий топ страницы при живой сортировке. Список всегда обновляется.'
-    :'Выкл: список обновляется, но символы в сетке графиков не меняются сами — пока не перелистнёте страницу или не смените сортировку вручную.';
+    :'Выкл: список обновляется, но символы в сетке графиков не меняются сами • пока не перелистнёте страницу или не смените сортировку вручную.';
 }
 function syncOiChartBtnUi(){
   const btn=document.getElementById('oiChartBtn');
@@ -4613,108 +4577,87 @@ function updateToggleScrBtn(){
   const btn=document.getElementById('toggleScrBtn');
   if(!btn)return;
   const on=S.fsOpen?S.fsScreenerVisible:S.screenerVisible;
-  btn.textContent=(on?'◀':'▶')+' Список';
+  // Reconstruct the label from char codes so this file is safe to save
+  // in any encoding without producing mojibake. Word is "Spisok"
+  // (Список): \u0421\u043f\u0438\u0441\u043e\u043a. \u2212 is minus.
+  btn.textContent = (on ? String.fromCharCode(0x2212) : '+')
+    + ' ' + String.fromCharCode(0x0421, 0x043f, 0x0438, 0x0441, 0x043e, 0x043a);
   btn.classList.toggle('on',on);
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  AUTO CHART UPDATE
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function updateCharts(){
   const rows=sortedRows();
   const start=S.page*S.charts.length;
   const pageSyms=rows.slice(start,start+S.charts.length).map(r=>r.sym);
   let changed=false;
+  const currentSyms=S.charts.map(c=>c.sym);
   for(let i=0;i<S.charts.length;i++){
     const ns=pageSyms[i]||null;
-    if(S.charts[i].sym!==ns){changed=true;loadChart(i,ns);}
+    if(currentSyms[i]!==ns)changed=true;
   }
-  if(changed)restartChartStreams(600);
+  if(changed){
+    clearAllRulers();
+    (async()=>{
+      for(let i=0;i<S.charts.length;i++){
+        const ns=pageSyms[i]||null;
+        if(S.charts[i].sym!==ns)await loadChart(i,ns);
+      }
+      restartChartStreams(600);
+    })();
+  }
   updatePagination(rows.length);
   schedulePersistUserSettings();
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  TOGGLE SCREENER
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function toggleDensity(){
-  S.showDensity=!S.showDensity;
-  const btn=document.getElementById('densityBtn');
-  if(btn)btn.classList.toggle('on',S.showDensity);
-  if(S.showDensity){
-    // Pre-fetch order books for all visible charts
-    [...S.charts,...S.fsCharts].forEach(ch=>{const s=ch.sym||S.fsSym;if(s)fetchOrderBook(s);});
-  }
-  [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
+  toggleDensityUi({
+    S, rCanvas, renderSettingsDensity,
+    fetchJSON: fj, API,
+    densityCache: _densityCache,
+  });
 }
 
 function getDensitySettings(sym){
-  if(!S.densitySettings[sym])S.densitySettings[sym]={largeMult:3.5,medMult:2.2,smallMult:1.5};
-  return S.densitySettings[sym];
+  return getOrCreateDensitySettings(S.densitySettings, sym);
 }
 
 function renderSettingsDensity(body){
-  const sym=S.fsSym||S.charts.find(c=>c.sym)?.sym||'';
-  const ds=getDensitySettings(sym);
-  body.dataset.densitySym=sym; // store so inputs always reference correct sym
-  body.innerHTML=`
-  <div style="font-size:9px;color:var(--text3);margin-bottom:8px;line-height:1.6">
-    Плотности — горизонтальные лучи на уровнях с крупными стенками.<br>
-    <span style="color:#e04040">█</span> крупная &nbsp;<span style="color:#e8a020">█</span> средняя &nbsp;<span style="color:#606080">█</span> малая
-  </div>
-  <div class="smodal-row">
-    <span class="smodal-lbl">Отображение плотностей</span>
-    <div class="smodal-btns">
-      ${tbtnHtml('dOn','Вкл',"setDensityVisible(true)",S.showDensity)}
-      ${tbtnHtml('dOff','Выкл',"setDensityVisible(false)",!S.showDensity)}
-    </div>
-  </div>
-  ${sym?`
-  <div style="font-size:9px;color:var(--text2);margin:10px 0 4px">Пороги для: <b style="color:#fff">${sym.replace(/USDT$/,'')}</b></div>
-  <div class="smodal-row">
-    <span class="smodal-lbl">Крупная (×σ)</span>
-    <input id="dLarge" type="number" step="0.1" min="0.5" max="20" value="${ds.largeMult}"
-      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'largeMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
-  </div>
-  <div class="smodal-row">
-    <span class="smodal-lbl">Средняя (×σ)</span>
-    <input id="dMed" type="number" step="0.1" min="0.5" max="20" value="${ds.medMult}"
-      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'medMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
-  </div>
-  <div class="smodal-row">
-    <span class="smodal-lbl">Малая (×σ)</span>
-    <input id="dSmall" type="number" step="0.1" min="0.1" max="20" value="${ds.smallMult}"
-      oninput="setDensityMult(document.getElementById('smodal-body').dataset.densitySym,'smallMult',this.value)"
-      style="width:55px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:10px;padding:2px 5px;text-align:right">
-  </div>
-  <div style="margin-top:8px">
-    <button class="tbtn" onclick="resetDensitySettings(document.getElementById('smodal-body').dataset.densitySym)">⟳ Сброс</button>
-  </div>`:'<div style="font-size:9px;color:var(--text3);margin-top:8px">Откройте монету для настройки порогов</div>'}
-  `;
+  renderSettingsDensityUi(body, {
+    S, tbtnHtml,
+    fetchJSON: fj, API,
+    densityCache: _densityCache,
+    rCanvas,
+    timeToCoordX,
+  });
 }
 
 function setDensityVisible(on){
-  S.showDensity=on;
-  const btn=document.getElementById('densityBtn');if(btn)btn.classList.toggle('on',on);
-  [...S.charts,...S.fsCharts].forEach(ch=>rCanvas(ch));
-  renderSettingsDensity(document.getElementById('smodal-body'));
+  setDensityVisibleUi(on, {
+    S, rCanvas, renderSettingsDensity,
+    fetchJSON: fj, API, densityCache: _densityCache,
+  });
 }
 
 function setDensityMult(sym,key,val){
-  const v=parseFloat(val);
-  if(isNaN(v)||v<0.1)return; // ignore invalid
-  getDensitySettings(sym)[key]=v;
-  _densityCache.delete(sym); // MUST invalidate cache so new value takes effect
-  [...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
+  setDensityMultUi(sym, key, val, {
+    S, rCanvas,
+    fetchJSON: fj, API, densityCache: _densityCache,
+    setDensityThreshold: setDensityThresholdMod,
+  });
 }
 
 function resetDensitySettings(sym){
-  S.densitySettings[sym]={largeMult:3.5,medMult:2.2,smallMult:1.5};
-  _densityCache.delete(sym);
-  renderSettingsDensity(document.getElementById('smodal-body'));
-  [...S.charts,...S.fsCharts].forEach(ch=>{if((ch.sym||S.fsSym)===sym)rCanvas(ch);});
+  resetDensitySettingsUi(sym, {
+    S, rCanvas, renderSettingsDensity,
+    fetchJSON: fj, API, densityCache: _densityCache,
+    resetDensitySettings: resetDensitySettingsMod,
+  });
 }
 
 function renderSettingsAlerts(body){
@@ -4746,11 +4689,11 @@ function renderSettingsAlerts(body){
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:12px">
     <span class="smodal-lbl" style="color:var(--text2)">История алертов</span>
-    <button class="tbtn" onclick="toggleAlertLog();closeSettings()">🔔 Открыть лог</button>
+    <button class="tbtn" onclick="toggleAlertLog();closeSettings()">рџ”” Открыть лог</button>
   </div>
   <div class="smodal-row" style="border-bottom:none">
     <span class="smodal-lbl" style="color:var(--text2)">Сброс всех алертов</span>
-    <button class="tbtn" onclick="resetAllAlerts()">⟳ Сброс fired</button>
+    <button class="tbtn" onclick="resetAllAlerts()">вџі Сброс fired</button>
   </div>`;
 }
 
@@ -4765,9 +4708,9 @@ function resetAllAlerts(){
   });
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  #11: CLEAR DRAWINGS (double-click button in chart header)
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 const _clearClickTs={};
 function clearDrawingsSlot(slot){
   const now=Date.now();
@@ -4777,7 +4720,7 @@ function clearDrawingsSlot(slot){
     if(ch.sym&&ch.drawings.length){
       pushDrawUndo(ch.sym);
       applySymDrawings(ch.sym,[]);
-      _lastDrawSym=ch.sym;
+      setLastDrawSym();
     }
     ch.pendingP1=null;
     rCanvas(ch);
@@ -4797,7 +4740,7 @@ function clearFsDrawings(){
     if(S.fsSym&&getSymDrawings(S.fsSym).length){
       pushDrawUndo(S.fsSym);
       applySymDrawings(S.fsSym,[]);
-      _lastDrawSym=S.fsSym;
+      setLastDrawSym();
     }
     _fsClearTs=0;
     const btn=document.getElementById('fsClearDrawBtn');
@@ -4809,9 +4752,9 @@ function clearFsDrawings(){
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  #9: COLOR GROUPS
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function getSymGroup(sym){return S.symGroups[sym]||0;}
 function isSymFavorite(sym){return !!S.symFavorites?.[sym];}
 function symbolInGroup(sym,g){
@@ -4886,24 +4829,29 @@ function buildGroupFilterBar(){
       if(cnt===0&&S.activeGroupFilter!==g)continue;
       const wrap=document.createElement('div');wrap.style.cssText='position:relative;display:flex;align-items:center;';
       const btn=document.createElement('div');
-      btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'');
+      btn.className='cg-filter-btn'+(S.activeGroupFilter===g?' active':'')+(g===FAVORITE_GROUP_ID?' cg-filter-fav':'');
       if(g===FAVORITE_GROUP_ID){
         btn.style.background='transparent';
-        btn.style.border='none';
-        btn.style.borderRadius='0';
-        btn.style.width='auto';
-        btn.style.height='auto';
-        btn.style.padding='0 2px';
+        btn.style.border='2px solid transparent';
+        btn.style.borderRadius='50%';
+        btn.style.width='18px';
+        btn.style.height='18px';
+        btn.style.minWidth='18px';
+        btn.style.minHeight='18px';
+        btn.style.padding='0';
+        btn.style.boxSizing='border-box';
         btn.style.color=FAVORITE_GROUP_COLOR;
         btn.style.display='inline-flex';
         btn.style.alignItems='center';
         btn.style.justifyContent='center';
-        btn.textContent='★';
+        btn.style.fontSize='13px';
+        btn.style.lineHeight='1';
+        btn.textContent='★…';
       }else{
         btn.style.background=GROUP_COLORS[g];
         btn.textContent='';
       }
-      btn.title=`${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`} (${cnt} монет). ЛКМ — фильтр · ПКМ — очистить группу`;
+      btn.title=`${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`} (${cnt} монет). ЛКМ • фильтр · ПКМ • очистить группу`;
       btn.onclick=()=>{
         const next=S.activeGroupFilter===g?0:g;
         S.activeGroupFilter=next;
@@ -4936,7 +4884,7 @@ function buildGroupFilterBar(){
     }
     bar.appendChild(grpSec);
 
-    // Potential preset tabs — appear as filter tabs alongside color groups
+    // Potential preset tabs • appear as filter tabs alongside color groups
     const potSec=document.createElement('div');
     potSec.style.cssText='display:flex;align-items:center;gap:4px;padding:3px 5px;border:1px solid #5a401f;border-radius:6px;background:rgba(249,115,22,.06);';
     const potLbl=document.createElement('span');
@@ -4948,7 +4896,7 @@ function buildGroupFilterBar(){
       const tab=document.createElement('button');
       tab.style.cssText=`background:${pr.enabled?(cnt?'rgba(249,115,22,.18)':'rgba(255,255,255,.05)'):'transparent'};border:1px solid ${pr.enabled?'#f97316':'var(--border2)'};border-radius:4px;color:${pr.enabled?(cnt?'#f97316':'var(--text2)'):'var(--text3)'};cursor:pointer;font:inherit;font-size:9px;padding:2px 7px;transition:all .1s;white-space:nowrap;display:flex;align-items:center;gap:3px;`;
       tab.innerHTML=`⚡ ${pr.name}${cnt?` <span style="background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;line-height:1.5">${cnt}</span>`:''}`;
-      tab.title=`${pr.name}: ${cnt} монет. ЛКМ — фильтр, ПКМ — настройка`;
+      tab.title=`${pr.name}: ${cnt} монет. ЛКМ • фильтр, ПКМ • настройка`;
       tab.onclick=()=>{
         // Toggle filter: show only coins in this preset (exclusive)
         S.activeGroupFilter=0;
@@ -4970,7 +4918,10 @@ function buildGroupFilterBar(){
 }
 
 function showGroupPicker(sym,anchorEl){
-  // Open picker with explicit color + favorite actions
+  // Quick-assign last used group first (fast tagging), then allow changing in picker.
+  const target=Math.max(1,Math.min(7,S.lastGroupUsed||1));
+  if(getSymGroup(sym)!==target)setSymGroup(sym,target);
+  else setSymGroup(sym,0);
   showQuickGroupChanger(sym,anchorEl);
 }
 
@@ -5011,7 +4962,7 @@ function showQuickGroupChanger(sym,anchorEl){
   const favOn=isSymFavorite(sym);
   const fav=document.createElement('div');
   fav.className='cg-dot cg-fav-dot';
-  fav.textContent='★';
+  fav.textContent='★…';
   fav.title='Избранное · нажмите чтобы добавить/убрать';
   if(favOn)fav.style.outline='2px solid #fff';
   fav.onclick=()=>{setSymFavorite(sym,!favOn);pick.remove();syncAllGroupDots(sym);};
@@ -5047,10 +4998,10 @@ function openGroupManager(g){
   // Header
   const hdr=document.createElement('div');
   hdr.style.cssText='display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);gap:8px;flex-shrink:0';
-  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'★':''}</span>
+  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'★…':''}</span>
     <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`}</span>
     <span style="font-size:9px;color:var(--text3)">Нажмите монету чтобы добавить/убрать</span>
-    <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">✕</button>`;
+    <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">вњ•</button>`;
   box.appendChild(hdr);
   // Search
   const srch=document.createElement('input');
@@ -5070,7 +5021,7 @@ function openGroupManager(g){
       const inGrp=symbolInGroup(m.sym,g);
       const row=document.createElement('div');
       row.style.cssText=`display:flex;align-items:center;padding:5px 12px;cursor:pointer;gap:8px;border-bottom:1px solid rgba(37,37,48,.4);transition:background .06s;${inGrp?'background:rgba(255,255,255,.04)':''}`;
-      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'★':'☆'):''}</span>
+      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'★…':'★†'):''}</span>
         <span style="font-size:10px;font-weight:500;color:${inGrp?'#fff':'var(--text2)'};flex:1">${m.sym.replace(/USDT$/,'')}</span>
         ${inGrp?`<span style="font-size:9px;color:${col}">✓ в группе</span>`:''}`;
       row.onmouseenter=()=>row.style.background=inGrp?'rgba(255,255,255,.07)':'rgba(255,255,255,.025)';
@@ -5085,7 +5036,15 @@ function openGroupManager(g){
     list.appendChild(frag);
   };
   buildList();
-  srch.oninput=()=>buildList(srch.value);
+  srch.oninput=()=>{
+    const mapped=mapRuKeyboardToEn(srch.value);
+    if(mapped!==srch.value){
+      const pos=srch.selectionStart;
+      srch.value=mapped;
+      try{srch.setSelectionRange(pos,pos);}catch(e){}
+    }
+    buildList(mapped);
+  };
   box.appendChild(list);modal.appendChild(box);document.body.appendChild(modal);
   modal.addEventListener('mousedown',e=>{if(e.target===modal)modal.remove();});
   srch.focus();
@@ -5128,37 +5087,49 @@ function toggleFsScreener(){
   if(S.fsScreenerVisible)renderTable();
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  SPLITTER (generic)
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function dragSpl(e,splId,leftId,bodyId){
   e.preventDefault();
   const spl=document.getElementById(splId);spl.classList.add('drag');
   const left=document.getElementById(leftId);
   const body=document.getElementById(bodyId);
-  const onM=(ev)=>{
-    const r=body.getBoundingClientRect();
-    const pct=Math.max(20,Math.min(85,((ev.clientX-r.left)/r.width)*100));
-    left.style.width=pct+'%';
-    // Keep the screener width consistent between main and fullscreen modes
-    if(leftId==='cpanel'){
-      const fsCA=document.getElementById('fsChartArea');
-      if(fsCA){fsCA.style.flex='none';fsCA.style.width=pct+'%';}
-      S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
-    } else if(leftId==='fsChartArea'){
-      const cp=document.getElementById('cpanel');
-      if(cp){cp.style.flex='none';cp.style.width=pct+'%';}
-      S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
-    }
-    [...S.charts,...S.fsCharts].forEach(ch=>{if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(er){}});
+  const fsCA=document.getElementById('fsChartArea');
+  const cp=document.getElementById('cpanel');
+  // Cache the body rect once — `getBoundingClientRect` is layout-bound
+  // and was the main reason dragging felt slow (called per mousemove).
+  const bodyRect0=body.getBoundingClientRect();
+  let resizeRaf=0;
+  const doResize=()=>{
+    resizeRaf=0;
+    for(const ch of S.charts){if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(_){}}
+    for(const ch of S.fsCharts){if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(_){}}
   };
-  const onU=()=>{spl.classList.remove('drag');window.removeEventListener('mousemove',onM);window.removeEventListener('mouseup',onU);};
-  window.addEventListener('mousemove',onM);window.addEventListener('mouseup',onU);
+  const onM=(ev)=>{
+    const pct=Math.max(20,Math.min(85,((ev.clientX-bodyRect0.left)/bodyRect0.width)*100));
+    left.style.width=pct+'%';
+    if(leftId==='cpanel'&&fsCA){fsCA.style.flex='none';fsCA.style.width=pct+'%';}
+    else if(leftId==='fsChartArea'&&cp){cp.style.flex='none';cp.style.width=pct+'%';}
+    S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
+    // Coalesce all per-move lc.resize() calls into a single rAF: at
+    // 120Hz mouse this turns N sync layout passes into one.
+    if(!resizeRaf)resizeRaf=requestAnimationFrame(doResize);
+  };
+  const onU=()=>{
+    spl.classList.remove('drag');
+    window.removeEventListener('mousemove',onM);
+    window.removeEventListener('mouseup',onU);
+    // Make sure the final resize still runs even if rAF is pending.
+    if(!resizeRaf)doResize();
+  };
+  window.addEventListener('mousemove',onM);
+  window.addEventListener('mouseup',onU);
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  SETTINGS
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function openSettings(){
   switchSettingsTab(S.settingsTab);
   document.getElementById('settingsModal').classList.add('open');
@@ -5230,6 +5201,18 @@ function renderSettingsGen(body){
       ${tbtnHtml('swOff','Выкл',"setWatermark(false)",!S.wmVisible)}
     </div>
   </div>
+  <div class="smodal-row" style="flex-direction:column;align-items:stretch;gap:8px">
+    <span class="smodal-lbl">Авто-наклонки (вџ‚ на тулбаре)</span>
+    <div style="font-size:9px;color:var(--text3);line-height:1.45">Пивоты + касания свечей. Поддержка • по минимумам, сопротивление • по максимумам.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:10px">
+      <label>Пивот (бар) <input type="number" min="2" max="8" value="${S.autoTrend.pivotBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('pivotBars',+this.value)"></label>
+      <label>Касания ≥ <input type="number" min="2" max="8" value="${S.autoTrend.minTouches}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('minTouches',+this.value)"></label>
+      <label>Допуск % <input type="number" min="0.05" max="2" step="0.05" value="${S.autoTrend.touchPct}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('touchPct',+this.value)"></label>
+      <label>Макс. линий <input type="number" min="1" max="10" value="${S.autoTrend.maxLines}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('maxLines',+this.value)"></label>
+      <label>Окно баров <input type="number" min="60" max="400" value="${S.autoTrend.lookback}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('lookback',+this.value)"></label>
+      <label>Продлить <input type="number" min="0" max="80" value="${S.autoTrend.extendBars}" style="width:100%;margin-top:3px" onchange="setAutoTrendSetting('extendBars',+this.value)"></label>
+    </div>
+  </div>
   <div class="smodal-row">
     <span class="smodal-lbl">Сортировка изм. по модулю</span>
     <div class="smodal-btns">
@@ -5254,7 +5237,7 @@ function renderSettingsGen(body){
     </div>
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:0">
-    <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">На полноэкранных графиках масштаб и отступ справа подстраиваются по ширине окна: показывается больше свечей, «пустые» бары справа слегка ужимаются — чтобы крупный график не казался чрезмерно «растянутым».</span>
+    <span class="smodal-lbl" style="flex:1;font-size:9px;color:var(--text3);line-height:1.45;font-weight:400">На полноэкранных графиках масштаб и отступ справа подстраиваются по ширине окна: показывается больше свечей, «пустые» бары справа слегка ужимаются • чтобы крупный график не казался чрезмерно «растянутым».</span>
   </div>
   <div class="smodal-row">
     <span class="smodal-lbl">Автосмена монет в сетке графиков</span>
@@ -5273,13 +5256,13 @@ function renderSettingsGen(body){
   <div class="smodal-row">
     <span class="smodal-lbl">Зоны сессий</span>
     <div class="smodal-btns" style="flex-wrap:wrap;justify-content:flex-end;max-width:240px;gap:4px">
-      ${tbtnHtml('sessAsia','Азия 0–9',"toggleSessionBand('asia')",S.sessionFx.asia)}
-      ${tbtnHtml('sessLon','Лондон 8–17',"toggleSessionBand('london')",S.sessionFx.london)}
-      ${tbtnHtml('sessNy','NY 13–22',"toggleSessionBand('ny')",S.sessionFx.ny)}
+      ${tbtnHtml('sessAsia','Азия 0—9',"toggleSessionBand('asia')",S.sessionFx.asia)}
+      ${tbtnHtml('sessLon','Лондон 8—17',"toggleSessionBand('london')",S.sessionFx.london)}
+      ${tbtnHtml('sessNy','NY 13—22',"toggleSessionBand('ny')",S.sessionFx.ny)}
     </div>
   </div>
   <div class="smodal-row" style="border-bottom:none;padding-top:0">
-    <span class="smodal-lbl" style="flex:1;font-size:8px;color:var(--text3);line-height:1.45;font-weight:400">Границы в UTC (как у глобальных рынков). Пересечения: приоритет NY → Лондон → Азия; вне зон — приглушённая полоса «мёртвое время».</span>
+    <span class="smodal-lbl" style="flex:1;font-size:8px;color:var(--text3);line-height:1.45;font-weight:400">Границы в UTC (как у глобальных рынков). Пересечения: приоритет NY → Лондон → Азия; вне зон • приглушённая полоса «мёртвое время».</span>
   </div>
   <div class="smodal-ver">CryptScreen v1.4 · Binance Futures</div>`;
 }
@@ -5314,14 +5297,14 @@ function toggleSessionBand(which){
 }
 
 function renderSettingsChartHead(body){
-  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Индикаторы»). Перетащите порядок, ✓ — показать/скрыть.</div>';
+  body.innerHTML='<div style="font-size:9px;color:var(--text3);margin-bottom:8px">Плашки над мини-графиками и в шапке полноэкранного режима. Отдельно от колонок списка монет (вкладка «Индикаторы»). Перетащите порядок, ✓ • показать/скрыть.</div>';
   const list=document.createElement('div');list.className='ind-list';list.id='chartHeadList';
   S.chartHeadOrder.forEach(id=>{
     const def=CHART_HEAD_DEFS.find(d=>d.id===id);if(!def)return;
     const item=document.createElement('div');
     item.className='ind-item';item.dataset.id=id;item.draggable=true;
     const visible=S.chartHeadVisible.has(id);
-    item.innerHTML=`<span class="ind-handle" title="Перетащить">⣿</span>
+    item.innerHTML=`<span class="ind-handle" title="Перетащить">⋮⋮</span>
       <span class="ind-check${visible?' checked':''}" onclick="toggleChartHeadCol('${id}',this)">✓</span>
       <span class="ind-name">${def.id==='chg'?'Рост':def.id==='vol'?'Объём':def.id==='trd'?'Сделки':def.id==='natr'?'NATR':'Корр.'}</span>
       <span class="ind-sub" style="opacity:.75">${def.id==='chg'?'24ч %':def.id==='vol'?'USDT 24ч':def.id==='trd'?'кол-во 24ч':def.id==='natr'?'5м/14 %':'к BTC'}</span>`;
@@ -5371,7 +5354,7 @@ function renderSettingsInd(body){
     const item=document.createElement('div');
     item.className='ind-item';item.dataset.id=id;item.draggable=true;
     const visible=S.colVisible.has(id);
-    item.innerHTML=`<span class="ind-handle" title="Перетащить">⣿</span>
+    item.innerHTML=`<span class="ind-handle" title="Перетащить">⋮⋮</span>
       <span class="ind-check${visible?' checked':''}" onclick="toggleCol('${id}',this)">✓</span>
       <span class="ind-name">${col.l}</span>
       <span class="ind-sub">${col.s}</span>`;
@@ -5515,9 +5498,9 @@ function setChartVisibleBars(v){
   schedulePersistUserSettings();
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  FULLSCREEN ANALYSIS
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function buildFsChartLayout(){
   const area=document.getElementById('fsChartArea');
   if(!area)return;
@@ -5631,7 +5614,16 @@ async function loadMoreFsHistory(idx){
     const raw=await fj(`${API}/klines?symbol=${S.fsSym}&interval=${fch.tf}&limit=${HIST_LIMIT}&endTime=${fch.candles[0].t-1}`);
     if(!raw?.length){fch.histLoading=false;return;}
     const nc=parseKlines(raw);if(!fch.cs||!fch.lc)return;
-    const vr=fch.lc.timeScale().getVisibleRange();
+    const fts=fch.lc.timeScale();
+    let logRange=null,vTime=null;
+    try{logRange=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;}catch(e){}
+    try{if(typeof fts.getVisibleRange==='function')vTime=fts.getVisibleRange();}catch(e){}
+    let pr=null;
+    try{
+      const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
+      if(ps&&typeof ps.getVisibleRange==='function')pr=ps.getVisibleRange();
+    }catch(e){}
+    const prepended=nc.length;
     fch.candles=[...nc,...fch.candles];
     const merged=fch.candles;
     const doSet=()=>{
@@ -5639,9 +5631,18 @@ async function loadMoreFsHistory(idx){
       try{
         fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+        const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+        try{fts.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
+        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
+          try{fts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+        }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{fts.setVisibleRange(vTime);}catch(e){}}
+        try{
+          const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
+          if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
+        }catch(e){}
         repaintBbSeries(fch);
-        repaintOiSeries(fch);
-        if(vr)try{fch.lc.timeScale().setVisibleRange(vr);}catch(e){}
+        if(S.showOiOnChart&&S.fsSym)void refreshChartOiSeries(fch,fch.tf,S.fsSym);
+        else{fch._oiHist=alignOiToCandles(merged,fch._oiRaw||[]);repaintOiSeries(fch);}
       }catch(e){}
     };
     if(typeof requestIdleCallback!=='undefined'){requestIdleCallback(doSet,{timeout:2000});}
@@ -5651,6 +5652,7 @@ async function loadMoreFsHistory(idx){
 
 function openFullscreenBySym(sym){
   if(!sym)return;
+  clearAllRulers();
   S.fsSym=sym;S.fsOpen=true;
   const body=document.getElementById('body');
   const fsBody=document.getElementById('fsBody');
@@ -5692,6 +5694,7 @@ function openFullscreen(slot){
 
 function closeFullscreen(){
   hideChartIndTooltip();
+  clearAllRulers();
   S.fsOpen=false;
   const body=document.getElementById('body');
   const fsBody=document.getElementById('fsBody');
@@ -5799,15 +5802,33 @@ function startFsWs(){
   S.fsWs=ws;
 }
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  BACKGROUND KLINES
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 async function loadKlinesBackground(){
   try{
+    const visible=S.charts.map(c=>c.sym).filter(Boolean);
     const top=Object.entries(S.tk).filter(([s])=>S.syms.includes(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
-    const all=top.slice(0);
+    const all=[...new Set([...visible,...top])];
     const trendTf=S.tf;
     const trendLim=trendKlineFetchLimit(trendTf);
+    if(visible.length){
+      const kVis=await batchKlines(visible,S.tf,Math.max(MIN_CHART_CANDLES,Math.min(HIST_INITIAL,500)),null,null,12);
+      for(const sym of visible){
+        const kl=kVis[sym];
+        if(!kl?.length)continue;
+        S.histCache[`${S.tf}:${sym}`]=kl.slice(-HIST_CACHE_MAX);
+        const slot=S.charts.findIndex(c=>c.sym===sym);
+        if(slot<0)continue;
+        const ch=S.charts[slot];
+        if(ch.sym!==sym||!ch.cs)continue;
+        ch.candles=kl.slice(-HIST_CACHE_MAX);
+        if(ch.candles.length>=MIN_CHART_CANDLES){
+          ch._histBootstrapDone=true;
+          try{paintSlotData(slot);}catch(e){}
+        }
+      }
+    }
     const [k5,k1h,k1m,kTr]=await Promise.all([
       batchKlines(all,'5m',300,null,null,8),
       batchKlines(all,'1h',170,null,null,8),
@@ -5827,9 +5848,9 @@ async function loadKlinesBackground(){
 
 function loadScript(url){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=url;s.onload=res;s.onerror=rej;document.head.appendChild(s);});}
 
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 //  MAIN
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
 function hydrateUserSession(){
   const pd=window.__pendingDrawings;
   if(pd&&typeof pd==='object'){
@@ -5916,6 +5937,16 @@ function hydrateUserSession(){
     if(typeof ps.draw.brushColor==='string'&&ps.draw.brushColor.startsWith('#'))_brushColor=ps.draw.brushColor;
     if(ps.draw.brushWidth!=null&&!isNaN(+ps.draw.brushWidth))_brushWidth=Math.max(1,Math.min(12,+ps.draw.brushWidth));
   }
+  if(ps.autoTrend&&typeof ps.autoTrend==='object'){
+    const at=ps.autoTrend;
+    if(at.pivotBars!=null)S.autoTrend.pivotBars=Math.max(2,Math.min(8,+at.pivotBars));
+    if(at.touchPct!=null)S.autoTrend.touchPct=Math.max(0.05,Math.min(2,+at.touchPct));
+    if(at.minTouches!=null)S.autoTrend.minTouches=Math.max(2,Math.min(8,+at.minTouches));
+    if(at.maxLines!=null)S.autoTrend.maxLines=Math.max(1,Math.min(10,+at.maxLines));
+    if(at.lookback!=null)S.autoTrend.lookback=Math.max(60,Math.min(400,+at.lookback));
+    if(at.extendBars!=null)S.autoTrend.extendBars=Math.max(0,Math.min(80,+at.extendBars));
+  }
+  syncFastBtnUi();
   if(ps.sortId&&typeof ps.sortId==='string'){
     S.sortId=ps.sortId;
     S.sortAlpha=!!ps.sortAlpha;
@@ -5977,449 +6008,285 @@ function hydrateUserSession(){
   return validArr;
 }
 
-async function main(){
-  try{
+async function main() {
+  try {
     loadChartViewPrefs();
     loadChartHeadPrefs();
     loadLineColorPrefs();
     loadUiPrefs();
-    ldSet('Загрузка библиотеки графиков…',5);
-    for(const url of['https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js','https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js']){
-      try{await loadScript(url);if(typeof LightweightCharts!=='undefined'){S.LC=LightweightCharts;break;}}catch(e){}
-    }
 
-    ldSet('Построение интерфейса…',12);
+    // Kick off the chart-library CDN load IMMEDIATELY and in parallel
+    // with everything else. The preconnect/dns-prefetch tags in index.html
+    // have already started DNS+TLS, so by the time we need LC (only
+    // when we call initLCChart) the script is usually already in flight.
+    ldSet('Загрузка библиотеки графиковвЂ¦',5);
+    const lcPromise = (async () => {
+      for (const url of [
+        'https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js',
+        'https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js',
+      ]) {
+        try {
+          await loadScript(url);
+          if (typeof LightweightCharts !== 'undefined') {
+            S.LC = LightweightCharts;
+            return;
+          }
+        } catch (e) { /* try the next CDN */ }
+      }
+    })();
+
+    ldSet('Построение интерфейсавЂ¦',12);
     buildChartGrid();
     ensureQuickFindUI();
+    updateToggleScrBtn(); // first paint: replace the ASCII placeholder
     buildScreenerHeader(document.getElementById('shdr'));
     updSortHdr();
-    if(S.LC)for(let i=0;i<S.gridSize;i++)initLCChart(i);
 
-    ldSet('Получение списка фьючерсов Binance…',18);
-    let info;
-    try{info=await fj(`${API}/exchangeInfo`);}
-    catch(e){throw new Error(`Не удалось подключиться к Binance API.\n${e.message}\n\nПричины: нет интернета, Binance заблокирован, CORS.`);}
-    S.syms=info.symbols.filter(s=>s.contractType==='PERPETUAL'&&s.quoteAsset==='USDT'&&s.status==='TRADING').map(s=>s.symbol).sort();
+    // ── IDB cache hydrate ──────────────────────────────────────────
+    // Show cached ticker/symbols immediately so the screener is not
+    // empty during the ~1-3s Binance round-trip. Fresh data will
+    // overwrite these values a moment later.
+    let _cacheHitSyms = false;
+    let _cacheHitTk = false;
+    const idbPromise = (async () => {
+      if (!cacheHasIDB()) return;
+      try {
+        const [cachedSyms, cachedTk] = await Promise.all([
+          cacheGetFresh('binance:symbols', 24 * 60 * 60 * 1000),
+          cacheGetFresh('binance:ticker24', 30 * 1000),
+        ]);
+        if (Array.isArray(cachedSyms) && cachedSyms.length) {
+          S.syms = cachedSyms;
+          _cacheHitSyms = true;
+        }
+        if (cachedTk && typeof cachedTk === 'object') {
+          Object.assign(S.tk, cachedTk);
+          _cacheHitTk = true;
+        }
+        if (_cacheHitSyms || _cacheHitTk) {
+          // Render placeholder rows so the UI is not blank while fresh
+          // data is fetched. mx is still empty so most metrics show as
+          // dashes; we will re-render once calcAll() has run.
+          renderTable();
+        }
+      } catch (e) { /* cache is best-effort, never block init */ }
+    })();
 
-    ldSet('Загрузка 24-часовых данных…',45);
-    const rawTk=await fj(`${API}/ticker/24hr`);
-    for(const t of rawTk)if(t.symbol.endsWith('USDT'))
-      S.tk[t.symbol]={p:+t.lastPrice,c24:+t.priceChangePercent,h24:+t.highPrice,l24:+t.lowPrice,qv:+t.quoteVolume,tr:+t.count};
+    // Wait for LC AND IDB in parallel before doing anything that needs them.
+    await Promise.all([lcPromise, idbPromise]);
+    if (S.LC) for (let i = 0; i < S.gridSize; i++) initLCChart(i);
 
-    ldSet('Вычисление метрик…',70);calcAll();
+    // ── Exchange info + 24h ticker in parallel ─────────────────────
+    // These two endpoints are independent — fire them together so the
+    // serial round-trips become one round-trip. Both have separate
+    // try/catch fallbacks below.
+    ldSet('Получение списка фьючерсов BinanceвЂ¦',18);
+    const [infoResult, tkResult] = await Promise.allSettled([
+      fj(`${API}/exchangeInfo`),
+      fj(`${API}/ticker/24hr`),
+    ]);
+
+    if (infoResult.status === 'fulfilled') {
+      const info = infoResult.value;
+      if (info && Array.isArray(info.symbols)) {
+        S.syms = info.symbols
+          .filter(s => s?.contractType === 'PERPETUAL' && s?.quoteAsset === 'USDT' && s?.status === 'TRADING')
+          .map(s => s.symbol)
+          .sort();
+        cacheSet('binance:symbols', S.syms, 24 * 60 * 60 * 1000);
+      }
+    } else {
+      const e = infoResult.reason;
+      if (_cacheHitSyms) {
+        console.warn('exchangeInfo refresh failed, using cache:', e.message);
+      } else {
+        throw new Error(`Не удалось подключиться к Binance API.\n${e.message}\n\nПричины: нет интернета, Binance заблокирован, CORS.`);
+      }
+    }
+
+    ldSet('Загрузка 24-часовых данныхвЂ¦',45);
+    if (tkResult.status === 'fulfilled') {
+      const rawTk = tkResult.value;
+      if (Array.isArray(rawTk)) {
+        for (const t of rawTk) {
+          if (t?.symbol?.endsWith('USDT'))
+            S.tk[t.symbol] = { p: +t.lastPrice, c24: +t.priceChangePercent, h24: +t.highPrice, l24: +t.lowPrice, qv: +t.quoteVolume, tr: +t.count };
+        }
+        // Persist the freshly-built map for next cold start.
+        cacheSet('binance:ticker24', S.tk, 30 * 1000);
+      }
+    } else if (!_cacheHitTk) {
+      console.warn('ticker/24hr failed:', tkResult.reason && tkResult.reason.message);
+    }
+
+    ldSet('Вычисление метриквЂ¦',70);
+    // Run the heavy per-symbol metric pass off the main thread when we
+    // can. Fall back to the synchronous calcAll() in any failure case
+    // (worker unsupported, timeout, postMessage error) so behaviour
+    // is identical for users on browsers without Worker support.
+    try {
+      if (workerAvailable()) {
+        const payload = {
+          syms: S.syms,
+          k5m: S.k5m, k1h: S.k1h, k1m: S.k1m,
+          tk: S.tk,
+          fundRates: _fundRates,
+          oiDelta: _oiDelta,
+          prevMx: S.mx,
+          dayStartMs: new Date().setHours(0, 0, 0, 0),
+        };
+        const res = await runMetrics(payload);
+        if (res && res.mx) {
+          S.mx = res.mx;
+          if (Array.isArray(res.btcR)) S.btcR = res.btcR;
+        } else {
+          calcAll();
+        }
+      } else {
+        calcAll();
+      }
+    } catch (e) {
+      console.warn('metrics worker failed, falling back to main thread:', e.message);
+      calcAll();
+    }
     ldSet('Готово!',100);
-    renderTable();updSortHdr();updTime();refreshEMAButtonState();
-    setTimeout(ldHide,150);
-    const restoredLayout=hydrateUserSession();
-    if(!restoredLayout)updateCharts();
+    renderTable(); updSortHdr(); updTime(); refreshEMAButtonState();
+    setTimeout(ldHide, 150);
+
+    // Defer trivial UI-sync calls so the loader can fade out and the
+    // first paint of the chart grid happens immediately. These calls
+    // each toggle a button's `on` class — they don't block layout.
+    requestIdleCallback(() => {
+      syncFastBtnUi();
+      syncChartSyncBtnUi();
+      syncOiChartBtnUi();
+      syncBbBtnUi();
+    }, { timeout: 1000 });
+
+    const restoredLayout = hydrateUserSession();
+    if (!restoredLayout) updateCharts();
     renderTable();
-    restartChartStreams(0);startScreenerWS();
-    syncFastBtnUi();
-    syncChartSyncBtnUi();
-    syncOiChartBtnUi();
-    syncBbBtnUi();
-    S.bgDone=true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
+    restartChartStreams(0); startScreenerWS();
+    S.bgDone = true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
     loadKlinesBackground();
     startRealtimeWatchdog();
     ensureFundOiLoop();
-    setTimeout(autoResizeScreener,300);
-  }catch(err){
-    console.error('Init error:',err);ldSet('Ошибка загрузки',100);ldErr(err.message||String(err));
+    setTimeout(autoResizeScreener, 300);
+  } catch (err) {
+    console.error('Init error:', err); ldSet('Ошибка загрузки', 100); ldErr(err.message || String(err));
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  POTENTIAL MONITOR — multi-preset tabbed system
-// ═══════════════════════════════════════════════════════════════
-const POT_FIELDS=[
-  {id:'ch24',   label:'ИЗМ 24ч %',  unit:'%',  step:0.5},
-  {id:'cday',   label:'ИЗМ день %', unit:'%',  step:0.5},
-  {id:'bbSqz',  label:'BB Squeeze', unit:'',   step:1},
-  {id:'bbBreak',label:'BB Breakout',unit:'',   step:1},
-  {id:'volImpulse',label:'Volume impulse',unit:'',step:1},
-  {id:'emaTouch',label:'EMA touch', unit:'',   step:1},
-  {id:'vr5',    label:'ОБ* 5м',     unit:'×',  step:0.1},
-  {id:'vr1h',   label:'ОБ* 1ч',     unit:'×',  step:0.1},
-  {id:'tr5',    label:'СД* 5м',     unit:'×',  step:0.1},
-  {id:'tr1h',   label:'СД* 1ч',     unit:'×',  step:0.1},
-  {id:'na14',   label:'NATR 5м',    unit:'%',  step:0.01},
-  {id:'na30',   label:'NATR 1м',    unit:'%',  step:0.01},
-  {id:'trd24',  label:'Сделки 24ч', unit:'',   step:50},
-  {id:'vol24',  label:'Объём 24ч',  unit:'M$', step:10},
-];
-const POT_FIELD_DESC={
-  ch24:'Изменение цены за 24 часа в процентах.',
-  cday:'Изменение цены с начала текущего дня в процентах.',
-  bbSqz:'Полосы Боллинджера сжались относительно прошлого бара (узкий диапазон).',
-  bbBreak:'Цена вышла за верхнюю/нижнюю полосу Боллинджера на последней свече.',
-  volImpulse:'Есть всплеск объёма: ОБ* 5м >= 1.25 относительно последних 14 свечей.',
-  emaTouch:'Касание EMA выбранного периода последней свечой (high/low пересекает EMA).',
-  vr5:'Объём последней 5м свечи к среднему объёму за 14 свечей.',
-  vr1h:'Объём последней 1ч свечи к среднему за 24 часа.',
-  tr5:'Сделки последней 5м свечи к среднему за 14 свечей.',
-  tr1h:'Сделки последней 1ч свечи к среднему за 24 часа.',
-  na14:'NATR на 5м (волатильность относительно цены).',
-  na30:'NATR на 1м (волатильность относительно цены).',
-  trd24:'Количество сделок за 24 часа.',
-  vol24:'Торговый объём за 24 часа в миллионах USDT.',
-};
-
-function calcEmaTouchSignal(sym,period){
-  const p=Math.max(2,Math.min(400,period|0));
-  const k5=S.k5m[sym];
-  if(!Array.isArray(k5)||k5.length<p+1)return 0;
-  const vals=calcEMA(k5,p);
-  if(!vals||!vals.length)return 0;
-  const last=k5[k5.length-1];
-  const ema=vals[vals.length-1];
-  if(!last||!isFinite(ema))return 0;
-  return(last.l<=ema&&last.h>=ema)?1:0;
-}
+// ───────────────────────────────────────────────────────────────
+//  POTENTIAL MONITOR • multi-preset tabbed system
+// ───────────────────────────────────────────────────────────────
+// POT_FIELDS, POT_FIELD_DESC, POT_ABS_FIELDS and pure helpers live in
+// potentialPresets.js (extracted during refactor).
 
 let _potActiveTab=null; // preset id
 
 function togglePotentialPanel(){
-  const p=document.getElementById('potentialPanel');
-  if(!p)return;
-  const vis=p.style.display==='none'||p.style.display==='';
-  p.style.display=vis?'flex':'none';
-  const btn=document.getElementById('potBtn');if(btn)btn.classList.toggle('on',vis);
-  if(vis)renderPotentialPanel();
+  togglePotentialPanelUi({ S, renderPotentialPanel });
 }
 
 function renderPotentialPanel(){
-  const panel=document.getElementById('potentialPanel');if(!panel)return;
-  // Tabs bar
-  let tabBar=panel.querySelector('.pot-tab-bar');
-  if(!tabBar){tabBar=document.createElement('div');tabBar.className='pot-tab-bar';panel.querySelector('.pot-hdr').after(tabBar);}
-  tabBar.innerHTML='';
-  S.potentialPresets.forEach(pr=>{
-    const tab=document.createElement('button');
-    tab.className='pot-tab'+(pr.id===_potActiveTab?' active':'');
-    const cnt=Object.keys(pr.matches||{}).length;
-    tab.innerHTML=`<span>${pr.name}</span>${cnt?`<span class="pot-tab-cnt">${cnt}</span>`:''}`;
-    tab.onclick=()=>{_potActiveTab=pr.id;renderPotentialPanel();};
-    tab.oncontextmenu=ev=>{ev.preventDefault();openPotPresetEditor(pr.id);};
-    tabBar.appendChild(tab);
+  renderPotentialPanelUi({
+    S,
+    activeTabRef: { current: _potActiveTab, set: (v) => { _potActiveTab = v; } },
+    setActiveTab: (id) => { _potActiveTab = id; },
+    openPotPresetEditorUi: openPotPresetEditor,
+    addBuiltinSqueezePreset,
+    togglePotPresetUi: togglePotPreset,
+    deletePotPresetUi: deletePotPreset,
+    openFullscreenBySym,
+    fmt: { fn, fk, fmtPrice },
+    groupColors: GROUP_COLORS,
+    getSymGroup,
   });
-  // Add button
-  const tplBtn=document.createElement('button');
-  tplBtn.className='pot-tab';
-  tplBtn.title='Готовый пресет: BB squeeze + volume impulse + breakout';
-  tplBtn.textContent='＋Squeeze';
-  tplBtn.onclick=()=>{addBuiltinSqueezePreset();renderPotentialPanel();};
-  tabBar.appendChild(tplBtn);
-  const addBtn=document.createElement('button');
-  addBtn.className='pot-tab pot-tab-add';addBtn.title='Добавить пресет';addBtn.textContent='＋';
-  addBtn.onclick=()=>openPotPresetEditor(null);
-  tabBar.appendChild(addBtn);
-
-  // Body area
-  let body=panel.querySelector('.pot-body');
-  if(!body){body=document.createElement('div');body.className='pot-body';panel.appendChild(body);}
-  body.innerHTML='';
-
-  const pr=S.potentialPresets.find(p=>p.id===_potActiveTab);
-  if(!pr){
-    body.innerHTML='<div class="pot-empty">Нажми ＋ чтобы добавить пресет с условиями</div>';
-    return;
-  }
-
-  // Preset controls
-  const ctrl=document.createElement('div');ctrl.className='pot-preset-ctrl';
-  ctrl.innerHTML=`
-    <span style="font-size:9px;color:var(--text3);flex:1">${pr.conditions.length} условий</span>
-    <button class="tbtn${pr.enabled?' on':''}" onclick="togglePotPreset('${pr.id}')">${pr.enabled?'● Вкл':'○ Выкл'}</button>
-    <button class="tbtn" onclick="openPotPresetEditor('${pr.id}')" title="Редактировать">✎</button>
-    <button class="tbtn" onclick="deletePotPreset('${pr.id}')" style="color:var(--red)" title="Удалить">✕</button>`;
-  body.appendChild(ctrl);
-
-  // Conditions summary
-  if(pr.conditions.length){
-    const cond=document.createElement('div');cond.className='pot-cond-summary';
-    cond.innerHTML=pr.conditions.map(c=>{
-      const f=POT_FIELDS.find(x=>x.id===c.field);
-      const parts=[];
-      if(c.field==='emaTouch')parts.push(`period=${Math.max(2,Math.min(400,c.period||20))}`);
-      else{
-        if(c.min!=null)parts.push(`≥${c.min}${f?.unit||''}`);
-        if(c.max!=null)parts.push(`≤${c.max}${f?.unit||''}`);
-      }
-      const absTxt=c.abs&&['ch24','cday','bbBreak'].includes(c.field)?'|.| ':'';
-      return`<span class="pot-cond-tag">${absTxt}${f?.label||c.field} ${parts.join(' ')}</span>`;
-    }).join('');
-    body.appendChild(cond);
-    const dsc=document.createElement('div');
-    dsc.style.cssText='display:flex;flex-direction:column;gap:3px;margin-top:6px';
-    dsc.innerHTML=pr.conditions.map(c=>{
-      const txt=POT_FIELD_DESC[c.field];
-      return txt?`<span style="font-size:9px;color:var(--text3)">• ${txt}</span>`:'';
-    }).join('');
-    if(dsc.innerHTML.trim())body.appendChild(dsc);
-  }
-
-  // Matches list
-  const listEl=document.createElement('div');listEl.className='pot-list';
-  const matches=Object.entries(pr.matches||{}).sort((a,b)=>b[1].ts-a[1].ts);
-  if(!matches.length){
-    listEl.innerHTML=`<div class="pot-empty">${pr.enabled?'Совпадений нет — ждём…':'Мониторинг выключен'}</div>`;
-  } else {
-    matches.forEach(([sym,d])=>{
-      const sn=sym.replace(/USDT$/,'');
-      const m=S.mx[sym]||{};
-      const col=(m.ch24??0)>=0?'#1fa891':'#e04040';
-      const grp=getSymGroup(sym);const grpCol=GROUP_COLORS[grp]||'';
-      const item=document.createElement('div');item.className='pot-item';
-      item.onclick=()=>openFullscreenBySym(sym);
-      const tags=pr.conditions.map(c=>{
-        const f=POT_FIELDS.find(x=>x.id===c.field);
-        let val=m[c.field];
-        if(c.field==='emaTouch')val=calcEmaTouchSignal(sym,c.period||20);
-        let fmt;
-        if(c.field==='vol24'||c.field==='trd24')fmt=fk(val);
-        else if(c.field==='bbSqz'||c.field==='volImpulse')fmt=(val!=null&&+val>=1)?'✓':'·';
-        else if(c.field==='bbBreak')fmt=val>0?'↑':val<0?'↓':'·';
-        else if(c.field==='emaTouch')fmt=val>=1?`✓(${Math.max(2,Math.min(400,c.period||20))})`:`·(${Math.max(2,Math.min(400,c.period||20))})`;
-        else fmt=val!=null?fn(val,2):'—';
-        const absTxt=c.abs&&['ch24','cday','bbBreak'].includes(c.field)?'|.| ':'';
-        return`<span class="pot-tag">${absTxt}${f?.label?.split(' ')[0]||c.field} ${fmt}${f?.unit?f.unit:''}</span>`;
-      }).join('');
-      item.innerHTML=`
-        ${grpCol?`<span style="width:3px;align-self:stretch;background:${grpCol};border-radius:2px;flex-shrink:0"></span>`:''}
-        <span class="pot-sym">${sn}</span>
-        <span style="color:${col};font-weight:600;font-size:10px">${(m.ch24??0)>=0?'+':''}${fn(m.ch24,2)}%</span>
-        ${tags}
-        <span style="color:var(--text3);font-size:9px;margin-left:auto">${fmtPrice(m.price)}</span>`;
-      listEl.appendChild(item);
-    });
-  }
-  body.appendChild(listEl);
 }
 
 function openPotPresetEditor(presetId){
-  const existing=presetId?S.potentialPresets.find(p=>p.id===presetId):null;
-  const old=document.getElementById('potPresetModal');if(old)old.remove();
-  const modal=document.createElement('div');modal.id='potPresetModal';
-  modal.style.cssText='position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;';
-  const box=document.createElement('div');
-  box.style.cssText='background:var(--bg2);border:1px solid var(--border2);border-radius:8px;width:min(520px,96vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.8)';
-
-  // Working copy of conditions
-  const wCond=(existing?.conditions||[]).map(c=>({...c,abs:!!c.abs}));
-
-  const render=()=>{
-    box.innerHTML=`
-      <div style="display:flex;align-items:center;padding:12px 14px;border-bottom:1px solid var(--border);flex-shrink:0;gap:8px">
-        <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${existing?'Редактировать':'Новый'} пресет</span>
-        <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:15px" onclick="document.getElementById('potPresetModal').remove()">✕</button>
-      </div>
-      <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0">
-        <label style="font-size:9px;color:var(--text3);display:block;margin-bottom:4px">НАЗВАНИЕ</label>
-        <input id="potPresetName" value="${existing?.name||''}" placeholder="Например: Импульс роста"
-          style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:5px 8px;outline:none">
-      </div>
-      <div style="padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;display:flex;align-items:center;justify-content:space-between">
-        <span style="font-size:10px;color:var(--text2)">Условия (ВСЕ должны совпасть)</span>
-        <button class="tbtn" id="potAddCond">＋ Условие</button>
-      </div>
-      <div id="potCondList" style="flex:1;overflow-y:auto;min-height:0;padding:6px 14px"></div>
-      <div style="padding:10px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
-        <button class="tbtn" style="flex:1;color:var(--text2)" onclick="document.getElementById('potPresetModal').remove()">Отмена</button>
-        <button class="tbtn on" style="flex:2" id="potSaveBtn">✓ Сохранить</button>
-      </div>
-      ${existing?`<div style="padding:8px 14px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0">
-        <button class="tbtn${existing.enabled?' on':''}" style="flex:1" id="potToggleBtn">${existing.enabled?'● Вкл':'○ Выкл'} алерты</button>
-        <button class="tbtn" style="flex:1;color:var(--red)" id="potDeleteBtn">Удалить пресет</button>
-      </div>`:''}`;
-
-    // Render conditions
-    const cl=box.querySelector('#potCondList');
-    if(!wCond.length){cl.innerHTML='<div style="font-size:9px;color:var(--text3);padding:8px 0">Нет условий — нажми ＋ чтобы добавить</div>';}
-    wCond.forEach((c,idx)=>{
-      const f=POT_FIELDS.find(x=>x.id===c.field)||POT_FIELDS[0];
-      const row=document.createElement('div');
-      row.style.cssText='display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(37,37,48,.5)';
-      row.innerHTML=`
-        <select style="flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:3px 4px">
-          ${POT_FIELDS.map(x=>`<option value="${x.id}"${x.id===c.field?' selected':''}>${x.label}</option>`).join('')}
-        </select>
-        <label title="Игнорировать направление (+/-), использовать модуль" style="display:flex;align-items:center;gap:3px;font-size:9px;color:var(--text3);${['ch24','cday','bbBreak'].includes(c.field)?'':'visibility:hidden'}">
-          |x|
-          <input type="checkbox" ${c.abs?'checked':''}>
-        </label>
-        <span style="font-size:9px;color:var(--text3)">от</span>
-        <input type="number" value="${c.min??''}" placeholder="—" step="${f.step}" class="pot-min"
-          style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <span style="font-size:9px;color:var(--text3)">до</span>
-        <input type="number" value="${c.max??''}" placeholder="—" step="${f.step}" class="pot-max"
-          style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <span style="font-size:9px;color:var(--text3);${c.field==='emaTouch'?'':'display:none;'}" class="pot-ema-lbl" title="Период EMA, по умолчанию 20">EMA period</span>
-        <input type="number" value="${Math.max(2,Math.min(400,c.period||20))}" min="2" max="400" step="1"
-          class="pot-ema-period" title="Период EMA для условия EMA touch" style="width:68px;${c.field==='emaTouch'?'':'display:none;'}background:var(--bg3);border:1px solid var(--border2);border-radius:3px;color:var(--text);font:inherit;font-size:9px;padding:2px 4px;text-align:right">
-        <button style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:12px;padding:0 2px" data-del="${idx}">✕</button>
-        <span style="display:none" class="pot-desc">${POT_FIELD_DESC[c.field]||''}</span>`;
-      const sel=row.querySelector('select');
-      sel.onchange=()=>{
-        wCond[idx].field=sel.value;
-        if(sel.value==='emaTouch'&&(wCond[idx].period==null||!isFinite(wCond[idx].period)))wCond[idx].period=20;
-        render();
-      };
-      const absCb=row.querySelector('input[type=checkbox]');
-      if(absCb)absCb.onchange=()=>{wCond[idx].abs=absCb.checked;};
-      const minI=row.querySelector('.pot-min');
-      const maxI=row.querySelector('.pot-max');
-      minI.onchange=()=>{const v=parseFloat(minI.value);wCond[idx].min=isNaN(v)?null:v;};
-      maxI.onchange=()=>{const v=parseFloat(maxI.value);wCond[idx].max=isNaN(v)?null:v;};
-      const pI=row.querySelector('.pot-ema-period');
-      if(pI)pI.onchange=()=>{const v=Math.max(2,Math.min(400,parseInt(pI.value||'20',10)||20));wCond[idx].period=v;pI.value=String(v);};
-      row.querySelector('[data-del]').onclick=()=>{wCond.splice(idx,1);render();};
-      cl.appendChild(row);
-      if(POT_FIELD_DESC[c.field]){
-        const hint=document.createElement('div');
-        hint.style.cssText='font-size:8px;color:var(--text3);margin:-1px 0 5px 2px;line-height:1.35';
-        hint.textContent=POT_FIELD_DESC[c.field];
-        cl.appendChild(hint);
-      }
-    });
-
-    box.querySelector('#potAddCond').onclick=()=>{wCond.push({field:'ch24',min:null,max:null,abs:false,period:20});render();};
-    box.querySelector('#potSaveBtn').onclick=()=>{
-      const name=box.querySelector('#potPresetName').value.trim()||'Пресет';
-      // read current input values
-      box.querySelectorAll('#potCondList .pot-cond-row-data').forEach(()=>{});
-      if(existing){
-        existing.name=name;existing.conditions=[...wCond];
-      } else {
-        const id='pot'+Date.now();
-        S.potentialPresets.push({id,name,conditions:[...wCond],matches:{},alerted:{},enabled:true,cooldown:60});
-        _potActiveTab=id;
-      }
-      modal.remove();renderPotentialPanel();runPotentialCheck();buildGroupFilterBar();
-    };
-    const tg=box.querySelector('#potToggleBtn');
-    if(tg&&existing){
-      tg.onclick=()=>{
-        existing.enabled=!existing.enabled;
-        if(existing.enabled){
-          if(!S._potInterval)S._potInterval=setInterval(runPotentialCheck,15000);
-          runPotentialCheck();
-        }else{
-          existing.matches={};existing.alerted={};
-          renderPotentialPanel();buildGroupFilterBar();
-        }
-        tg.classList.toggle('on',existing.enabled);
-        tg.textContent=(existing.enabled?'● Вкл':'○ Выкл')+' алерты';
-      };
-    }
-    const del=box.querySelector('#potDeleteBtn');
-    if(del&&existing){
-      del.onclick=()=>{
-        showConfirmModal(`Удалить пресет "${existing.name}"?`,{
-          title:'Удаление пресета',
-          okText:'Удалить',
-          danger:true,
-          onConfirm:()=>{deletePotPreset(existing.id);modal.remove();}
-        });
-      };
-    }
-  };
-  render();
-  modal.appendChild(box);document.body.appendChild(modal);
-  modal.addEventListener('mousedown',e=>{if(e.target===modal)modal.remove();});
+  openPotPresetEditorUi(presetId, {
+    S,
+    setActiveTab: (id) => { _potActiveTab = id; },
+    renderPotentialPanel,
+    runPotentialCheck,
+    buildGroupFilterBar,
+    togglePotPresetUi: togglePotPreset,
+    deletePotPresetUi: deletePotPreset,
+    showConfirmModal,
+  });
 }
 
+
 function togglePotPreset(id){
-  const pr=S.potentialPresets.find(p=>p.id===id);if(!pr)return;
-  pr.enabled=!pr.enabled;
-  if(pr.enabled){if(!S._potInterval)S._potInterval=setInterval(runPotentialCheck,15000);runPotentialCheck();}
-  else{pr.matches={};pr.alerted={};}
-  renderPotentialPanel();
-  buildGroupFilterBar();
+  togglePotPresetUi(id, {
+    S,
+    setActiveTab: (v) => { _potActiveTab = v; },
+    startPotentialMonitor,
+    renderPotentialPanel,
+    buildGroupFilterBar,
+  });
 }
 
 function deletePotPreset(id){
-  const idx=S.potentialPresets.findIndex(p=>p.id===id);if(idx<0)return;
-  S.potentialPresets.splice(idx,1);
-  if(_potActiveTab===id)_potActiveTab=S.potentialPresets[0]?.id||null;
-  renderPotentialPanel();
-  buildGroupFilterBar();
+  deletePotPresetUi(id, {
+    S,
+    activeTabRef: { current: _potActiveTab },
+    setActiveTab: (v) => { _potActiveTab = v; },
+    renderPotentialPanel,
+    buildGroupFilterBar,
+  });
 }
 
 function addBuiltinSqueezePreset(){
-  const id='pot_sqz_'+Date.now();
-  S.potentialPresets.push({
-    id,
-    name:'BB squeeze + Volume impulse + Breakout',
-    conditions:[
-      {field:'bbSqz',min:0.99,max:null,abs:false},
-      {field:'volImpulse',min:0.99,max:null,abs:false},
-      {field:'bbBreak',min:0.99,max:null,abs:true},
-    ],
-    matches:{},
-    alerted:{},
-    enabled:false,
-    cooldown:120,
+  addBuiltinSqueezePresetUi({
+    S,
+    setActiveTab: (id) => { _potActiveTab = id; },
   });
-  _potActiveTab=id;
 }
 
 function runPotentialCheck(){
   const now=Date.now();let anyEnabled=false;
   S.potentialPresets.forEach(pr=>{
     if(!pr.enabled)return;anyEnabled=true;
-    const newMatches={};
-    for(const sym of S.syms){
-      const m=S.mx[sym];if(!m)continue;
-      const ok=pr.conditions.every(c=>{
-        let field=c.field;
-        if(field==='sqzPop')field='bbSqz';
-        let val=field==='emaTouch'?calcEmaTouchSignal(sym,c.period||20):m[field];
-        // vol24 is in USDT, convert condition to USDT (user enters in M$)
-        if(field==='vol24')val=val/1e6;
-        if(c.abs&&['ch24','cday','bbBreak'].includes(field))val=Math.abs(val);
-        if(val==null||isNaN(val))return false;
-        if(c.min!=null&&val<c.min)return false;
-        if(c.max!=null&&val>c.max)return false;
-        return true;
-      });
-      if(ok)newMatches[sym]={ts:pr.matches[sym]?.ts||now,price:m.price,ch24:m.ch24};
+    const {matched,details}=scanPresetMatches(
+      pr,
+      S.syms,
+      sym=>S.mx[sym],
+      sym=>S.k5m[sym],
+      calcEMA,
+    );
+    const toAlert=selectAlertableSymbols(matched,pr,now);
+    for(const sym of toAlert){
+      pr.alerted[sym]=now;
+      playAlert(660);
+      const m=S.mx[sym]||{};
+      S.alertLog.unshift({ts:now,sym,curPrice:m.price,linePrice:m.price,distPct:0,type:'potential',alertPct:0,presetName:pr.name});
+      if(S.alertLog.length>50)S.alertLog.pop();
+      renderAlertLog();
+      const badge=document.getElementById('alertBadge');
+      if(badge){badge.textContent=S.alertLog.length;badge.style.display='inline';}
     }
-    // Alert for newly appeared symbols
-    for(const sym of Object.keys(newMatches)){
-      if(!pr.matches[sym]){
-        const lastAlert=pr.alerted[sym]||0;
-        const coolMs=(pr.cooldown||60)*1000;
-        if(now-lastAlert>coolMs){
-          pr.alerted[sym]=now;
-          playAlert(660);
-          // Add to alert history log
-          const m=S.mx[sym]||{};
-          S.alertLog.unshift({ts:now,sym,curPrice:m.price,linePrice:m.price,distPct:0,type:'potential',alertPct:0,presetName:pr.name});
-          if(S.alertLog.length>50)S.alertLog.pop();
-          renderAlertLog();
-          const badge=document.getElementById('alertBadge');
-          if(badge){badge.textContent=S.alertLog.length;badge.style.display='inline';}
-        }
-      }
+    // Attach per-symbol EMA touch snapshot so the panel renderer can show ✓/· for each period used.
+    const emaTouchPeriods=Array.from(new Set(pr.conditions.filter(c=>c.field==='emaTouch').map(c=>clampEmaPeriodPp(c.period||20))));
+    const newMatches={};
+    for(const sym of matched){
+      const emaTouch={};
+      for(const p of emaTouchPeriods)emaTouch[p]=evalEmaTouchSignal(S.k5m[sym],calcEMA,p);
+      newMatches[sym]={...details[sym],emaTouch};
     }
     pr.matches=newMatches;
   });
-  // Update badge
-  const totalMatches=S.potentialPresets.reduce((s,p)=>s+Object.keys(p.matches||{}).length,0);
-  const badge=document.getElementById('potBadge');
-  if(badge){badge.textContent=totalMatches;badge.style.display=totalMatches?'inline':'none';}
-  // Re-render panel if open
+  updatePotBadgeUi(S);
   const panel=document.getElementById('potentialPanel');
   if(panel&&panel.style.display!=='none')renderPotentialPanel();
-  // Rebuild group/potential filter bar to show updated counts
   buildGroupFilterBar();
   if(!anyEnabled&&S._potInterval){clearInterval(S._potInterval);S._potInterval=null;}
 }
 
 function clearPotentialMatches(){
-  S.potentialPresets.forEach(pr=>{pr.matches={};pr.alerted={};});
-  renderPotentialPanel();
-  const badge=document.getElementById('potBadge');if(badge)badge.style.display='none';
+  clearPotentialMatchesUi({ S, renderPotentialPanel });
 }
 
 function startPotentialMonitor(){
@@ -6443,28 +6310,12 @@ function calcGridCoinScore(m){
 }
 
 function getGridSelectorRows(limit=20){
-  const rows=[];
-  for(const sym of S.syms){
-    const m=S.mx[sym];
-    if(!m)continue;
-    const score=calcGridCoinScore(m);
-    if(score==null||!isFinite(score))continue;
-    rows.push({
-      sym,
-      score,
-      range24:m.r24||0,
-      natr:m.na14||0,
-      ch24:m.ch24||0,
-      vol24:m.vol24||0,
-      trd24:m.trd24||0,
-    });
-  }
-  rows.sort((a,b)=>b.score-a.score);
-  return rows.slice(0,Math.max(3,Math.min(60,limit|0)));
+  return getGridSelectorRowsUi(S.syms, S.mx, calcGridCoinScore, { limit });
 }
 
 async function ensureBacktestCandles(sym,tf,bars){
-  const key=tf==='1m'?'k1m':tf==='1h'?'k1h':'k5m';
+  const key=tf==='1m'?'k1m':tf==='15m'?'k15m':tf==='1h'?'k1h':'k5m';
+  if(!S[key])S[key]={};
   const store=S[key];
   const want=Math.max(120,Math.min(1500,bars|0));
   const have=(store[sym]||[]).length;
@@ -6477,246 +6328,228 @@ async function ensureBacktestCandles(sym,tf,bars){
   return(store[sym]||[]).slice(-want);
 }
 
-function runManualGridBacktest(cfg){
-  const tf=String(cfg.tf||'5m');
-  const candles=(cfg.candles||[]).slice(-Math.max(80,Math.min(1200,cfg.bars||360)));
-  if(candles.length<30)return{ok:false,msg:`Недостаточно ${tf} истории для теста`};
-  const closes=candles.map(c=>c.c);
-  const lowSeries=candles.map(c=>c.l);
-  const highSeries=candles.map(c=>c.h);
-  const lo=cfg.lower>0?cfg.lower:Math.min(...lowSeries);
-  const hi=cfg.upper>0?cfg.upper:Math.max(...highSeries);
-  if(!(hi>lo))return{ok:false,msg:'Неверный диапазон сетки'};
-  const levels=Math.max(3,Math.min(60,cfg.levels|0));
-  const lev=Math.max(1,Math.min(25,cfg.leverage||1));
-  const fee=Math.max(0,Math.min(0.01,cfg.fee||0.0004));
-  const dep=Math.max(20,cfg.deposit||500);
-  const step=(hi-lo)/(levels-1);
-  const grid=Array.from({length:levels},(_,i)=>lo+step*i);
-  let cash=dep*0.5;
-  let asset=(dep*0.5)/closes[0];
-  const orderNotional=(dep*lev)/Math.max(8,levels);
-  let fees=0;
-  let fills=0;
-  const trades=[];
-  let buyRun=0,sellRun=0,maxOneSideRun=0;
-  const eq=[];
-  for(let i=1;i<candles.length;i++){
-    const c=candles[i];
-    for(const px of grid){
-      if(c.l<=px&&c.h>=px){
-        const qty=orderNotional/Math.max(px,1e-8);
-        const buyCost=qty*px*(1+fee);
-        if(c.o>=px&&cash>=buyCost){
-          cash-=buyCost;asset+=qty;fees+=qty*px*fee;fills++;
-          trades.push({time:toChartTime(c.t),price:px,side:'buy'});
-          buyRun++;sellRun=0;maxOneSideRun=Math.max(maxOneSideRun,buyRun);
-        }else if(asset>=qty){
-          const gain=qty*px*(1-fee);
-          asset-=qty;cash+=gain;fees+=qty*px*fee;fills++;
-          trades.push({time:toChartTime(c.t),price:px,side:'sell'});
-          sellRun++;buyRun=0;maxOneSideRun=Math.max(maxOneSideRun,sellRun);
-        }
-      }
+function pushGridLabBoundsUndo(body){
+  const modal=document.getElementById('gridLabModal');
+  pushBoundsUndo(
+    modal,
+    () => body.querySelector('#gbLow')?.value || '',
+    () => body.querySelector('#gbHigh')?.value || '',
+  );
+}
+function gridLabBoundsUndo(body,gbPrefs){
+  const modal=document.getElementById('gridLabModal');
+  if(!modal||!body)return;
+  const r = undoBounds(modal);
+  if(!r)return;
+  const loEl=body.querySelector('#gbLow'),hiEl=body.querySelector('#gbHigh');
+  const curLo=parseFloat(loEl?.value||''),curHi=parseFloat(hiEl?.value||'');
+  pushRedoFromCurrent(modal, curLo, curHi);
+  const prev=r.prev;
+  if(prev&&isFinite(prev.lo)&&isFinite(prev.hi)){
+    loEl.value=String(prev.lo);
+    hiEl.value=String(prev.hi);
+    const sym=String(body.querySelector('#gbSym')?.value||'').toUpperCase().trim();
+    if(sym){
+      applyBoundsToPrefs(gbPrefs, sym, prev.lo, prev.hi);
+      saveGridLabPrefs(gbPrefs);
     }
-    eq.push(cash+asset*c.c);
   }
-  const last=closes[closes.length-1];
-  const finalEq=cash+asset*last;
-  let peak=-Infinity,maxDd=0;
-  for(const v of eq){
-    if(v>peak)peak=v;
-    if(peak>0)maxDd=Math.max(maxDd,(peak-v)/peak*100);
+  if(body._gbChartCtx?.lc)body._gbPendingViewport=captureGbLabViewport(body._gbChartCtx.lc,body._gbChartCtx.cs);
+  scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
+}
+function gridLabBoundsRedo(body,gbPrefs){
+  const modal=document.getElementById('gridLabModal');
+  if(!modal||!body)return;
+  const r = redoBounds(modal);
+  if(!r)return;
+  const loEl=body.querySelector('#gbLow'),hiEl=body.querySelector('#gbHigh');
+  const curLo=parseFloat(loEl?.value||''),curHi=parseFloat(hiEl?.value||'');
+  pushUndoFromCurrent(modal, curLo, curHi);
+  const nxt=r.next;
+  if(nxt&&isFinite(nxt.lo)&&isFinite(nxt.hi)){
+    loEl.value=String(nxt.lo);
+    hiEl.value=String(nxt.hi);
+    const sym=String(body.querySelector('#gbSym')?.value||'').toUpperCase().trim();
+    if(sym){
+      applyBoundsToPrefs(gbPrefs, sym, nxt.lo, nxt.hi);
+      saveGridLabPrefs(gbPrefs);
+    }
   }
-  return{
-    ok:true,
-    symbol:cfg.sym,
-    tf,
-    bars:candles.length,
-    candles,
-    gridLevels:grid,
-    trades,
-    levels,
-    step,
-    maxOneSideRun,
-    lower:lo,
-    upper:hi,
-    fills,
-    fees,
-    startEq:dep,
-    finalEq,
-    pnl:finalEq-dep,
-    roi:(finalEq/dep-1)*100,
-    maxDd,
-  };
+  if(body._gbChartCtx?.lc)body._gbPendingViewport=captureGbLabViewport(body._gbChartCtx.lc,body._gbChartCtx.cs);
+  scheduleGridLabSync(body,gbPrefs,{reuseCandles:true});
+}
+/** Подпись уровня сетки на графике (тот же риск, что в панели). */
+// (gridRiskMetaForPrice + fmtGridLineTitle moved to ./gridLab.js)
+function renderGridRiskProfile(body, out, gbPrefs) {
+  const host = body.querySelector("#gbRisk");
+  if (!host) return;
+  if (!out || !out.ok) { host.innerHTML = ""; return; }
+  renderGridRiskProfileUi(host, body, out, gbPrefs, {
+    fn, fmtPrice,
+    scheduleGridLabSync,
+    captureGbLabViewport,
+    rCanvas,
+  });
 }
 
-function renderManualBacktestPreview(body,out){
-  const host=body.querySelector('#gbChart');
-  if(!host)return;
-  const prev=body._gbChartCtx;
-  if(prev?.ro){try{prev.ro.disconnect();}catch(e){}}
-  if(prev?.lc){try{prev.lc.remove();}catch(e){}}
-  body._gbChartCtx={lc:null,cs:null,ro:null};
-  host.innerHTML='';
-  if(!S.LC||!out?.ok||!Array.isArray(out.candles)||!out.candles.length)return;
-  const lc=S.LC.createChart(host,{
-    layout:{background:{color:'#0a0a0b'},textColor:'#606070'},
-    grid:{vertLines:{color:'#141418'},horzLines:{color:'#141418'}},
-    rightPriceScale:{borderColor:'#252530'},
-    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false},
-    crosshair:{mode:1},
-    handleScroll:{mouseWheel:true,pressedMouseMove:true},
-    handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
-  });
-  const cs=lc.addCandlestickSeries({
-    upColor:S.upColor,downColor:'#e04040',borderUpColor:S.upColor,borderDownColor:'#e04040',
-    wickUpColor:S.upColor,wickDownColor:'#e04040',
-    priceFormat:{type:'custom',formatter:p=>fmtPrice(p),minMove:0.0000001},
-  });
-  cs.setData(out.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-  (out.gridLevels||[]).forEach((p,i)=>{
-    cs.createPriceLine({
-      price:p,
-      color:'#60a5fa',
-      lineWidth:i===0||i===(out.gridLevels.length-1)?2:1,
-      lineStyle:2,
-      axisLabelVisible:false,
-      title:'',
-    });
-  });
-  if(typeof cs.setMarkers==='function'){
-    const markers=(out.trades||[]).map(t=>({
-      time:t.time,
-      position:t.side==='buy'?'belowBar':'aboveBar',
-      color:t.side==='buy'?'#16a34a':'#ef4444',
-      shape:t.side==='buy'?'arrowUp':'arrowDown',
-      text:t.side==='buy'?'B':'S',
-    }));
-    cs.setMarkers(markers);
+
+/** DOM-обёртка над computeRatioGridUpdate: читает инпуты, применяет, перерисовывает. */
+function applyGbRatioGrid(body, gbPrefs) {
+  const sym = String(body.querySelector('#gbSym')?.value || '').toUpperCase().trim();
+  const ratioLong = parseFloat(body.querySelector('#gbRatioLong')?.value || '');
+  const ratioShort = parseFloat(body.querySelector('#gbRatioShort')?.value || '');
+  const ratioStep = parseFloat(body.querySelector('#gbRatioStep')?.value || '');
+  const totalLevels = +body.querySelector('#gbLevels')?.value || 12;
+  // resolve anchor: prefer explicit anchorPrice, fall back to last candle close
+  let anchor = gbPrefs.symbolBounds?.[sym]?.anchorPrice;
+  const merged = body._gbChartCtx?.merged;
+  if (anchor == null || !isFinite(+anchor)) {
+    const last = merged?.length ? +merged[merged.length - 1].c : null;
+    anchor = isFinite(last) ? last : null;
   }
-  const ro=new ResizeObserver(()=>{
-    try{lc.applyOptions({width:host.clientWidth,height:host.clientHeight});}catch(e){}
-  });
-  ro.observe(host);
-  body._gbChartCtx={lc,cs,ro};
+  const r = computeRatioGridUpdate(gbPrefs, sym, ratioLong, ratioShort, ratioStep, totalLevels, anchor);
+  if (!r.updated) return;
+  saveGridLabPrefs(gbPrefs);
+  body.querySelector('#gbLow').value = String(r.built.lower);
+  body.querySelector('#gbHigh').value = String(r.built.upper);
+  body.querySelector('#gbLevels').value = String(r.built.levels);
+  scheduleGridLabSync(body, gbPrefs, { reuseCandles: true });
 }
 
-function renderGridLabModal(){
-  const old=document.getElementById('gridLabModal');if(old)old.remove();
-  const modal=document.createElement('div');
-  modal.id='gridLabModal';
-  modal.style.cssText='position:fixed;inset:0;z-index:820;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;';
-  const box=document.createElement('div');
-  box.style.cssText='width:min(980px,95vw);height:min(760px,92vh);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
-  box.innerHTML=`
-    <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border)">
-      <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Lab · Coin Selector + Manual Backtest</span>
-      <button class="tbtn" id="gridTabSelector">Coin Selector</button>
-      <button class="tbtn" id="gridTabBacktest">Manual Backtest</button>
-      <button class="tbtn" id="gridCloseBtn">Закрыть</button>
-    </div>
-    <div id="gridLabBody" style="flex:1;min-height:0;overflow:auto;padding:12px"></div>
-  `;
-  modal.appendChild(box);
-  document.body.appendChild(modal);
-  const body=box.querySelector('#gridLabBody');
-  const btnSel=box.querySelector('#gridTabSelector');
-  const btnBt=box.querySelector('#gridTabBacktest');
-  const setTab=(tab)=>{
-    btnSel.classList.toggle('on',tab==='selector');
-    btnBt.classList.toggle('on',tab==='backtest');
-    if(tab==='selector'){
-      const rows=getGridSelectorRows(24);
-      body.innerHTML=`
-      <div style="font-size:10px;color:var(--text3);margin-bottom:8px">Топ монет по пригодности к grid (ликвидность, ренж, mean-reversion, активность).</div>
-      <div style="font-size:9px;color:var(--text3);line-height:1.4;margin:0 0 9px 0">
-        GridScore = 24% ренж за 24ч + 20% NATR (5m) + 22% mean-reversion (меньше направленного тренда за 24ч) + 22% ликвидность (объём) + 12% активность (сделки). Чем выше score, тем обычно стабильнее и "рабочее" поведение для сетки.
-      </div>
-        <div style="display:grid;grid-template-columns:110px repeat(6,1fr);gap:6px;font-size:9px">
-          <div style="color:var(--text3)">Символ</div><div style="color:var(--text3)">GridScore</div><div style="color:var(--text3)">Ренж24</div><div style="color:var(--text3)">NATR5m</div><div style="color:var(--text3)">ИЗМ24</div><div style="color:var(--text3)">Объём24</div><div style="color:var(--text3)">Сделки24</div>
-          ${rows.map(r=>`<div style="font-weight:600;color:#fff;cursor:pointer" onclick="openFullscreenBySym('${r.sym}')">${r.sym.replace(/USDT$/,'')}</div><div>${fn(r.score,1)}</div><div>${fn(r.range24,2)}%</div><div>${fn(r.natr,2)}%</div><div class="${r.ch24>=0?'p':'n'}">${r.ch24>=0?'+':''}${fn(r.ch24,2)}%</div><div>${fk(r.vol24)}</div><div>${fk(r.trd24)}</div>`).join('')}
-        </div>`;
-      return;
-    }
-    const defSym=(S.fsSym||S.charts.find(c=>c.sym)?.sym||S.syms[0]||'BTCUSDT');
-    body.innerHTML=`
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
-        <label style="font-size:9px;color:var(--text3)">Символ</label>
-        <input id="gbSym" value="${defSym}" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">TF</label>
-        <select id="gbTf" style="width:62px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-          <option value="1m">1m</option>
-          <option value="5m" selected>5m</option>
-          <option value="1h">1h</option>
-        </select>
-        <label style="font-size:9px;color:var(--text3)">Bars</label>
-        <input id="gbBars" type="number" value="360" min="80" max="1200" style="width:70px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Уровни</label>
-        <input id="gbLevels" type="number" value="12" min="3" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Низ</label>
-        <input id="gbLow" type="number" step="any" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Верх</label>
-        <input id="gbHigh" type="number" step="any" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Плечо</label>
-        <input id="gbLev" type="number" value="3" min="1" max="25" style="width:52px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <label style="font-size:9px;color:var(--text3)">Депо</label>
-        <input id="gbDep" type="number" value="500" min="20" style="width:72px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
-        <button class="tbtn on" id="gbRunBtn">Запустить</button>
-      </div>
-      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px">Запусти тест, чтобы увидеть PnL/ROI/MaxDD.</div>
-      <div id="gbChart" style="height:280px;border:1px solid var(--border2);border-radius:6px;overflow:hidden"></div>`;
-    const run=body.querySelector('#gbRunBtn');
-    run.onclick=async()=>{
-      const cfg={
-        sym:String(body.querySelector('#gbSym').value||'').toUpperCase().trim(),
-        tf:String(body.querySelector('#gbTf').value||'5m'),
-        bars:+body.querySelector('#gbBars').value||360,
-        levels:+body.querySelector('#gbLevels').value||12,
-        lower:+body.querySelector('#gbLow').value||0,
-        upper:+body.querySelector('#gbHigh').value||0,
-        leverage:+body.querySelector('#gbLev').value||1,
-        deposit:+body.querySelector('#gbDep').value||500,
-        fee:0.0004,
-      };
-      cfg.candles=await ensureBacktestCandles(cfg.sym,cfg.tf,Math.max(cfg.bars,120));
-      const out=runManualGridBacktest(cfg);
-      const el=body.querySelector('#gbOut');
-      if(!out.ok){el.innerHTML=`<span style="color:#ef4444">${out.msg}</span>`;renderManualBacktestPreview(body,null);return;}
-      const maxSteps=Math.floor((out.upper-out.lower)/Math.max(out.step,1e-12));
-      el.innerHTML=`
-        <div style="display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:8px">
-          <div>Символ: <b style="color:#fff">${out.symbol.replace(/USDT$/,'')}</b></div>
-          <div>TF: <b style="color:#fff">${out.tf}</b></div>
-          <div>PnL: <b class="${out.pnl>=0?'p':'n'}">${out.pnl>=0?'+':''}${fn(out.pnl,2)} USDT</b></div>
-          <div>ROI: <b class="${out.roi>=0?'p':'n'}">${out.roi>=0?'+':''}${fn(out.roi,2)}%</b></div>
-          <div>MaxDD: <b style="color:#f59e0b">${fn(out.maxDd,2)}%</b></div>
-          <div>Сделок(fill): <b style="color:#fff">${out.fills}</b></div>
-          <div>Комиссии: <b style="color:#fff">${fn(out.fees,2)} USDT</b></div>
-          <div>Шаг сетки: <b style="color:#fff">${fmtPrice(out.step)}</b></div>
-          <div>Уровней в диапазоне: <b style="color:#fff">${maxSteps+1}</b></div>
-          <div title="Максимальная серия подряд в одну сторону (buy или sell) в этом тесте">Макс серия 1-сторонних fill: <b style="color:#fff">${out.maxOneSideRun}</b></div>
-        </div>`;
-      renderManualBacktestPreview(body,out);
-    };
-  };
-  btnSel.onclick=()=>setTab('selector');
-  btnBt.onclick=()=>setTab('backtest');
-  const closeModal=()=>{
-    const ctx=body._gbChartCtx;
-    if(ctx?.ro){try{ctx.ro.disconnect();}catch(e){}}
-    if(ctx?.lc){try{ctx.lc.remove();}catch(e){}}
-    modal.remove();
-  };
-  box.querySelector('#gridCloseBtn').onclick=closeModal;
-  modal.addEventListener('mousedown',e=>{if(e.target===modal)closeModal();});
-  setTab('selector');
+function readGridLabInputs(body,gbPrefs,wantBars,mergedCand){
+  return readGridLabInputsUi(
+    {
+      sym: body.querySelector('#gbSym')?.value || '',
+      tf: body.querySelector('#gbTf')?.value || '5m',
+      levels: body.querySelector('#gbLevels')?.value || 12,
+      leverage: body.querySelector('#gbLev')?.value || 3,
+      deposit: body.querySelector('#gbDep')?.value || 500,
+      lower: body.querySelector('#gbLow')?.value || '',
+      upper: body.querySelector('#gbHigh')?.value || '',
+      gridMode: body.querySelector('#gbGridMode')?.value || 'neutral',
+    },
+    gbPrefs, wantBars, mergedCand,
+  );
 }
+async function prependGridLabHistory(body,sym,tf){
+  const ctx=body._gbChartCtx;
+  if(!ctx?.merged?.length||ctx._histLoading)return;
+  ctx._histLoading=true;
+  try{
+    const raw=await fj(`${API}/klines?symbol=${encodeURIComponent(sym)}&interval=${tf}&limit=${HIST_LIMIT}&endTime=${ctx.merged[0].t-1}`);
+    if(!raw?.length)return;
+    const nc=parseKlines(raw);if(!nc.length)return;
+    const ts=ctx.lc.timeScale();
+    let logRange=null,vTime=null,pRange=null;
+    try{logRange=(typeof ts.getVisibleLogicalRange==='function')?ts.getVisibleLogicalRange():null;}catch(e){}
+    try{if(typeof ts.getVisibleRange==='function')vTime=ts.getVisibleRange();}catch(e){}
+    try{
+      const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
+      if(ps&&typeof ps.getVisibleRange==='function')pRange=ps.getVisibleRange();
+    }catch(e){}
+    const prepended=nc.length;
+    const m=ctx.merged;
+    m.unshift(...nc);
+    if(m.length>HIST_CACHE_MAX)m.splice(0,m.length-HIST_CACHE_MAX);
+    const lastC=+m[m.length-1]?.c||1;
+    try{ctx.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastC)}});}catch(e){}
+    ctx.cs.setData(m.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
+    const gro=Math.max(0,Math.min(36,S.chartRightOffset|0));
+    try{ts.applyOptions({rightOffset:gro,fixRightEdge:false});}catch(e){}
+    if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
+      try{if(typeof ts.setVisibleLogicalRange==='function')ts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+    }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{ts.setVisibleRange(vTime);}catch(e){}}
+    try{
+      const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
+      if(pRange&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pRange);
+    }catch(e){}
+  }catch(e){}finally{ctx._histLoading=false;}
+}
+function renderManualBacktestPreview(body, out, gbPrefs, viewOpts) {
+  renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, {
+    S, toChartTime, fmtPrice, getPriceMinMove, rCanvas,
+    getCoords, pushGridLabBoundsUndo, scheduleGridLabSync,
+    saveGridLabPrefs, captureGbLabViewport, applyGbViewportFreeze,
+    onRulerStart, onRulerMove, onRulerEnd, isNearRuler,
+    PRICE_AXIS_W, prependGridLabHistory, kickGridLabPricePoll,
+  });
+}
+
+
+function scheduleGridLabSync(body, gbPrefs, opt = {}) {
+  scheduleGridLabSyncUi(body, gbPrefs, opt);
+}
+
+function runGridLabSync(body, gbPrefs, opt = {}) {
+  return runGridLabSyncUi(body, gbPrefs, opt, {
+    fn, fmtPrice,
+    ensureBacktestCandles,
+    readGridLabInputsFn: readGridLabInputs,
+    renderPreviewFn: renderManualBacktestPreview,
+    renderRiskFn: renderGridRiskProfile,
+  });
+}
+
+function renderGridLabModal(defSymOpt) {
+  return renderGridLabModalUi(defSymOpt, {
+    S,
+    fn, fk,
+    openFullscreenBySym,
+    scheduleGridLabSync,
+    applyGbRatioGrid,
+    gridLabBoundsUndo,
+    gridLabBoundsRedo,
+    getGridSelectorRows,
+    calcGridCoinScore,
+  });
+}
+
 
 function toggleGridLab(){
   const old=document.getElementById('gridLabModal');
   if(old){old.remove();return;}
   renderGridLabModal();
+}
+
+/**
+ * Open Grid Lab with a pre-filled payload from a screener row.
+ * Does NOT close the calling screener modal • Grid Lab opens on top (z 820 vs 825).
+ */
+function openGridLabFromRow(row, source, closeSelf){
+  const payload = buildGridLabPayload(row, source);
+  if(!payload || !payload.sym) return;
+  const prefs = loadGridLabPrefs();
+  // Apply suggested lower/upper and grid levels from screener.
+  // Existing user overrides win if present (but caller may have set them intentionally).
+  if(!prefs.symbolBounds || typeof prefs.symbolBounds !== 'object') prefs.symbolBounds = {};
+  const existing = prefs.symbolBounds[payload.sym] || {};
+  prefs.symbolBounds[payload.sym] = {
+    ...existing,
+    lower: payload.lower,
+    upper: payload.upper,
+  };
+  if(payload.levels != null) prefs.symbolBounds[payload.sym].gridLevels = payload.levels;
+  // Also push levels into global • that's where the form input reads them from.
+  if(payload.levels != null) prefs.global = { ...(prefs.global || {}), levels: payload.levels };
+  // Apply direction from Smart screener → gridMode (LONG/SHORT/NEUTRAL).
+  if(payload.direction === 'LONG' || payload.direction === 'SHORT' || payload.direction === 'NEUTRAL'){
+    prefs.global = { ...(prefs.global || {}), gridMode: payload.direction.toLowerCase() };
+  }
+  // Also push the suggested TF into globals so the modal opens on the right timeframe.
+  if(payload.tf) prefs.global = { ...(prefs.global || {}), tf: payload.tf };
+  saveGridLabPrefs(prefs);
+  // Close the calling screener modal ONLY if requested (Swing/Intra/Pick close themselves,
+  // Smart stays open so the user can compare several rows back-to-back).
+  if(typeof closeSelf === 'function'){
+    try { closeSelf(); } catch(e) { /* ignore */ }
+  }
+  // If Grid Lab is already open, just refresh its inputs (cheap sync) instead of stacking.
+  const existingModal = document.getElementById('gridLabModal');
+  if(existingModal){
+    existingModal.remove();
+  }
+  // Pass payload.sym so the form opens on the right symbol and pulls the suggested bounds.
+  renderGridLabModal(payload.sym);
 }
 
 function setBrushColor(col,el){
@@ -6755,16 +6588,33 @@ registerGridBotScreeners({
   fn,
   fmtPrice,
   openFullscreenBySym,
+  openGridLabFromRow,
   bollingerOnTail,
   calcATR,
+  GROUP_COLORS,
+  calcAll,
+  tagScreenerGroup: (sym, g) => {
+    if (sym && g > 0) setSymGroup(sym, g);
+  },
+});
+
+registerGridSmartScreener({
+  S,
+  BACKEND,
+  fj,
+  batchKlines,
+  fn,
+  fmtPrice,
+  openFullscreenBySym,
+  openGridLabFromRow,
   GROUP_COLORS,
   tagScreenerGroup: (sym, g) => {
     if (sym && g > 0) setSymGroup(sym, g);
   },
 });
 
-// ═══════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════
+// ───────────────────────────────────────────────────────────────
+// ───────────────────────────────────────────────────────────────
 window.rCanvas            = rCanvas;
 window.setDensityMult     = setDensityMult;
 window.setTf              = setTf;
@@ -6782,6 +6632,7 @@ window.openFullscreen     = openFullscreen;
 window.openFullscreenBySym= openFullscreenBySym;
 window.goHome             = goHome;
 window.onSearch           = onSearch;
+window.onSearchInput      = onSearchInput;
 window.onVolFilter        = onVolFilter;
 window.onTrdFilter        = onTrdFilter;
 window.toggleDensity      = toggleDensity;
@@ -6823,6 +6674,8 @@ window.setLineColor         = setLineColor;
 window.toggleEMA            = toggleEMA;
 window.openEMAEditor        = openEMAEditor;
 window.toggleFastMode       = toggleFastMode;
+window.runAutoTrendlinesOnVisibleCharts=runAutoTrendlinesOnVisibleCharts;
+window.setAutoTrendSetting  =setAutoTrendSetting;
 window.toggleChartAutoSync  = toggleChartAutoSync;
 window.setChartAutoSyncOpt  = setChartAutoSyncOpt;
 window.setSessionFxEnabled  = setSessionFxEnabled;

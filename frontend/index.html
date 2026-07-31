@@ -3,7 +3,15 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<title>CryptScreen — Crypto Screener</title>
+<link rel="icon" href="/favicon.svg" type="image/svg/xml">
+<title>CryptScreen &#8212; Crypto Screener</title>
+<!-- Warm DNS/TLS to chart-library CDNs before the JS even runs.
+     Saves 100-400ms on the first cold start by letting the browser
+     start the handshake while it parses HTML/CSS. -->
+<link rel="preconnect" href="https://unpkg.com" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="dns-prefetch" href="//unpkg.com">
+<link rel="dns-prefetch" href="//cdn.jsdelivr.net">
 </head>
 <body>
 
@@ -71,14 +79,15 @@
       <span id="hcount"></span>
       <span id="htime"></span>
       <div class="hsep"></div>
-      <button class="hbtn hbtn-fast" id="fastBtn" onclick="toggleFastMode()" type="button" title="Fast: чаще обновлять таблицу и синхрон сетки графиков (нагрузка на CPU выше)">⚡ Fast</button>
       <button class="hbtn" id="chartSyncBtn" onclick="toggleChartAutoSync()" type="button" title="Когда выкл — список обновляется, но мини-графики 3×3 не подменяются при смене топа по сортировке">Графы·авто</button>
-      <button class="hbtn on" id="toggleScrBtn" onclick="toggleScreener()">▶ Список</button>
+      <button class="hbtn on" id="toggleScrBtn" onclick="toggleScreener()">+ Spisok</button>
       <button class="hbtn" onclick="toggleAlertLog()" title="История алертов">🔔<span id="alertBadge"></span></button>
       <button class="hbtn" id="potBtn" onclick="togglePotentialPanel()" title="Потенциал — мониторинг условий">⚡ Потенциал<span id="potBadge" style="display:none;background:#f97316;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;margin-left:3px"></span></button>
-      <button class="hbtn" id="gridLabBtn" onclick="toggleGridLab()" title="Coin Selector и Manual Backtest для grid">▦ Grid Lab</button>
+      <button class="hbtn" id="gridLabBtn" onclick="toggleGridLab()" title="Grid Lab: сетка, риск-профиль, живой график, Coin Selector">▦ Grid Lab</button>
       <button class="hbtn" onclick="openGridSwingScreener()" title="Grid swing — боковик на дневках">⧖ Grid Swing</button>
       <button class="hbtn" onclick="openGridIntradayScreener()" title="Grid intraday — консолидация после импульса">⚡ Grid Intra</button>
+      <button class="hbtn" onclick="openGridPickScreener()" title="Grid Pick — нейтраль / лонг / шорт под тип сетки">◎ Grid Pick</button>
+      <button class="hbtn" onclick="openGridSmartScreener()" title="Grid Smart — OU-фильтр (half-life, GK vol, ADF, variance ratio)">🧠 Grid Smart</button>
       <button class="hbtn" onclick="openSettings()">⚙ Настройки</button>
     </div>
   </div>
@@ -165,7 +174,7 @@
       <span class="pg-total" id="pgTotal"></span>
       <div class="srch">
         <span class="srch-ico">⌕</span>
-        <input class="sinput" id="sinput" type="text" placeholder="Поиск..." oninput="onSearch(this.value)">
+        <input class="sinput" id="sinput" type="text" placeholder="Поиск..." oninput="onSearchInput(this)">
       </div>
     </div>
   </div>

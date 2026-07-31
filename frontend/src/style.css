@@ -191,8 +191,16 @@ html,body{
 /* CHARTS PANEL */
 #cpanel{width:64%;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border);overflow:hidden;transition:width .2s}
 #cgrid{flex:1;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
-  gap:1px;background:var(--border);overflow:hidden}
-.ccell{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;user-select:none;}
+  overflow:hidden;background:var(--bg)}
+/* Grid separators: explicit borders on each cell. Inset box-shadow looked
+   cleaner on paper, but `isolation:isolate` on .ccell + overflow:hidden +
+   absolute-positioned chart child inside forms a stacking context where
+   the inset shadow gets covered by the chart canvas — so the right-edge
+   line between col 2 and col 3 disappeared. Borders don't have that
+   problem; the parent's overflow:hidden clips the rightmost/bottommost
+   edges so only the inner lines show. */
+.ccell{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;user-select:none;
+  border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
 .chead{height:24px;padding:0 4px 0 6px;display:flex;flex-direction:row;align-items:center;gap:5px;
   background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0;user-select:none;overflow:hidden}
 .chead.wrap{height:28px}
@@ -271,6 +279,10 @@ html,body{
 /* Clear-all drawings button in chart header */
 .clear-draw-btn{display:none !important}
 
+/* Reduce paint area during rapid screener updates */
+.sbody{contain:layout paint style;}
+#cgrid{contain:layout paint style;}
+
 .fs-open-btn{background:transparent;border:none;color:var(--text3);cursor:pointer;font-size:11px;padding:1px 2px;border-radius:2px;line-height:1;transition:color .1s;flex-shrink:0;}
 .fs-open-btn:hover{color:var(--text);}
 
@@ -298,6 +310,7 @@ html,body{
 .srow{display:flex;align-items:stretch;height:26px;border-bottom:1px solid rgba(37,37,48,.6);
   cursor:pointer;transition:background .06s}
 .srow:hover{background:rgba(255,255,255,.022)}
+.srow.search-hidden{opacity:.12;pointer-events:none}
 .srow.inchart{background:rgba(224,48,48,.06)}
 .srow.inchart .rtick{background:rgba(224,48,48,.1)}
 .rtick{width:84px;min-width:84px;flex-shrink:0;display:flex;align-items:center;padding:0 6px;
@@ -356,7 +369,7 @@ html,body{
 }
 .mc.p{color:var(--green)}.mc.n{color:var(--red)}.mc.y{color:var(--yellow);font-weight:600}
 .mc.d{color:var(--text3)}.mc.w{color:var(--text)}
-.hv1{background:rgba(31,168,145,.05)}.hv2{background:rgba(31,168,145,.12)}.hv3{background:rgba(31,168,145,.2)}
+.hv0{background:rgba(31,168,145,.03)}.hv1{background:rgba(31,168,145,.07)}.hv2{background:rgba(31,168,145,.13)}.hv3{background:rgba(31,168,145,.22)}
 .hr1{background:rgba(224,64,64,.05)}.hr2{background:rgba(224,64,64,.12)}.hr3{background:rgba(224,64,64,.2)}
 .srow.infullscreen{background:rgba(224,48,48,.1)!important;outline:1px solid rgba(224,48,48,.35);outline-offset:-1px}
 .srow.infullscreen .rtick{background:rgba(224,48,48,.15)!important}
@@ -469,10 +482,20 @@ html,body{
 }
 .cg-fstar{
   color:#fbbf24;
-  font-size:9px;
+  font-size:14px;
   line-height:1;
+  font-weight:700;
   display:none;
-  margin-left:-1px;
+  margin-left:1px;
+  filter:drop-shadow(0 0 2px rgba(251,191,36,.45));
+}
+/* Избранное: как группы — круг + обводка при выборе, без гигантской звезды */
+.cg-filter-btn.cg-filter-fav.active{
+  transform:none !important;
+  color:#fde68a !important;
+  border-color:rgba(253,224,138,.95) !important;
+  box-shadow:0 0 0 1px rgba(251,191,36,.35);
+  filter:none;
 }
 
 /* POTENTIAL PANEL */
@@ -581,3 +604,27 @@ html,body{
 .gbs-table th{text-align:left;padding:6px 8px;background:var(--bg3);color:var(--text3);position:sticky;top:0;z-index:1;cursor:pointer;user-select:none}
 .gbs-table td{padding:5px 8px;border-bottom:1px solid rgba(37,37,48,.6);vertical-align:top}
 .gbs-tag{display:inline-block;margin:1px 4px 1px 0;padding:1px 5px;border-radius:3px;background:rgba(124,58,237,.12);border:1px solid rgba(124,58,237,.35);font-size:8px;color:var(--text2)}
+/* Smart screener badges (replaces inline `style="background:#22c55e;..."`) */
+.gbs-badge{display:inline-block;padding:2px 6px;border-radius:4px;color:#0a0a0b;font-weight:700}
+.gbs-badge--green{background:#22c55e}
+.gbs-badge--yellow{background:#eab308}
+.gbs-badge--red{background:#ef4444}
+.gbs-badge--long{background:#22c55e;font-size:9px}
+.gbs-badge--short{background:#ef4444;font-size:9px}
+.gbs-badge--neutral{background:#94a3b8;font-size:9px}
+.gbs-badge--muted{background:#94a3b8}
+/* Intra screener signal-stage chip ("S1✓") */
+.gbs-stage{display:inline-block;padding:1px 5px;border-radius:3px;font-size:9px;background:#166534;color:#fff}
+/* Skeleton loading rows */
+@keyframes gbs-shimmer{0%{opacity:.55}50%{opacity:1}100%{opacity:.55}}
+.gbs-skeleton{display:flex;align-items:center;gap:6px;height:16px;margin:4px 0;animation:gbs-shimmer 1.2s ease-in-out infinite}
+.gbs-skeleton-bar{height:8px;border-radius:3px;background:linear-gradient(90deg,rgba(124,58,237,.12),rgba(124,58,237,.28),rgba(124,58,237,.12))}
+.gbs-skeleton-bar--w12{flex:0 0 26px}
+
+/* Non-blocking toasts for Smart screener errors. Severity colours via --text
+ * fallbacks since we don't want to flood the palette. */
+.gbs-toast{border-left:3px solid var(--border2)}
+.gbs-toast--fatal{border-left-color:#ef4444}
+.gbs-toast--rate{border-left-color:#f59e0b}
+.gbs-toast--warn{border-left-color:#3b82f6}
+.gbs-skeleton-bar--w70{flex:1}

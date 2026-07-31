@@ -1,0 +1,1243 @@
+/**
+ * Grid Smart Screener — statistically-grounded mean-reversion / grid-fitness model.
+ *
+ * Public API:
+ *   - Pure stats: ouHalfLife, garmanKlassVol, varianceRatio, adfTest,
+ *                 linregSlope, vwapBias
+ *   - Composition: scoreSmart, classifyDirection, ouGridBounds, computeSmartRow
+ *   - Pure UI helpers: filterSmartRows, sortSmartRows, smartBandColor,
+ *                      smartDirectionColor, smartEmptyMessage
+ *   - Registration: registerGridSmartScreener(deps)  (mirrors registerGridBotScreeners)
+ *
+ * No DOM, no global state in pure functions — safe to unit-test in isolation.
+ */
+
+import {
+  baseSymbol,
+  escapeHtml,
+  pruneLocalStoragePrefix,
+  createKlineCache,
+  createMcapProvider,
+  selectUniverse,
+  passesMinVol,
+} from './grid-shared.js';
+import { hurstExponentRS } from './gridBotScreeners.js';
+
+// ───────────────────────────────────────────────────────────────
+//  Pure stats — all inputs are plain arrays, outputs plain numbers
+// ───────────────────────────────────────────────────────────────
+
+/** AR(1) on log-closes; returns half-life in bars, or null if θ ≥ 0 or too few bars. */
+export function ouHalfLife(closes) {
+  if (!closes || closes.length < 30) return null;
+  const x = closes.filter((c) => isFinite(c) && c > 0);
+  if (x.length < 30) return null;
+  // Δln(p_t) = α + θ·(ln(p_{t-1}) − μ) + ε
+  // Equivalently: regress Δln(p_t) on ln(p_{t-1}) (intercept captures α − θ·μ).
+  const ys = [];
+  const xs = [];
+  for (let i = 1; i < x.length; i++) {
+    ys.push(Math.log(x[i]) - Math.log(x[i - 1]));
+    xs.push(Math.log(x[i - 1]));
+  }
+  const n = ys.length;
+  if (n < 20) return null;
+  const mx = xs.reduce((a, b) => a + b, 0) / n;
+  const my = ys.reduce((a, b) => a + b, 0) / n;
+  let sxx = 0;
+  let sxy = 0;
+  for (let i = 0; i < n; i++) {
+    sxx += (xs[i] - mx) ** 2;
+    sxy += (xs[i] - mx) * (ys[i] - my);
+  }
+  if (sxx < 1e-12) return null;
+  const theta = sxy / sxx;
+  if (theta >= 0) return null; // no mean reversion
+  return Math.log(2) / -theta;
+}
+
+/** Garman-Klass OHLC volatility estimator; returns σ per bar. */
+export function garmanKlassVol(klines) {
+  if (!klines || klines.length < 5) return null;
+  let sum = 0;
+  let n = 0;
+  for (const k of klines) {
+    const o = +k.o, h = +k.h, l = +k.l, c = +k.c;
+    if (!(isFinite(o) && isFinite(h) && isFinite(l) && isFinite(c))) continue;
+    if (o <= 0 || h <= 0 || l <= 0 || c <= 0) continue;
+    if (l > h) continue;
+    // GK: 0.5·ln(H/L)^2 − (2·ln(2)−1)·ln(C/O)^2
+    const hl = Math.log(h / l);
+    const co = Math.log(c / o);
+    const v = 0.5 * hl * hl - (2 * Math.LN2 - 1) * co * co;
+    // Avoid negative contributions (can happen on noisy OHLC); clamp to 0.
+    sum += Math.max(0, v);
+    n++;
+  }
+  if (n < 5) return null;
+  // σ^2 per bar; sqrt to get σ
+  const meanV = sum / n;
+  return Math.sqrt(Math.max(0, meanV));
+}
+
+/** Lo-MacKinlay variance ratio. VR<1 mean-reverting, VR>1 trending. */
+export function varianceRatio(closes, k = 4) {
+  if (!closes || closes.length < k * 3) return null;
+  const x = closes.filter((c) => isFinite(c) && c > 0);
+  if (x.length < k * 3) return null;
+  const n = x.length;
+  // Simple returns
+  const r = [];
+  for (let i = 1; i < n; i++) r.push(Math.log(x[i] / x[i - 1]));
+  const m = r.length;
+  const meanR = r.reduce((a, b) => a + b, 0) / m;
+  // σ^2 of 1-bar returns
+  let v1 = 0;
+  for (const ri of r) v1 += (ri - meanR) ** 2;
+  v1 /= m;
+  if (v1 < 1e-12) return null;
+  // Variance of k-bar returns (sum of k consecutive 1-bar returns)
+  const kR = [];
+  for (let i = 0; i + k <= r.length; i++) {
+    let s = 0;
+    for (let j = 0; j < k; j++) s += r[i + j];
+    kR.push(s);
+  }
+  const meanK = kR.reduce((a, b) => a + b, 0) / kR.length;
+  let vk = 0;
+  for (const ri of kR) vk += (ri - meanK) ** 2;
+  vk /= kR.length;
+  return vk / (k * v1);
+}
+
+/** Augmented Dickey-Fuller with 1 lag. Returns {gamma, stat} or null.
+ *  Test regression: Δy_t = α + γ·y_{t-1} + δ·Δy_{t-1} + ε
+ *  t-stat on γ is the ADF stat; γ < 0 means mean-reverting. */
+export function adfTest(closes) {
+  if (!closes || closes.length < 30) return null;
+  const x = closes.filter((c) => isFinite(c) && c > 0);
+  if (x.length < 30) return null;
+  // Δy_t (depend), y_{t-1} and Δy_{t-1} (indep), plus intercept
+  // y is log-price
+  const y = x.map((v) => Math.log(v));
+  const n = y.length;
+  // We need at least 30 obs for t-distribution to be ~normal-ish; we'll use 30 minimum
+  const start = 2;
+  const m = n - start;
+  if (m < 20) return null;
+  const dy = new Array(m);
+  const yL = new Array(m);
+  const dyL = new Array(m);
+  for (let i = 0; i < m; i++) {
+    const t = i + start;
+    dy[i] = y[t] - y[t - 1];
+    yL[i] = y[t - 1];
+    dyL[i] = y[t - 1] - y[t - 2];
+  }
+  // OLS with 3 regressors: const, yL, dyL
+  // Build X as [m x 3]: [1, yL, dyL]
+  // (X'X)^-1 X'y
+  const X = new Array(m);
+  for (let i = 0; i < m; i++) X[i] = [1, yL[i], dyL[i]];
+  // X'X 3x3
+  const XtX = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  for (let i = 0; i < m; i++) {
+    for (let r = 0; r < 3; r++) {
+      for (let c = 0; c < 3; c++) XtX[r][c] += X[i][r] * X[i][c];
+    }
+  }
+  // X'y 3-vector
+  const Xty = [0, 0, 0];
+  for (let i = 0; i < m; i++) {
+    for (let r = 0; r < 3; r++) Xty[r] += X[i][r] * dy[i];
+  }
+  // Invert 3x3 by cofactor (small enough for direct inverse)
+  const inv = invert3x3(XtX);
+  if (!inv) return null;
+  // β = inv · Xty
+  const beta = [
+    inv[0][0] * Xty[0] + inv[0][1] * Xty[1] + inv[0][2] * Xty[2],
+    inv[1][0] * Xty[0] + inv[1][1] * Xty[1] + inv[1][2] * Xty[2],
+    inv[2][0] * Xty[0] + inv[2][1] * Xty[1] + inv[2][2] * Xty[2],
+  ];
+  const gamma = beta[1]; // coefficient on y_{t-1}
+  // t-stat: β_j / sqrt(inv[j][j] · σ^2)
+  // σ^2 = SSR / (n - k)  (k = 3)
+  let ssr = 0;
+  for (let i = 0; i < m; i++) {
+    const yhat = beta[0] + beta[1] * yL[i] + beta[2] * dyL[i];
+    ssr += (dy[i] - yhat) ** 2;
+  }
+  const sigma2 = ssr / Math.max(1, m - 3);
+  const varGamma = inv[1][1] * sigma2;
+  if (varGamma <= 0 || !isFinite(varGamma)) return null;
+  const stat = gamma / Math.sqrt(varGamma);
+  return { gamma, stat };
+}
+
+function invert3x3(M) {
+  const a = M[0][0], b = M[0][1], c = M[0][2];
+  const d = M[1][0], e = M[1][1], f = M[1][2];
+  const g = M[2][0], h = M[2][1], i = M[2][2];
+  const det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+  if (Math.abs(det) < 1e-15) return null;
+  const invDet = 1 / det;
+  return [
+    [
+      (e * i - f * h) * invDet,
+      (c * h - b * i) * invDet,
+      (b * f - c * e) * invDet,
+    ],
+    [
+      (f * g - d * i) * invDet,
+      (a * i - c * g) * invDet,
+      (c * d - a * f) * invDet,
+    ],
+    [
+      (d * h - e * g) * invDet,
+      (b * g - a * h) * invDet,
+      (a * e - b * d) * invDet,
+    ],
+  ];
+}
+
+/** OLS slope of log-prices over the last `win` bars, normalised by σ_y.
+ *  Sign indicates direction; magnitude in σ-units. */
+export function linregSlope(closes, win = 30) {
+  if (!closes || closes.length < win) return null;
+  const x = closes.slice(-win).filter((c) => isFinite(c) && c > 0);
+  if (x.length < win) return null;
+  const y = x.map((v) => Math.log(v));
+  const n = y.length;
+  const mean = y.reduce((a, b) => a + b, 0) / n;
+  let num = 0;
+  let den = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = i - (n - 1) / 2;
+    num += dx * (y[i] - mean);
+    den += dx * dx;
+  }
+  if (den < 1e-12) return null;
+  const slope = num / den;
+  // σ_y (sample stddev around mean)
+  let varY = 0;
+  for (let i = 0; i < n; i++) varY += (y[i] - mean) ** 2;
+  const sigmaY = Math.sqrt(varY / Math.max(1, n - 1));
+  if (sigmaY < 1e-12) return null;
+  return slope / sigmaY;
+}
+
+/** (close − VWAP) / σ over the last `win` bars. Sign: positive above VWAP. */
+export function vwapBias(klines, win = 20) {
+  if (!klines || klines.length < win) return null;
+  const slice = klines.slice(-win);
+  let pv = 0;
+  let vol = 0;
+  const closes = [];
+  for (const k of slice) {
+    const tp = (+k.h + +k.l + +k.c) / 3;
+    const v = +k.v || 0;
+    pv += tp * v;
+    vol += v;
+    closes.push(+k.c);
+  }
+  if (vol < 1e-12) return null;
+  const vwap = pv / vol;
+  const last = closes[closes.length - 1];
+  if (!isFinite(vwap) || !isFinite(last)) return null;
+  // σ of close prices
+  const mean = closes.reduce((a, b) => a + b, 0) / closes.length;
+  let varC = 0;
+  for (const c of closes) varC += (c - mean) ** 2;
+  const sigmaC = Math.sqrt(varC / Math.max(1, closes.length - 1));
+  if (sigmaC < 1e-12) return null;
+  return (last - vwap) / sigmaC;
+}
+
+// ───────────────────────────────────────────────────────────────
+//  Composition: score, direction, grid bounds
+// ───────────────────────────────────────────────────────────────
+
+// Re-export hurstExponentRS under a shorter name for backward-compat with tests.
+// (The actual implementation lives in gridBotScreeners.js — single source of truth.)
+export { hurstExponentRS as hurstExponent };
+
+/** Compute the score 0..13 + breakdown for one symbol's klines.
+ *  `klCtx` is optional context klines (next-higher TF) for confluence (not used here,
+ *  but kept in the signature to make computeSmartRow cleaner). */
+export function scoreSmart(klines, mcapMap, sym, vol24For) {
+  if (!klines || klines.length < 30) return null;
+  const closes = klines.map((k) => +k.c).filter((c) => isFinite(c));
+  if (closes.length < 30) return null;
+  const price = closes[closes.length - 1];
+  if (!isFinite(price) || price <= 0) return null;
+
+  const hl = ouHalfLife(closes);
+  const gk = garmanKlassVol(klines);
+  const vr = varianceRatio(closes, 4);
+  const hurst = hurstExponentRS(closes);
+  const adf = adfTest(closes);
+  const slope = linregSlope(closes, 30);
+  const vw = vwapBias(klines, 20);
+
+  // ── Mean-reversion quality (max 5) ────────────────────────
+  let mr = 0;
+  const mrComponents = {};
+  if (hurst != null) {
+    if (hurst >= 0.30 && hurst <= 0.50) { mr += 2; mrComponents.hurst = { pts: 2, label: hurst.toFixed(3) }; }
+    else { mrComponents.hurst = { pts: 0, label: hurst.toFixed(3) }; }
+  } else {
+    mrComponents.hurst = { pts: 0, label: 'N/A' };
+  }
+  mrComponents.hurst.tip = 'Hurst ∈ [0.30, 0.50] → цена возвращается к средней (mean-reverting). <0.30 — слишком шумно, >0.50 — тренд.';
+  if (vr != null) {
+    if (vr < 0.7) { mr += 2; mrComponents.vr = { pts: 2, label: vr.toFixed(3) }; }
+    else { mrComponents.vr = { pts: 0, label: vr.toFixed(3) }; }
+  } else {
+    mrComponents.vr = { pts: 0, label: 'N/A' };
+  }
+  mrComponents.vr.tip = 'Variance Ratio (Lo-MacKinlay): VR<1 — возвращается, VR>1 — тренд. Идеал <0.7.';
+  if (hl != null) {
+    if (hl >= 10 && hl <= 50) { mr += 1; mrComponents.halfLife = { pts: 1, label: hl.toFixed(1) + ' bars' }; }
+    else { mrComponents.halfLife = { pts: 0, label: hl.toFixed(1) + ' bars' }; }
+  } else {
+    mrComponents.halfLife = { pts: 0, label: 'N/A (trending)' };
+  }
+  mrComponents.halfLife.tip = 'OU half-life — за сколько бар цена возвращается к средней наполовину. Идеал 10–50 бар. >200 — слишком медленно для сетки.';
+
+  // ── Grid fitness (max 5) ───────────────────────────────────
+  let fit = 0;
+  const fitComponents = {};
+  const gkPct = gk != null && price > 0 ? (gk / price) * 100 : null;
+  if (gkPct != null) {
+    if (gkPct >= 1 && gkPct <= 5) { fit += 2; fitComponents.gkVol = { pts: 2, label: gkPct.toFixed(2) + '%' }; }
+    else { fitComponents.gkVol = { pts: 0, label: gkPct.toFixed(2) + '%' }; }
+  } else {
+    fitComponents.gkVol = { pts: 0, label: 'N/A' };
+  }
+  fitComponents.gkVol.tip = 'Garman-Klass волатильность (% от цены за бар). Идеал 1–5%: тише — мало заработок, громче — сетку выбивает.';
+  const vol24 = vol24For(sym);
+  const mcap = mcapMap ? mcapMap.get(baseSymbol(sym)) : undefined;
+  if (vol24 != null && mcap != null && mcap > 0) {
+    const vm = vol24 / mcap;
+    if (vm > 0.05) { fit += 2; fitComponents.volMcap = { pts: 2, label: vm.toFixed(3) }; }
+    else { fitComponents.volMcap = { pts: 0, label: vm.toFixed(3) }; }
+  } else {
+    fitComponents.volMcap = { pts: 0, label: 'N/A' };
+  }
+  fitComponents.volMcap.tip = 'Объём 24ч / капитализация: оборот относительно размера. >0.05 — высокий оборот, сетка ликвидна.';
+  // Spread proxy: (H-L)/C on the last bar
+  const last = klines[klines.length - 1];
+  if (last && +last.c > 0 && +last.h >= +last.l) {
+    const spreadPct = ((+last.h - +last.l) / +last.c) * 100;
+    if (spreadPct < 2) { fit += 1; fitComponents.spread = { pts: 1, label: spreadPct.toFixed(2) + '%' }; }
+    else { fitComponents.spread = { pts: 0, label: spreadPct.toFixed(2) + '%' }; }
+  } else {
+    fitComponents.spread = { pts: 0, label: 'N/A' };
+  }
+  fitComponents.spread.tip = '(H−L)/C последнего бара — прокси спреда/внутрибарного шума. <2% — сетка попадает в спред без потерь.';
+
+  // ── Directional confidence (max 3) ─────────────────────────
+  let dir = 0;
+  const dirComponents = {};
+  const adfSign = adf ? Math.sign(adf.gamma) : 0;
+  const slopeSign = slope != null ? Math.sign(slope) : 0;
+  if (adfSign !== 0 && slopeSign !== 0 && adfSign === slopeSign) {
+    dir += 2;
+    dirComponents.adfSlope = { pts: 2, label: `ADF γ=${adf.gamma.toFixed(3)}, slope=${slope.toFixed(2)}` };
+  } else {
+    dirComponents.adfSlope = { pts: 0, label: `ADF γ=${adf?.gamma?.toFixed(3) ?? 'N/A'}, slope=${slope?.toFixed(2) ?? 'N/A'}` };
+  }
+  dirComponents.adfSlope.tip = 'ADF (стационарность) и slope (наклон) согласны по знаку → направление подтверждено двумя независимыми тестами.';
+  if (hurst != null && hurst > 0.55 && slopeSign !== 0) {
+    dir += 1;
+dirComponents.hurstTrend = { pts: 1, label: `H=${hurst.toFixed(3)}>0.55, slope≠ 0` };
+  } else {
+    dirComponents.hurstTrend = { pts: 0, label: hurst != null ? `H=${hurst.toFixed(3)}` : 'N/A' };
+  }
+  dirComponents.hurstTrend.tip = 'Hurst > 0.55 + ненулевой slope → есть трендовая составляющая, направление подкреплено инерцией.';
+
+  const total = mr + fit + dir;
+  const band = total >= 10 ? 'green' : total >= 7 ? 'yellow' : 'red';
+
+  return {
+    score: total,
+    band,
+    mr,
+    fit,
+    dir,
+    breakdown: { mr: mrComponents, fit: fitComponents, dir: dirComponents },
+    raw: { hl, gk, gkPct, vr, hurst, adf, slope, vw, adfSign, slopeSign },
+  };
+}
+
+/** Adaptive direction classifier. `universeScores` is an array of dirScore values
+ *  for the full universe (used to compute median threshold). */
+export function classifyDirection(row, universeScores) {
+  if (!row) return { dir: 'NEUTRAL', confidence: 0 };
+  const { adfSign, slopeSign, hurst, vw } = row.raw || {};
+  const slopeMag = row.raw?.slope != null ? Math.abs(row.raw.slope) : 0;
+  // For non-trending (Hurst<0.5), drop the Hurst-trend component contribution
+  const hurstTrend = hurst != null && hurst > 0.55 && slopeSign !== 0 ? slopeSign : 0;
+  const dirScore =
+    (adfSign || 0) +
+    (slopeSign || 0) +
+    hurstTrend +
+    (vw != null ? Math.sign(vw) : 0);
+
+  // Magnitude-weighting: small slopes (<0.5σ) shouldn't dominate
+  const weighted = dirScore * (slopeMag >= 0.3 ? 1 : 0.5);
+
+  // Adaptive threshold over universe
+  const valid = (universeScores || []).filter((v) => isFinite(v));
+  let threshold = 1;
+  if (valid.length >= 4) {
+    const sorted = valid.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    threshold = sorted.length % 2
+      ? sorted[mid]
+      : (sorted[mid - 1] + sorted[mid]) / 2;
+    if (threshold < 0.5) threshold = 0.5;
+  }
+
+  let dir = 'NEUTRAL';
+  if (Math.abs(weighted) >= threshold) {
+    dir = weighted > 0 ? 'LONG' : 'SHORT';
+  }
+  const confidence = Math.round(Math.min(1, Math.abs(weighted) / 4) * 100);
+  return { dir, confidence, dirScore: weighted, threshold };
+}
+
+/** OU-derived grid bounds. Returns null if half-life can't be computed
+ *  (trending series → user should use Pick/Swing for those).
+ *
+ *  Levels: adaptive count based on half-life.
+ *    - Short HL (< 20 bars): fast mean-reversion → many levels (24) for fine grid.
+ *    - Long HL (> 100 bars): slow reversion → few levels (8) so each step survives.
+ *    - Linear interpolation in between, clamped to [8, 24].
+ *
+ *  Step size: target = GK_vol · √(T / N), so the grid accumulates a full σ_T move
+ *  over the half-life, with N intervals catching the move progressively. */
+export function ouGridBounds(closes, klines) {
+  if (!closes || closes.length < 30) return null;
+  const x = closes.filter((c) => isFinite(c) && c > 0);
+  if (x.length < 30) return null;
+  const gk = garmanKlassVol(klines);
+  if (gk == null) return null;
+  const hlRaw = ouHalfLife(x);
+  // For trending series (no HL) we still produce a fallback using σ_T over a fixed
+  // 50-bar window — this lets the screener return SOMETHING rather than null.
+  const hlUsed = hlRaw != null ? Math.max(5, Math.min(200, hlRaw)) : 50;
+
+  // Adaptive level count: short HL → many levels, long HL → few.
+  // The cap scales up with lookback size so denser grids are allowed when
+  // we have a long enough history for the HL estimate to be reliable.
+  // We pass `x.length` (closes count) as the lookback so the cap widens
+  // naturally when the input history is long.
+  const levels = hlRaw == null
+    ? 12                                // trending fallback
+    : optimalLevelsForHalfLife(hlRaw, x.length);
+
+  // μ = geometric mean of closes (= exp(mean(log(closes))))
+  const logPrices = x.map((v) => Math.log(v));
+  const logMu = logPrices.reduce((a, b) => a + b, 0) / logPrices.length;
+
+  // Span: ±1.5 σ_T (covers ~87% of expected distribution over one half-life)
+  const sigmaT = gk * Math.sqrt(hlUsed);
+  const lower = Math.exp(logMu - 1.5 * sigmaT);
+  const upper = Math.exp(logMu + 1.5 * sigmaT);
+
+  // Step: half-bar vol, but scaled so N steps roughly span the range.
+  // Target spacing = σ_T / N (one sigma-unit per step across the half-life).
+  const step = (upper - lower) / Math.max(1, levels);
+
+  return { lower, upper, step, levels, sigmaT, hl: hlRaw };
+}
+
+/** Max level count for a given lookback size.
+ *  We can fit more grid levels when we have a longer history — the HL
+ *  estimate is more stable, so a finer grid is justified. Caps:
+ *    nBars missing/non-finite → 24 (legacy default)
+ *    nBars < 60               → 20 (sparse data; coarser grid)
+ *    60 ≤ nBars < 120         → 24 (default)
+ *    120 ≤ nBars < 200        → 28 (enough history for finer grid)
+ *    nBars ≥ 200              → 32 (long lookback; precise HL allows dense grid)
+ *  Minimum cap is always 8. */
+export function adaptiveLevelCap(nBars) {
+  if (nBars == null || !isFinite(nBars)) return 24;
+  if (nBars < 60) return 20;
+  if (nBars < 120) return 24;
+  if (nBars < 200) return 28;
+  return 32;
+}
+
+/** Optimal grid level count based on half-life and (optional) lookback size.
+ *  Empirical: HL 20 → cap levels; HL 100 → 8 levels; linear in between.
+ *  HL < 10 → cap (very fast reversion); HL > 200 → 8 (very slow).
+ *  null/NaN/non-positive → 12 (safe middle default for trending series).
+ *  `nBars` (optional) widens the upper cap when more data is available —
+ *  see adaptiveLevelCap for the exact bands. When omitted the legacy cap of
+ *  24 is used so existing callers keep their old behaviour. */
+export function optimalLevelsForHalfLife(hl, nBars) {
+  const cap = adaptiveLevelCap(nBars);
+  if (hl == null || !isFinite(hl) || hl <= 0) return 12;
+  if (hl <= 10) return cap;
+  if (hl >= 100) return 8;
+  // Linear interpolation: cap - (hl - 10) * (cap - 8) / (100 - 10)
+  const n = cap - (hl - 10) * (cap - 8) / 90;
+  return Math.max(8, Math.min(cap, Math.round(n)));
+}
+
+/** Compute extended confluence indicators between working and context TF.
+ *  Returns one numeric `agreement` in [0, 1] and an array of named
+ *  agreement checks (each {name, agree: bool, label, weight}).
+ *
+ *  Checks:
+ *    - slope_sign      sign(working slope) == sign(context slope)
+ *    - adf_sign        sign(working ADF γ) == sign(context ADF γ)
+ *    - regime          working Hurst and context Hurst in the same regime
+ *                      (both trending >0.55, both MR <0.50, or both neutral)
+ *    - vwap_bias       sign(working VWAP bias) == sign(working slope)
+ *                      (price stretched above/below VWAP matches direction)
+ *
+ *  Weights: slope 0.4, adf 0.3, regime 0.2, vwap 0.1.
+ *  Returns `null` when context TF is missing or has too few bars. */
+export function confluenceScore(workRow, klCtx) {
+  if (!workRow || !klCtx || klCtx.length < 30) return null;
+  const closesCtx = klCtx.map((k) => +k.c).filter((c) => isFinite(c) && c > 0);
+  if (closesCtx.length < 30) return null;
+  const slopeCtx = linregSlope(closesCtx, 30);
+  const adfCtx = adfTest(closesCtx);
+  const hurstCtx = hurstExponentRS(closesCtx);
+  const checks = [];
+  // 1. Slope sign agreement (heaviest weight).
+  const sw = workRow.raw?.slope;
+  if (slopeCtx != null && sw != null) {
+    const agree = Math.sign(slopeCtx) === Math.sign(sw) && sw !== 0;
+    checks.push({
+      name: 'slope_sign',
+      agree,
+      label: `наклон: ${agree ? 'согласен' : 'расходится'}`,
+      weight: 0.4,
+    });
+  }
+  // 2. ADF γ sign agreement.
+  const adfWork = workRow.raw?.adf;
+  if (adfWork?.gamma != null && adfCtx?.gamma != null) {
+    const agree = Math.sign(adfWork.gamma) === Math.sign(adfCtx.gamma);
+    checks.push({
+      name: 'adf_sign',
+      agree,
+      label: `ADF: ${agree ? 'согласен' : 'расходится'}`,
+      weight: 0.3,
+    });
+  }
+  // 3. Hurst regime.
+  const hw = workRow.raw?.hurst;
+  if (hurstCtx != null && hw != null) {
+    const regW = hw > 0.55 ? 'trend' : hw < 0.5 ? 'mr' : 'neutral';
+    const regC = hurstCtx > 0.55 ? 'trend' : hurstCtx < 0.5 ? 'mr' : 'neutral';
+    const agree = regW === regC;
+    checks.push({
+      name: 'regime',
+      agree,
+      label: `режим: ${regW} ↔ ${regC}`,
+      weight: 0.2,
+    });
+  }
+  // 4. VWAP bias (working) — internal-only, no context TF needed.
+  // We re-compute on working klines via vwapBias already exposed through scoreSmart;
+  // but to avoid re-running, use a cheaper proxy: sign of (last close − mean).
+  // This is internally consistent because we only need the *direction* not magnitude.
+  const workCloses = workRow.raw?.closes;
+  if (workCloses && workCloses.length >= 20) {
+    const tail = workCloses.slice(-20);
+    const vwap = tail.reduce((a, b) => a + b, 0) / tail.length;
+    const last = workCloses[workCloses.length - 1];
+    const biasSign = Math.sign(last - vwap);
+    const slopeSign = sw != null ? Math.sign(sw) : 0;
+    if (biasSign !== 0 && slopeSign !== 0) {
+      const agree = biasSign === slopeSign;
+      checks.push({
+        name: 'vwap_bias',
+        agree,
+        label: `VWAP: ${agree ? 'согласен' : 'расходится'}`,
+        weight: 0.1,
+      });
+    }
+  }
+  if (!checks.length) return null;
+  const totalWeight = checks.reduce((a, c) => a + c.weight, 0);
+  const agreement = checks.reduce((a, c) => a + (c.agree ? c.weight : 0), 0) / totalWeight;
+  return { agreement, checks };
+}
+
+/** Classify a scan error message into a toast severity.
+ *  Pure: returns one of 'fatal' | 'rate-limit' | 'warn'.
+ *  - 'fatal'     : something we can't recover from (network, JSON, unknown)
+ *  - 'rate-limit': Binance rate limit / 418 / 429 — caller may want to retry
+ *  - 'warn'      : empty universe, no results — recoverable by changing inputs */
+export function classifyScanError(message) {
+  if (message == null) return 'warn';
+  const m = String(message);
+  if (/rate\s*limit|429|418|too\s*many\s*requests|retried|retry/i.test(m)) {
+    return 'rate-limit';
+  }
+  if (/network|fetch|timeout|aborted|cors|json|parse/i.test(m)) {
+    return 'fatal';
+  }
+  // empty universe / no results — purely informational
+  return 'warn';
+}
+
+/** Map severity to a CSS class name for the toast bubble. */
+export function severityClass(severity) {
+  return severity === 'fatal'
+    ? 'gbs-toast--fatal'
+    : severity === 'rate-limit'
+      ? 'gbs-toast--rate'
+      : 'gbs-toast--warn';
+}
+
+/** Default TTL per severity in ms. Rate-limit toasts stay longer so the
+ *  user can read the "wait Xs" hint. */
+export function severityTtl(severity) {
+  return severity === 'rate-limit' ? 6000 : severity === 'fatal' ? 4500 : 3500;
+}
+
+/** Build a toast message from an error. Pure: returns { text, hint }.
+ *  `hint` is an optional secondary line (e.g. "подождите 60с"). */
+export function toastFromError(message) {
+  const sev = classifyScanError(message);
+  const text = String(message || 'Неизвестная ошибка');
+  let hint = null;
+  if (sev === 'rate-limit') {
+    hint = 'Подождите 30–60с и попробуйте снова';
+  } else if (sev === 'fatal') {
+    hint = 'Проверьте сеть / API ключ';
+  } else if (/пустой|empty|нет символов|no symbols/i.test(text)) {
+    hint = 'Проверьте фильтр объёма';
+  }
+  return { severity: sev, text, hint };
+}
+
+/** Show a non-blocking toast on the Smart screener modal.
+ *  - `host` is the modal root element (where the toast container lives)
+ *  - `message` is the raw error string (will be classified)
+ *  - `opts.actionLabel` + `opts.onAction` add an inline action button
+ *  Returns a dismiss function. */
+export function showSmartToast(host, message, opts = {}) {
+  if (!host) return () => {};
+  const { severity, text, hint } = toastFromError(message);
+  const ttl = severityTtl(severity);
+  const cls = severityClass(severity);
+
+  // Reuse a single container so multiple toasts stack.
+  let stack = host.querySelector(':scope > .gbs-toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.className = 'gbs-toast-stack';
+    stack.style.cssText = 'position:absolute;right:14px;bottom:14px;display:flex;flex-direction:column;gap:6px;z-index:20;pointer-events:none';
+    host.appendChild(stack);
+  }
+  const el = document.createElement('div');
+  el.className = `gbs-toast ${cls}`;
+  el.style.cssText = 'pointer-events:auto;background:var(--bg4);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:7px 11px;font-size:10px;min-width:220px;max-width:340px;box-shadow:0 2px 12px rgba(0,0,0,.45);opacity:0;transition:opacity .25s';
+  el.innerHTML = `
+    <div style="font-weight:600">${escapeHtml(text)}</div>
+    ${hint ? `<div style="font-size:9px;color:var(--text3);margin-top:3px">${escapeHtml(hint)}</div>` : ''}
+    ${opts.actionLabel && typeof opts.onAction === 'function'
+      ? `<button class="tbtn" style="margin-top:5px;font-size:9px">${escapeHtml(opts.actionLabel)}</button>`
+      : ''}
+  `;
+  stack.appendChild(el);
+  // fade in
+  requestAnimationFrame(() => { el.style.opacity = '1'; });
+  const actionBtn = el.querySelector('button');
+  if (actionBtn && typeof opts.onAction === 'function') {
+    actionBtn.onclick = () => { try { opts.onAction(); } catch (e) {} dismiss(); };
+  }
+  let dismissed = false;
+  function dismiss() {
+    if (dismissed) return;
+    dismissed = true;
+    el.style.opacity = '0';
+    setTimeout(() => { try { el.remove(); } catch (e) {} }, 280);
+  }
+  el._to = setTimeout(dismiss, ttl);
+  return dismiss;
+}
+
+/** Compute the full row for one symbol. `kl` is the working-TF klines,
+ *  `klCtx` is optional context-TF klines (next-higher TF). */
+export function computeSmartRow(sym, kl, klCtx, mcapMap, vol24For) {
+  if (!kl || kl.length < 30) return null;
+  const sc = scoreSmart(kl, mcapMap, sym, vol24For);
+  if (!sc) return null;
+  const closes = kl.map((k) => +k.c).filter((c) => isFinite(c));
+  const gb = ouGridBounds(closes, kl);
+  if (!gb) return null;
+  // Confluence: compare slope signs between working and context TF
+  let confluence = null; // null | 'agree' | 'disagree' | 'na'
+  let confluenceDetail = null;
+  if (klCtx && klCtx.length >= 30) {
+    const closesCtx = klCtx.map((k) => +k.c).filter((c) => isFinite(c));
+    const slopeCtx = linregSlope(closesCtx, 30);
+    const slopeWork = sc.raw.slope;
+    if (slopeCtx != null && slopeWork != null) {
+      confluence = Math.sign(slopeCtx) === Math.sign(slopeWork) && slopeWork !== 0
+        ? 'agree' : 'disagree';
+    } else {
+      confluence = 'na';
+    }
+    // Extended confluence score (4 weighted checks).
+    confluenceDetail = confluenceScore(
+      { ...sc, raw: { ...sc.raw, closes } },
+      klCtx
+    );
+  } else {
+    confluence = 'na';
+  }
+  return {
+    sym,
+    score: sc.score,
+    band: sc.band,
+    mr: sc.mr,
+    fit: sc.fit,
+    dirScoreRaw: sc.dir,
+    breakdown: sc.breakdown,
+    raw: sc.raw,
+    gridBounds: gb,
+    confluence,
+    confluenceDetail,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────
+//  Pure UI helpers — used by the screener modal. No DOM, no fetch.
+// ───────────────────────────────────────────────────────────────
+
+/**
+ * Apply the Smart screener filter set to a row array.
+ * Filters (all optional):
+ *   minScore       — minimum score (default 0)
+ *   directions     — Set of allowed directions ('LONG' | 'SHORT' | 'NEUTRAL').
+ *                    Empty / null / undefined means "all".
+ *   minConfidence  — minimum confidence 0-100 (default 0). Rows with
+ *                    null/undefined confidence are treated as 0.
+ *
+ * Returns a NEW array; original rows are not mutated.
+ */
+export function filterSmartRows(rows, filters = {}) {
+  if (!Array.isArray(rows)) return [];
+  const {
+    minScore = 0,
+    directions = null,
+    minConfidence = 0,
+  } = filters;
+  const dirSet = directions && typeof directions[Symbol.iterator] === 'function' && !(directions instanceof Set)
+    ? new Set(directions)
+    : directions instanceof Set
+      ? directions
+      : null;
+  const out = [];
+  for (const r of rows) {
+    if (!r || r.score == null) continue;
+    if (r.score < minScore) continue;
+    if (dirSet && !dirSet.has(r.direction)) continue;
+    const conf = r.confidence == null ? 0 : r.confidence;
+    if (conf < minConfidence) continue;
+    out.push(r);
+  }
+  return out;
+}
+
+/**
+ * Sort Smart screener rows by a key. Returns a NEW array.
+ *
+ * Keys: 'sym' | 'score' | 'mr' | 'fit' | 'dir' | 'conf' | 'gkh'
+ *   - 'sym' / 'dir': localeCompare (string)
+ *   - others: numeric; null/NaN are sorted to -Infinity so they
+ *     appear at the bottom on desc and at the top on asc.
+ *
+ * dir: 'asc' | 'desc' (default 'desc').
+ */
+export function sortSmartRows(rows, key = 'score', dir = 'desc') {
+  if (!Array.isArray(rows)) return [];
+  const sign = dir === 'asc' ? 1 : -1;
+  const valueOf = (r) => {
+    if (key === 'sym') return r.sym || '';
+    if (key === 'score') return r.score;
+    if (key === 'mr') return r.mr;
+    if (key === 'fit') return r.fit;
+    if (key === 'dir') return r.direction || '';
+    if (key === 'conf') return r.confidence == null ? -Infinity : r.confidence;
+    if (key === 'gkh') return r.raw?.gkPct;
+    return null;
+  };
+  return rows.slice().sort((a, b) => {
+    const va = valueOf(a);
+    const vb = valueOf(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;       // nulls last
+    if (vb == null) return -1;
+    if (typeof va === 'string' || typeof vb === 'string') {
+      return String(va).localeCompare(String(vb)) * sign;
+    }
+    const na = typeof va === 'number' && isFinite(va) ? va : -Infinity;
+    const nb = typeof vb === 'number' && isFinite(vb) ? vb : -Infinity;
+    return (na - nb) * sign;
+  });
+}
+
+/** Band → color used for the score badge. Pure. */
+export function smartBandColor(band) {
+  if (band === 'green') return '#22c55e';
+  if (band === 'yellow') return '#eab308';
+  if (band === 'red') return '#ef4444';
+  return '#94a3b8';
+}
+
+/** Direction → color used for the direction badge. Pure. */
+export function smartDirectionColor(direction) {
+  if (direction === 'LONG') return '#22c55e';
+  if (direction === 'SHORT') return '#ef4444';
+  return '#94a3b8';
+}
+
+/**
+ * Build the user-visible empty-state message based on the screener state.
+ * Pure: callers pass primitive state flags.
+ */
+export function smartEmptyMessage(state = {}) {
+  const { loading = false, error = '', hasFilters = false } = state;
+  if (loading) return 'Загрузка…';
+  if (error) return String(error);
+  return hasFilters
+    ? 'Нет результатов (проверь фильтры).'
+    : 'Нет результатов.';
+}
+
+/**
+ * Build the HTML string for skeleton rows shown while a scan is in flight.
+ * Returns N rows (default 8) of placeholder bars; relies on the
+ * `.gbs-skeleton*` CSS classes defined in style.css.
+ *
+ * Pure: depends only on the rowCount parameter; uses inline className
+ * strings (no dynamic data) so it's safe to interpolate directly into HTML.
+ */
+export function smartSkeletonRows(rowCount = 8) {
+  const n = Math.max(1, Math.min(20, rowCount | 0));
+  let html = '';
+  for (let i = 0; i < n; i++) {
+    html += `<tr><td colspan="9" style="padding:0 8px">
+      <div class="gbs-skeleton">
+        <span class="gbs-skeleton-bar gbs-skeleton-bar--w12"></span>
+        <span class="gbs-skeleton-bar gbs-skeleton-bar--w70"></span>
+      </div>
+    </td></tr>`;
+  }
+  return html;
+}
+
+// ───────────────────────────────────────────────────────────────
+//  Screener registration (modal + scan + render)
+// ───────────────────────────────────────────────────────────────
+
+const SUPPORTED_TFS = ['5m', '15m', '1h', '4h', '1d'];
+const CONTEXT_TF = { '5m': '15m', '15m': '1h', '1h': '4h', '4h': '1d', '1d': '1d' };
+const TF_BARS = { '5m': 300, '15m': 200, '1h': 200, '4h': 200, '1d': 120 };
+
+export function registerGridSmartScreener(deps) {
+  const {
+    S,
+    fj,
+    batchKlines,
+    fn,
+    fmtPrice,
+    openFullscreenBySym,
+    openGridLabFromRow,
+    BACKEND,
+    GROUP_COLORS = ['', '#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#8b5cf6', '#ec4899'],
+    tagScreenerGroup,
+  } = deps || {};
+
+  const klineCache = createKlineCache(batchKlines, 5 * 60 * 1000);
+  const getMcapMap = createMcapProvider(fj, BACKEND);
+
+  function vol24For(sym) {
+    return S?.mx?.[sym]?.vol24 ?? S?.tk?.[sym]?.qv ?? null;
+  }
+
+  function openGridSmartScreener() {
+    const old = document.getElementById('gridSmartModal');
+    if (old) {
+      old.remove();
+      return;
+    }
+    const modal = document.createElement('div');
+    modal.id = 'gridSmartModal';
+    modal.style.cssText =
+      'position:fixed;inset:0;z-index:818;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;';
+
+    const box = document.createElement('div');
+    box.style.cssText =
+      'width:min(1100px,98vw);height:min(88vh,900px);background:var(--bg2);border:1px solid var(--border2);border-radius:10px;display:flex;flex-direction:column;overflow:hidden;';
+
+    const cacheKey = '__gbs_smart_v1';
+    const cachedUi = typeof window !== 'undefined' ? window[cacheKey] : null;
+    const ui = cachedUi || {
+      tf: '15m',
+      minScore: 7,
+      showLong: true,
+      showShort: true,
+      showNeutral: true,
+      showLowConf: false,
+      showConfluence: true,
+      sortKey: 'score',
+      sortDir: 'desc',
+      lastRows: [],
+      error: '',
+      diag: '',
+      loading: false,
+      lastRun: 0,
+      timer: null,
+      listGroup: 0,
+    };
+    if (typeof window !== 'undefined') window[cacheKey] = ui;
+    if (ui.listGroup == null) ui.listGroup = 0;
+
+    function renderMeta() {
+      const lu = box.querySelector('#gbsSmartLu');
+      if (lu) lu.textContent = ui.lastRun ? new Date(ui.lastRun).toLocaleTimeString() : '—';
+      const sk = box.querySelector('#gbsSmartSk');
+      if (sk) sk.style.display = ui.loading ? '' : 'none';
+      const dg = box.querySelector('#gbsSmartDiag');
+      if (dg) dg.textContent = ui.diag || '';
+    }
+
+    function applyFiltersAndRender() {
+      // Build the direction set from ui flags.
+      const allowedDirs = new Set();
+      if (ui.showLong) allowedDirs.add('LONG');
+      if (ui.showShort) allowedDirs.add('SHORT');
+      if (ui.showNeutral) allowedDirs.add('NEUTRAL');
+      const minConf = ui.showLowConf ? 0 : 60;
+
+      let rows = filterSmartRows(ui.lastRows, {
+        minScore: ui.minScore,
+        directions: allowedDirs,
+        minConfidence: minConf,
+      });
+      rows = sortSmartRows(rows, ui.sortKey, ui.sortDir);
+
+      const tb = box.querySelector('#gbsSmartBody');
+      if (!tb) return;
+      if (!rows.length) {
+        // Skeleton during the initial scan; simple "Загрузка…" cell thereafter.
+        if (ui.loading && !ui.lastRun) {
+          tb.innerHTML = smartSkeletonRows(8);
+          renderMeta();
+          return;
+        }
+        const msg = smartEmptyMessage({
+          loading: ui.loading,
+          error: ui.error,
+          hasFilters: ui.minScore > 0 || !ui.showLong || !ui.showShort || !ui.showNeutral,
+        });
+        tb.innerHTML = `<tr><td colspan="9" style="padding:10px 8px;color:var(--text3);font-size:10px">${escapeHtml(msg)}</td></tr>`;
+        renderMeta();
+        return;
+      }
+      const frag = document.createDocumentFragment();
+      for (const r of rows) {
+        const tr = document.createElement('tr');
+        tr.dataset.sym = r.sym;
+        const badgeCls = `gbs-badge gbs-badge--${r.band === 'green' ? 'green' : r.band === 'yellow' ? 'yellow' : 'red'}`;
+        const dirCls = `gbs-badge gbs-badge--${r.direction === 'LONG' ? 'long' : r.direction === 'SHORT' ? 'short' : 'neutral'}`;
+        const conf = r.confluence;
+        const confMark = conf == null ? '—' : conf === 'agree' ? '✓' : conf === 'disagree' ? '·' : '—';
+        let confTitle;
+        if (conf == null) {
+          confTitle = 'нет данных старшего TF';
+        } else if (conf === 'na') {
+          confTitle = 'недостаточно данных';
+        } else {
+          // Use confluenceDetail (extended score) for richer tooltip.
+          const det = r.confluenceDetail;
+          if (det && Array.isArray(det.checks) && det.checks.length) {
+            const pct = Math.round((det.agreement || 0) * 100);
+            const lines = det.checks.map((c) => `${c.agree ? '✓' : '✗'} ${c.label}`).join('\n');
+            confTitle = `Согласие со старшим TF: ${pct}%\n${lines}`;
+          } else {
+            confTitle = conf === 'agree'
+              ? 'старший TF согласен по направлению'
+              : 'старший TF против рабочего';
+          }
+        }
+        const bd = Object.entries(r.breakdown || {})
+          .map(([group, comps]) =>
+            Object.entries(comps)
+              .map(([k, v]) => `<span class="gbs-tag" title="${escapeHtml(v.tip || k)}" style="cursor:help;border-bottom:1px dotted #a78bfa">${escapeHtml(k)}: ${escapeHtml(v.label)} → +${escapeHtml(v.pts)}</span>`)
+              .join(' ')
+          )
+          .join(' ');
+        tr.innerHTML = `
+          <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b style="cursor:pointer;color:#7dd3fc" class="gbs-open">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">🎬</button></div></td>
+          <td><span class="${escapeHtml(badgeCls)}">${escapeHtml(r.score)}</span></td>
+          <td><span class="${escapeHtml(dirCls)}">${escapeHtml(r.direction)}</span></td>
+          <td>${escapeHtml(r.confidence ?? 0)}%</td>
+          <td>${escapeHtml(r.mr)}/5</td>
+          <td>${escapeHtml(r.fit)}/5</td>
+          <td>${r.raw?.gkPct != null ? escapeHtml(r.raw.gkPct.toFixed(2)) + '%' : '—'}</td>
+          <td title="${escapeHtml(confTitle)}" style="text-align:center;font-size:11px">${ui.showConfluence ? confMark : '—'}</td>
+          <td style="font-size:9px;color:var(--text3)">${bd}</td>`;
+        frag.appendChild(tr);
+      }
+      tb.replaceChildren(frag);
+      tb.querySelectorAll('.gbs-open').forEach((el) => {
+        el.onclick = () => {
+          if (ui.timer) clearInterval(ui.timer);
+          modal.remove();
+          openFullscreenBySym(el.closest('tr').dataset.sym);
+        };
+      });
+      tb.querySelectorAll('.gbs-lab-open').forEach((el) => {
+        el.onclick = (e) => {
+          e.stopPropagation();
+          const tr = el.closest('tr');
+          const r = rows.find((x) => x.sym === tr.dataset.sym);
+          if (r && typeof openGridLabFromRow === 'function') {
+            // Smart stays open behind Grid Lab — no closeSelf callback.
+            // The 5-min refresh timer keeps running; on next tick it'll re-render.
+            openGridLabFromRow(r, 'smart');
+          }
+        };
+      });
+      renderMeta();
+      if (tagScreenerGroup && ui.listGroup > 0) {
+        for (const r of rows) tagScreenerGroup(r.sym, ui.listGroup);
+      }
+    }
+
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+        <span style="font-size:12px;font-weight:600;color:#fff;flex:1">Grid Smart · OU-фильтр</span>
+        <span id="gbsSmartSk" style="font-size:10px;color:var(--text3);display:none">Обновление…</span>
+        <span id="gbsSmartDiag" style="font-size:9px;color:var(--text3)"></span>
+        <button class="tbtn" id="gbsSmartRf">Обновить</button>
+        <button class="tbtn" id="gbsSmartX">Закрыть</button>
+      </div>
+      <div style="padding:10px 12px;border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:12px;align-items:center;font-size:10px">
+        <label title="Рабочий таймфрейм: все метрики (half-life, GK, ADF, slope) считаются по нему. Контекстный TF подтягивается автоматически для колонки «Конфлюэнс’." style="cursor:help;border-bottom:1px dotted var(--text3)">TF
+          <select id="gbsSmartTf" style="margin-left:4px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+            ${SUPPORTED_TFS.map(t => `<option value="${t}"${ui.tf === t ? ' selected' : ''}>${t}</option>`).join('')}
+          </select>
+        </label>
+        <label title="Минимальный итоговый score (0–13). Банд: ≥10 зелёный, ≥7 жёлтый, <7 красный." style="cursor:help;border-bottom:1px dotted var(--text3)">Мин. score <input type="range" id="gbsSmartMinSc" min="0" max="13" value="${ui.minScore}" style="width:100px;vertical-align:middle"></label>
+        <span id="gbsSmartMinScV">${ui.minScore}</span>
+        <label title="Показывать только ряды с направлением LONG (slope вверх + ADF/slope согласованы)" style="cursor:help"><input type="checkbox" id="gbsSmartLong"${ui.showLong ? ' checked' : ''}> LONG</label>
+        <label title="Показывать только ряды с направлением SHORT (slope вниз + ADF/slope согласованы)" style="cursor:help"><input type="checkbox" id="gbsSmartShort"${ui.showShort ? ' checked' : ''}> SHORT</label>
+        <label title="Показывать ряды без выраженного направления (adaptive threshold не пробит) — для нейтральных сеток" style="cursor:help"><input type="checkbox" id="gbsSmartNeutral"${ui.showNeutral ? ' checked' : ''}> NEUTRAL</label>
+        <label title="Если включено — добавляет ряды с confidence &lt; 60% (слабое согласие тестов, использовать с осторожностью)" style="cursor:help;border-bottom:1px dotted #f59e0b"><input type="checkbox" id="gbsSmartLowConf"${ui.showLowConf ? ' checked' : ''}> Low conf (&lt;60%)</label>
+        <label title="Показывать колонку «Конфлюэнс’: сравнение наклона рабочего TF (напр. 15m) со старшим TF (напр. 1h). ✓ — оба согласны по направлению, · — расходятся, — — данных нет" style="cursor:help;border-bottom:1px dotted #a78bfa"><input type="checkbox" id="gbsSmartConf"${ui.showConfluence ? ' checked' : ''}> Конфлюэнс</label>
+        <span style="margin-left:auto;color:var(--text3)">Обновлено: <span id="gbsSmartLu">—</span></span>
+      </div>
+      <div style="padding:4px 12px;border-bottom:1px solid var(--border);font-size:9px;color:var(--text3);line-height:1.4">
+        Score: mean-reversion (0–5) + grid fitness (0–5) + directional confidence (0–3). Направление адаптивное: порог = медиана |dirScore| по выборке. Границы: μ ± 1.5σ_T, где σ_T = GK·√(half-life). Уровни: 8–24, больше — при коротком half-life.
+      </div>
+      <div style="flex:1;min-height:0;overflow:auto">
+        <table class="gbs-table" style="width:100%;border-collapse:collapse;font-size:10px">
+          <thead><tr>
+            <th class="gbs-th" data-k="sym" title="Символ Binance. Клик — открыть график; 🎬 — открыть в Grid Lab с предложенными границами">Тикер</th>
+            <th class="gbs-th" data-k="score" title="Итоговый score 0–13: 5 — mean-reversion, 5 — grid fitness, 3 — directional confidence. ≥10 зелёный, ≥7 жёлтый, <7 красный">Score</th>
+            <th class="gbs-th" data-k="dir" title="Направление сетки: LONG (slope вверх), SHORT (slope вниз), NEUTRAL (без направления). Порог адаптивный по выборке">Dir</th>
+            <th class="gbs-th" data-k="conf" title="Уверенность направления: насколько единогласны тесты ADF + slope + Hurst + VWAP. 0–100%">Конф</th>
+            <th class="gbs-th" data-k="mr" title="Mean-reversion quality: Hurst ∈ [0.30,0.50], VR <0.7, OU half-life ∈ [10,50]. Чем выше — тем надёжнее возврат к средней">MR</th>
+            <th class="gbs-th" data-k="fit" title="Grid fitness: GK vol 1–5%, vol/mcap >0.05, спред <2%. Чем выше — тем пригоднее для сетки">fit</th>
+            <th class="gbs-th" data-k="gkh" title="GK vol / price за один бар, в %. Используется для оценки плотности сетки">ΔH/L</th>
+            <th title="Конфлюэнс со старшим TF: ✓ — наклон согласен по знаку, · — против, — — данных нет">${ui.showConfluence ? 'старш.' : '—'}</th>
+            <th title="Наведи на фиолетовые теги — там человеческим языком объясняется каждая метрика">Метрики</th>
+          </tr></thead>
+          <tbody id="gbsSmartBody"></tbody>
+        </table>
+      </div>
+    `;
+
+    modal.appendChild(box);
+    document.body.appendChild(modal);
+    ui.modal = modal; // host for non-blocking error toasts (see showSmartToast)
+
+    const onHdr = (e) => {
+      const th = e.target.closest('.gbs-th');
+      if (!th || !th.dataset.k) return;
+      const k = th.dataset.k;
+      if (ui.sortKey === k) ui.sortDir = ui.sortDir === 'desc' ? 'asc' : 'desc';
+      else { ui.sortKey = k; ui.sortDir = 'desc'; }
+      applyFiltersAndRender();
+    };
+    box.querySelector('thead').addEventListener('click', onHdr);
+
+    box.querySelector('#gbsSmartTf').onchange = (e) => {
+      ui.tf = e.target.value;
+      runSmartScan(ui);
+    };
+    box.querySelector('#gbsSmartMinSc').oninput = (e) => {
+      ui.minScore = +e.target.value;
+      box.querySelector('#gbsSmartMinScV').textContent = String(ui.minScore);
+      applyFiltersAndRender();
+    };
+    box.querySelector('#gbsSmartLong').onchange = (e) => {
+      ui.showLong = e.target.checked;
+      applyFiltersAndRender();
+    };
+    box.querySelector('#gbsSmartShort').onchange = (e) => {
+      ui.showShort = e.target.checked;
+      applyFiltersAndRender();
+    };
+    box.querySelector('#gbsSmartNeutral').onchange = (e) => {
+      ui.showNeutral = e.target.checked;
+      applyFiltersAndRender();
+    };
+    box.querySelector('#gbsSmartLowConf').onchange = (e) => {
+      ui.showLowConf = e.target.checked;
+      applyFiltersAndRender();
+    };
+    box.querySelector('#gbsSmartConf').onchange = (e) => {
+      ui.showConfluence = e.target.checked;
+      applyFiltersAndRender();
+    };
+    box.querySelector('#gbsSmartRf').onclick = () => runSmartScan(ui);
+    box.querySelector('#gbsSmartX').onclick = () => {
+      if (ui.timer) clearInterval(ui.timer);
+      modal.remove();
+    };
+    modal.addEventListener('mousedown', (e) => {
+      if (e.target === modal) {
+        if (ui.timer) clearInterval(ui.timer);
+        modal.remove();
+      }
+    });
+
+    async function runSmartScan(uiRef) {
+      // Stale-scan guard: increment uiRef.scanId so any in-flight scan from a previous
+      // TF switch won't overwrite newer results. Each await checks uiRef.scanId vs its
+      // captured myId and aborts if it's stale.
+      uiRef.scanId = (uiRef.scanId || 0) + 1;
+      const myId = uiRef.scanId;
+      const isStale = () => myId !== uiRef.scanId;
+
+      uiRef.loading = true;
+      uiRef.error = '';
+      uiRef.diag = 'universe…';
+      if (uiRef.renderMeta) uiRef.renderMeta();
+      try {
+        const baseAll = (S?.syms || []).slice();
+        // Universe: top 200 by volume (no hard minVol — Smart penalises thin coins).
+        const syms = selectUniverse(baseAll, vol24For, 200);
+        if (isStale()) return;
+        if (!syms.length) {
+          uiRef.lastRows = [];
+          uiRef.lastRun = Date.now();
+          uiRef.error = 'Universe пустой: ещё не загрузились объёмы (S.mx / S.tk). Подождите загрузки списка символов и попробуйте снова.';
+          uiRef.diag = 'universe=0';
+          uiRef.loading = false;
+          if (uiRef.applyFiltersAndRender) uiRef.applyFiltersAndRender();
+          if (typeof showSmartToast === 'function' && uiRef.modal) {
+            showSmartToast(uiRef.modal, uiRef.error, {
+              actionLabel: 'Обновить',
+              onAction: () => { try { runSmartScan(uiRef); } catch (e) {} },
+            });
+          }
+          return;
+        }
+        uiRef.diag = `universe ${syms.length}/${baseAll.length || 0} · mcap…`;
+        if (uiRef.renderMeta) uiRef.renderMeta();
+        const mcapMap = await getMcapMap();
+        if (isStale()) return;
+        const tf = uiRef.tf;
+        const tfCtx = CONTEXT_TF[tf] || tf;
+        const bars = TF_BARS[tf] || 200;
+        const barsCtx = tfCtx === tf ? 0 : (TF_BARS[tfCtx] || 100);
+        uiRef.diag = `universe ${syms.length} · mcap ${mcapMap?.size || 0} · ${tf}…`;
+        if (uiRef.renderMeta) uiRef.renderMeta();
+        const kl = await klineCache.batchCached(syms, tf, bars, null, null, 8);
+        if (isStale()) return;
+        let klCtx = null;
+        if (barsCtx > 0) {
+          uiRef.diag = `universe ${syms.length} · mcap ${mcapMap?.size || 0} · ${tf} ${Object.keys(kl || {}).length} · ${tfCtx}…`;
+          if (uiRef.renderMeta) uiRef.renderMeta();
+          klCtx = await klineCache.batchCached(syms, tfCtx, barsCtx, null, null, 8);
+          if (isStale()) return;
+        }
+        uiRef.diag = `universe ${syms.length} · ${tf} ${Object.keys(kl || {}).length} · ${tfCtx} ${Object.keys(klCtx || {}).length} · scoring…`;
+        if (uiRef.renderMeta) uiRef.renderMeta();
+
+        // First pass: compute rows
+        const rawRows = [];
+        for (const sym of syms) {
+          try {
+            const r = computeSmartRow(sym, kl?.[sym], klCtx?.[sym], mcapMap, vol24For);
+            if (r) rawRows.push(r);
+          } catch (e) {
+            /* skip individual failures */
+          }
+        }
+        if (isStale()) return;
+
+        // Compute direction over the universe (adaptive threshold)
+        const universeDirScores = rawRows
+          .map((r) => r.raw?.slope != null ? r.raw.slope * (Math.abs(r.raw.slope) >= 0.3 ? 1 : 0.5) : 0)
+          .filter((v) => isFinite(v));
+        for (const r of rawRows) {
+          const cd = classifyDirection(r, universeDirScores);
+          r.direction = cd.dir;
+          r.confidence = cd.confidence;
+          r.dirScore = cd.dirScore;
+        }
+        if (isStale()) return;
+
+        uiRef.lastRows = rawRows;
+        uiRef.lastRun = Date.now();
+        uiRef.diag = `rows ${rawRows.length}/${syms.length} · last ${new Date(uiRef.lastRun).toLocaleTimeString()}`;
+        if (!rawRows.length) {
+          uiRef.error = 'Список пуст: не удалось получить klines. Возможен rate-limit Binance.';
+          if (typeof showSmartToast === 'function' && uiRef.modal) {
+            showSmartToast(uiRef.modal, uiRef.error, {
+              actionLabel: 'Повторить',
+              onAction: () => { try { runSmartScan(uiRef); } catch (e) {} },
+            });
+          }
+        }
+      } catch (e) {
+        if (isStale()) return;
+        uiRef.lastRows = [];
+        uiRef.error = `Ошибка скана: ${e?.message || String(e)}`;
+        uiRef.diag = 'error';
+        if (typeof showSmartToast === 'function' && uiRef.modal) {
+          showSmartToast(uiRef.modal, uiRef.error, {
+            actionLabel: 'Повторить',
+            onAction: () => { try { runSmartScan(uiRef); } catch (e) {} },
+          });
+        }
+      } finally {
+        if (myId === uiRef.scanId) {
+          uiRef.loading = false;
+          if (uiRef.applyFiltersAndRender) uiRef.applyFiltersAndRender();
+        }
+      }
+    }
+
+    ui.renderMeta = renderMeta;
+    ui.applyFiltersAndRender = applyFiltersAndRender;
+    if (ui.timer) { clearInterval(ui.timer); ui.timer = null; }
+    ui.timer = setInterval(() => runSmartScan(ui), 300000); // 5 min
+    if (ui.lastRows?.length) ui.applyFiltersAndRender();
+    runSmartScan(ui);
+  }
+
+  if (typeof window !== 'undefined') {
+    window.openGridSmartScreener = openGridSmartScreener;
+  }
+  return { openGridSmartScreener };
+}

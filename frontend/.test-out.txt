@@ -1,0 +1,460 @@
+TAP version 13
+# Subtest: gbDepositClamp: valid number ≥ min returned as-is
+ok 1 - gbDepositClamp: valid number ≥ min returned as-is
+  ---
+  duration_ms: 1.8404
+  type: 'test'
+  ...
+# Subtest: gbDepositClamp: NaN/Infinity → fallback
+ok 2 - gbDepositClamp: NaN/Infinity → fallback
+  ---
+  duration_ms: 0.1351
+  type: 'test'
+  ...
+# Subtest: gbDepositClamp: value below minimum → min
+ok 3 - gbDepositClamp: value below minimum → min
+  ---
+  duration_ms: 0.1485
+  type: 'test'
+  ...
+# Subtest: gbDepositClamp: non-numeric string → fallback
+ok 4 - gbDepositClamp: non-numeric string → fallback
+  ---
+  duration_ms: 0.126
+  type: 'test'
+  ...
+# Subtest: gridAdjacentStepPcts: even 1% grid → all values 1
+ok 5 - gridAdjacentStepPcts: even 1% grid → all values 1
+  ---
+  duration_ms: 0.2898
+  type: 'test'
+  ...
+# Subtest: gridAdjacentStepPcts: empty/short grid → nulls
+ok 6 - gridAdjacentStepPcts: empty/short grid → nulls
+  ---
+  duration_ms: 0.8088
+  type: 'test'
+  ...
+# Subtest: gridAdjacentStepPcts: refPrice=0 falls back to grid midpoint
+ok 7 - gridAdjacentStepPcts: refPrice=0 falls back to grid midpoint
+  ---
+  duration_ms: 0.2536
+  type: 'test'
+  ...
+# Subtest: resolveGridLevelsForCfg: even spacing when no custom grid
+ok 8 - resolveGridLevelsForCfg: even spacing when no custom grid
+  ---
+  duration_ms: 0.2328
+  type: 'test'
+  ...
+# Subtest: resolveGridLevelsForCfg: custom gridLevels wins
+ok 9 - resolveGridLevelsForCfg: custom gridLevels wins
+  ---
+  duration_ms: 0.4533
+  type: 'test'
+  ...
+# Subtest: resolveGridLevelsForCfg: custom grid filtered for invalid values
+ok 10 - resolveGridLevelsForCfg: custom grid filtered for invalid values
+  ---
+  duration_ms: 0.4703
+  type: 'test'
+  ...
+# Subtest: resolveGridLevelsForCfg: custom grid < 2 valid → falls back to even
+ok 11 - resolveGridLevelsForCfg: custom grid < 2 valid → falls back to even
+  ---
+  duration_ms: 0.1958
+  type: 'test'
+  ...
+# Subtest: resolveGridLevelsForCfg: levels < 2 → bumped to 2
+ok 12 - resolveGridLevelsForCfg: levels < 2 → bumped to 2
+  ---
+  duration_ms: 0.1322
+  type: 'test'
+  ...
+# Subtest: buildRatioGridLevels: longRatio 3:1 with 12 levels → ~9 up, 3 down
+ok 13 - buildRatioGridLevels: longRatio 3:1 with 12 levels → ~9 up, 3 down
+  ---
+  duration_ms: 0.2544
+  type: 'test'
+  ...
+# Subtest: buildRatioGridLevels: anchor ≤ 0 → null
+ok 14 - buildRatioGridLevels: anchor ≤ 0 → null
+  ---
+  duration_ms: 0.1122
+  type: 'test'
+  ...
+# Subtest: buildRatioGridLevels: levels clamped to [3, 60]
+ok 15 - buildRatioGridLevels: levels clamped to [3, 60]
+  ---
+  duration_ms: 0.1457
+  type: 'test'
+  ...
+# Subtest: buildRatioGridLevels: stepPct clamped to [0.01, 50]
+ok 16 - buildRatioGridLevels: stepPct clamped to [0.01, 50]
+  ---
+  duration_ms: 0.1037
+  type: 'test'
+  ...
+# Subtest: buildRatioGridLevels: returned grid is sorted ascending
+ok 17 - buildRatioGridLevels: returned grid is sorted ascending
+  ---
+  duration_ms: 0.1989
+  type: 'test'
+  ...
+# Subtest: gridRiskAnchorIdx: long → last level ≤ current
+ok 18 - gridRiskAnchorIdx: long → last level ≤ current
+  ---
+  duration_ms: 0.172
+  type: 'test'
+  ...
+# Subtest: gridRiskAnchorIdx: short → first level ≥ current
+ok 19 - gridRiskAnchorIdx: short → first level ≥ current
+  ---
+  duration_ms: 0.1044
+  type: 'test'
+  ...
+# Subtest: gridRiskAnchorIdx: neutral → first level ≥ current
+ok 20 - gridRiskAnchorIdx: neutral → first level ≥ current
+  ---
+  duration_ms: 0.1227
+  type: 'test'
+  ...
+# Subtest: gridRiskAnchorIdx: anchorOverridePx snaps to nearest
+ok 21 - gridRiskAnchorIdx: anchorOverridePx snaps to nearest
+  ---
+  duration_ms: 0.1074
+  type: 'test'
+  ...
+# Subtest: gridRiskAnchorIdx: null/invalid anchorOverridePx → mode logic
+ok 22 - gridRiskAnchorIdx: null/invalid anchorOverridePx → mode logic
+  ---
+  duration_ms: 0.0915
+  type: 'test'
+  ...
+# Subtest: buildGridRiskRows: invalid cfg → []
+ok 23 - buildGridRiskRows: invalid cfg → []
+  ---
+  duration_ms: 0.3478
+  type: 'test'
+  ...
+# Subtest: buildGridRiskRows: neutral mode → symmetric rows
+ok 24 - buildGridRiskRows: neutral mode → symmetric rows
+  ---
+  duration_ms: 0.1843
+  type: 'test'
+  ...
+# Subtest: buildGridRiskRows: long mode → only downPct (price dropping)
+ok 25 - buildGridRiskRows: long mode → only downPct (price dropping)
+  ---
+  duration_ms: 0.1771
+  type: 'test'
+  ...
+# Subtest: buildGridRiskRows: short mode → only upPct (price rising)
+ok 26 - buildGridRiskRows: short mode → only upPct (price rising)
+  ---
+  duration_ms: 1.0709
+  type: 'test'
+  ...
+# Subtest: buildGridRiskRows: respects custom gridLevels
+ok 27 - buildGridRiskRows: respects custom gridLevels
+  ---
+  duration_ms: 0.2005
+  type: 'test'
+  ...
+# Subtest: buildGridFavorableRows: long mode → profit at each step up
+ok 28 - buildGridFavorableRows: long mode → profit at each step up
+  ---
+  duration_ms: 0.546
+  type: 'test'
+  ...
+# Subtest: buildGridFavorableRows: short mode → profit at each step down
+ok 29 - buildGridFavorableRows: short mode → profit at each step down
+  ---
+  duration_ms: 0.2575
+  type: 'test'
+  ...
+# Subtest: buildGridFavorableRows: neutral mode → [] (no preferred direction)
+ok 30 - buildGridFavorableRows: neutral mode → [] (no preferred direction)
+  ---
+  duration_ms: 0.2093
+  type: 'test'
+  ...
+# Subtest: buildGridFavorableRows: invalid cfg → []
+ok 31 - buildGridFavorableRows: invalid cfg → []
+  ---
+  duration_ms: 0.1932
+  type: 'test'
+  ...
+# Subtest: defaultGridLabPrefs: returns sane defaults
+ok 32 - defaultGridLabPrefs: returns sane defaults
+  ---
+  duration_ms: 0.1872
+  type: 'test'
+  ...
+# Subtest: loadGridLabPrefs: empty storage → defaults
+ok 33 - loadGridLabPrefs: empty storage → defaults
+  ---
+  duration_ms: 0.4026
+  type: 'test'
+  ...
+# Subtest: loadGridLabPrefs: corrupted JSON → defaults
+ok 34 - loadGridLabPrefs: corrupted JSON → defaults
+  ---
+  duration_ms: 0.3065
+  type: 'test'
+  ...
+# Subtest: loadGridLabPrefs: invalid tf → falls back to default
+ok 35 - loadGridLabPrefs: invalid tf → falls back to default
+  ---
+  duration_ms: 0.1658
+  type: 'test'
+  ...
+# Subtest: loadGridLabPrefs: invalid gridMode → falls back to neutral
+ok 36 - loadGridLabPrefs: invalid gridMode → falls back to neutral
+  ---
+  duration_ms: 0.1559
+  type: 'test'
+  ...
+# Subtest: loadGridLabPrefs: levels/bars/leverage clamped
+ok 37 - loadGridLabPrefs: levels/bars/leverage clamped
+  ---
+  duration_ms: 0.2546
+  type: 'test'
+  ...
+# Subtest: saveGridLabPrefs: round-trips through loadGridLabPrefs
+ok 38 - saveGridLabPrefs: round-trips through loadGridLabPrefs
+  ---
+  duration_ms: 0.4019
+  type: 'test'
+  ...
+# Subtest: saveGridLabPrefs: null storage → silently ignored
+ok 39 - saveGridLabPrefs: null storage → silently ignored
+  ---
+  duration_ms: 0.4999
+  type: 'test'
+  ...
+# Subtest: loadGridLabPrefs: null storage → defaults
+ok 40 - loadGridLabPrefs: null storage → defaults
+  ---
+  duration_ms: 0.144
+  type: 'test'
+  ...
+# Subtest: computeRatioGridUpdate: valid inputs update bounds + global ratios
+ok 41 - computeRatioGridUpdate: valid inputs update bounds + global ratios
+  ---
+  duration_ms: 0.2951
+  type: 'test'
+  ...
+# Subtest: computeRatioGridUpdate: missing sym → no update
+ok 42 - computeRatioGridUpdate: missing sym → no update
+  ---
+  duration_ms: 0.1315
+  type: 'test'
+  ...
+# Subtest: computeRatioGridUpdate: invalid ratios → no update
+ok 43 - computeRatioGridUpdate: invalid ratios → no update
+  ---
+  duration_ms: 0.2014
+  type: 'test'
+  ...
+# Subtest: computeRatioGridUpdate: invalid anchor → no update
+ok 44 - computeRatioGridUpdate: invalid anchor → no update
+  ---
+  duration_ms: 0.3562
+  type: 'test'
+  ...
+# Subtest: computeRatioGridUpdate: preserves existing anchorPrice
+ok 45 - computeRatioGridUpdate: preserves existing anchorPrice
+  ---
+  duration_ms: 0.1462
+  type: 'test'
+  ...
+# Subtest: computeRatioGridUpdate: levels clamped to [3, 60]
+ok 46 - computeRatioGridUpdate: levels clamped to [3, 60]
+  ---
+  duration_ms: 0.2972
+  type: 'test'
+  ...
+# Subtest: compileGridLabState: insufficient history → ok:false
+ok 47 - compileGridLabState: insufficient history → ok:false
+  ---
+  duration_ms: 0.5369
+  type: 'test'
+  ...
+# Subtest: compileGridLabState: invalid range (hi <= lo) → ok:false
+ok 48 - compileGridLabState: invalid range (hi <= lo) → ok:false
+  ---
+  duration_ms: 0.3039
+  type: 'test'
+  ...
+# Subtest: compileGridLabState: explicit lower/upper override series range
+ok 49 - compileGridLabState: explicit lower/upper override series range
+  ---
+  duration_ms: 0.2366
+  type: 'test'
+  ...
+# Subtest: compileGridLabState: invalid gridMode → neutral
+ok 50 - compileGridLabState: invalid gridMode → neutral
+  ---
+  duration_ms: 0.2101
+  type: 'test'
+  ...
+# Subtest: compileGridLabState: invalid anchorPrice → null
+ok 51 - compileGridLabState: invalid anchorPrice → null
+  ---
+  duration_ms: 0.1748
+  type: 'test'
+  ...
+# Subtest: compileGridLabState: missing lower/upper → derived from candles
+ok 52 - compileGridLabState: missing lower/upper → derived from candles
+  ---
+  duration_ms: 0.1656
+  type: 'test'
+  ...
+# Subtest: runManualGridBacktest: short history → ok:false
+ok 53 - runManualGridBacktest: short history → ok:false
+  ---
+  duration_ms: 0.4729
+  type: 'test'
+  ...
+# Subtest: runManualGridBacktest: produces trades and equity curve on oscillating series
+ok 54 - runManualGridBacktest: produces trades and equity curve on oscillating series
+  ---
+  duration_ms: 0.8035
+  type: 'test'
+  ...
+# Subtest: runManualGridBacktest: respects toChartTime mapper
+ok 55 - runManualGridBacktest: respects toChartTime mapper
+  ---
+  duration_ms: 0.4683
+  type: 'test'
+  ...
+# Subtest: runManualGridBacktest: maxDd is non-negative on oscillating series
+ok 56 - runManualGridBacktest: maxDd is non-negative on oscillating series
+  ---
+  duration_ms: 0.3859
+  type: 'test'
+  ...
+# Subtest: runManualGridBacktest: clamp deposit / leverage / levels
+ok 57 - runManualGridBacktest: clamp deposit / leverage / levels
+  ---
+  duration_ms: 0.6134
+  type: 'test'
+  ...
+# Subtest: gridRiskMetaForPrice: anchor branch
+ok 58 - gridRiskMetaForPrice: anchor branch
+  ---
+  duration_ms: 0.2139
+  type: 'test'
+  ...
+# Subtest: gridRiskMetaForPrice: long mode + price > anchor → tp-up
+ok 59 - gridRiskMetaForPrice: long mode + price > anchor → tp-up
+  ---
+  duration_ms: 0.1642
+  type: 'test'
+  ...
+# Subtest: gridRiskMetaForPrice: short mode + price < anchor → tp-down
+ok 60 - gridRiskMetaForPrice: short mode + price < anchor → tp-down
+  ---
+  duration_ms: 0.1259
+  type: 'test'
+  ...
+# Subtest: gridRiskMetaForPrice: neutral + matched up row → short side
+ok 61 - gridRiskMetaForPrice: neutral + matched up row → short side
+  ---
+  duration_ms: 0.1386
+  type: 'test'
+  ...
+# Subtest: gridRiskMetaForPrice: neutral + matched down row → long side
+ok 62 - gridRiskMetaForPrice: neutral + matched down row → long side
+  ---
+  duration_ms: 1.0057
+  type: 'test'
+  ...
+# Subtest: gridRiskMetaForPrice: unmatched price → unknown
+ok 63 - gridRiskMetaForPrice: unmatched price → unknown
+  ---
+  duration_ms: 0.1641
+  type: 'test'
+  ...
+# Subtest: fmtGridLineTitle: anchor
+ok 64 - fmtGridLineTitle: anchor
+  ---
+  duration_ms: 0.1571
+  type: 'test'
+  ...
+# Subtest: fmtGridLineTitle: tp-up / tp-down
+ok 65 - fmtGridLineTitle: tp-up / tp-down
+  ---
+  duration_ms: 0.208
+  type: 'test'
+  ...
+# Subtest: fmtGridLineTitle: unknown / null → empty
+ok 66 - fmtGridLineTitle: unknown / null → empty
+  ---
+  duration_ms: 0.1204
+  type: 'test'
+  ...
+# Subtest: fmtGridLineTitle: normal row
+ok 67 - fmtGridLineTitle: normal row
+  ---
+  duration_ms: 0.1411
+  type: 'test'
+  ...
+# Subtest: captureGbLabViewport / applyGbViewportFreeze: roundtrip (log branch wins over vt)
+ok 68 - captureGbLabViewport / applyGbViewportFreeze: roundtrip (log branch wins over vt)
+  ---
+  duration_ms: 0.5004
+  type: 'test'
+  ...
+# Subtest: applyGbViewportFreeze: fallback to vt when log is missing
+ok 69 - applyGbViewportFreeze: fallback to vt when log is missing
+  ---
+  duration_ms: 0.2454
+  type: 'test'
+  ...
+# Subtest: captureGbLabViewport: missing lc/cs → null
+ok 70 - captureGbLabViewport: missing lc/cs → null
+  ---
+  duration_ms: 0.1506
+  type: 'test'
+  ...
+# Subtest: applyGbViewportFreeze: null snap / missing chart → no-op
+ok 71 - applyGbViewportFreeze: null snap / missing chart → no-op
+  ---
+  duration_ms: 0.1846
+  type: 'test'
+  ...
+# Subtest: gbWantBarsFromVisible: derived from visible range with +480 padding
+ok 72 - gbWantBarsFromVisible: derived from visible range with +480 padding
+  ---
+  duration_ms: 0.197
+  type: 'test'
+  ...
+# Subtest: gbWantBarsFromVisible: huge visible range → clamp 1400
+ok 73 - gbWantBarsFromVisible: huge visible range → clamp 1400
+  ---
+  duration_ms: 0.1383
+  type: 'test'
+  ...
+# Subtest: gbWantBarsFromVisible: tiny range → clamp 200
+ok 74 - gbWantBarsFromVisible: tiny range → clamp 200
+  ---
+  duration_ms: 0.1483
+  type: 'test'
+  ...
+# Subtest: gbWantBarsFromVisible: no chart → fallback
+ok 75 - gbWantBarsFromVisible: no chart → fallback
+  ---
+  duration_ms: 0.1037
+  type: 'test'
+  ...
+1..75
+# tests 75
+# suites 0
+# pass 75
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 207.08
