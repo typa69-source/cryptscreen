@@ -2875,66 +2875,111 @@ function onRulerEnd(ch){
   updateRulerTooltip(ch);
 }
 
+// Cached ruler-tooltip DOM nodes. The old version called
+// getElementById 9× per mousemove which forces style/layout invalidation
+// and is a big chunk of why the tooltip felt slow on the mini-charts.
+let _rtNodes=null;
+function _rtDom(){
+  if(_rtNodes)return _rtNodes;
+  _rtNodes={
+    tt:document.getElementById('rulerTooltip'),
+    pct:document.getElementById('rtPct'),
+    bars:document.getElementById('rtBars'),
+    time:document.getElementById('rtTime'),
+    vol:document.getElementById('rtVol'),
+    vr:document.getElementById('rtVr'),
+    tr:document.getElementById('rtTr'),
+    natr:document.getElementById('rtNatr'),
+  };
+  return _rtNodes;
+}
+// Binary search for first candle index with t >= target. Candles are
+// sorted by time, so this turns the old O(n) findIndex into O(log n).
+function _lowerBound(arr,t,lo,hi){
+  while(lo<hi){const mid=(lo+hi)>>>1;if(arr[mid].t<t)lo=mid+1;else hi=mid;}
+  return lo;
+}
+
 function updateRulerTooltip(ch){
-  const tt=document.getElementById('rulerTooltip');
-  if(!ch.ruler?.p1||!ch.ruler?.p2){tt.style.display='none';return;}
+  const d=_rtDom();
+  if(!d.tt||!ch.ruler?.p1||!ch.ruler?.p2){if(d.tt)d.tt.style.display='none';return;}
   const r=ch.ruler;
   const pct=(r.p2.price-r.p1.price)/r.p1.price*100;
   const isUp=pct>=0;const col=isUp?'#1fa891':'#e04040';
-  const tMin=(Math.min(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000,tMax=(Math.max(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000;
+  const tMin=(Math.min(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000;
+  const tMax=(Math.max(r.p1.time,r.p2.time)-TZ_OFFSET_S)*1000;
+  // Binary search the start index instead of scanning the whole candle
+  // array — O(log n) instead of O(n) on every mouse move.
+  const cnd=ch.candles;
+  const n=cnd.length;
   let bars=0,vol=0,sumTr=0;
-  const rangeCl=[];
-  for(const c of ch.candles)if(c.t>=tMin&&c.t<=tMax){bars++;vol+=c.qv;sumTr+=c.tr||0;rangeCl.push(c);}
+  let startIdx=_lowerBound(cnd,tMin,0,n);
+  let endIdx=_lowerBound(cnd,tMax+1,startIdx,n);
+  const rangeLen=endIdx-startIdx;
+  for(let i=startIdx;i<endIdx;i++){vol+=cnd[i].qv;sumTr+=cnd[i].tr||0;}
+  bars=rangeLen;
 
-  // NATR of the range
+  // NATR of the range. Inline to avoid slicing `cnd` on every mousemove
+  // (slice would allocate a new array and the existing calcNATR expects
+  // a full candle array, not a sub-range). With a sub-range we need the
+  // ATR over just [startIdx..endIdx).
   let natrTxt='•';
-  if(rangeCl.length>=2){
-    const natr=calcNATR(rangeCl,rangeCl.length-1);
-    if(natr!=null)natrTxt=fn(natr,2)+'%';
+  if(rangeLen>=2){
+    let atrSum=0;
+    for(let i=startIdx+1;i<endIdx;i++){
+      const k=cnd[i],p=cnd[i-1];
+      atrSum+=Math.max(k.h-k.l,Math.abs(k.h-p.c),Math.abs(k.l-p.c));
+    }
+    const natr=atrSum/(rangeLen-1);
+    const lastClose=cnd[endIdx-1].c;
+    if(lastClose>0)natrTxt=fn(natr/lastClose*100,2)+'%';
   }
 
   // Volume spike: avg vol of range candles vs avg of preceding N candles
   let vrTxt='•', trTxt='•';
-  if(rangeCl.length>0&&ch.candles.length>bars){
-    const idx0=ch.candles.findIndex(c=>c.t===rangeCl[0].t);
-    if(idx0>0){
-      const preN=Math.min(idx0,bars*3,50);
-      const pre=ch.candles.slice(Math.max(0,idx0-preN),idx0);
-      if(pre.length>0){
-        const avgVol=pre.reduce((s,c)=>s+c.qv,0)/pre.length;
-        const avgTr=pre.reduce((s,c)=>s+(c.tr||0),0)/pre.length;
-        const rangeAvgVol=vol/rangeCl.length;
-        const rangeAvgTr=sumTr/rangeCl.length;
-        if(avgVol>0)vrTxt=fn(rangeAvgVol/avgVol,2)+'×';
-        if(avgTr>0)trTxt=fn(rangeAvgTr/avgTr,2)+'×';
-      }
-    }
+  if(rangeLen>0&&startIdx>0){
+    const preN=Math.min(startIdx,bars*3,50);
+    let avgVol=0,avgTr=0;
+    for(let i=startIdx-preN;i<startIdx;i++){avgVol+=cnd[i].qv;avgTr+=cnd[i].tr||0;}
+    avgVol/=preN;avgTr/=preN;
+    if(avgVol>0)vrTxt=fn((vol/rangeLen)/avgVol,2)+'×';
+    if(avgTr>0)trTxt=fn((sumTr/rangeLen)/avgTr,2)+'×';
   }
 
-  setText('rtPct',(isUp?'+':'')+pct.toFixed(3)+'%');
-  document.getElementById('rtPct').style.color=col;
-  setText('rtBars',`Баров: ${bars}`);
-  setText('rtTime',`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`);
-  setText('rtVol',`Объём: ${fk(vol)} USDT`);
-  // Candle-based change: open of first candle → close of last candle in range
-  let cndPctTxt='•';
-  if(rangeCl.length>=1){
-    const openPrice=rangeCl[0].o;
-    const closePrice=rangeCl[rangeCl.length-1].c;
+  // All DOM writes batched below — no getElementById in the hot path.
+  const pctTxt=(isUp?'+':'')+pct.toFixed(3)+'%';
+  if(d.pct.textContent!==pctTxt)d.pct.textContent=pctTxt;
+  if(d.pct.style.color!==col)d.pct.style.color=col;
+  const barsTxt=`Баров: ${bars}`;
+  if(d.bars.textContent!==barsTxt)d.bars.textContent=barsTxt;
+  const timeTxt=`Время: ${formatDuration(Math.abs(r.p2.time-r.p1.time))}`;
+  if(d.time.textContent!==timeTxt)d.time.textContent=timeTxt;
+  const volTxt=`Объём: ${fk(vol)} USDT`;
+  if(d.vol.textContent!==volTxt)d.vol.textContent=volTxt;
+  if(rangeLen>=1){
+    const openPrice=cnd[startIdx].o;
+    const closePrice=cnd[endIdx-1].c;
     const cndPct=(closePrice-openPrice)/openPrice*100;
     const cndCol=cndPct>=0?'#1fa891':'#e04040';
-    setText('rtNatr',`Свечи: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`);
-    document.getElementById('rtNatr').style.color=cndCol;
+    const natrTxt2=`Свечи: ${cndPct>=0?'+':''}${cndPct.toFixed(3)}%`;
+    if(d.natr.textContent!==natrTxt2)d.natr.textContent=natrTxt2;
+    if(d.natr.style.color!==cndCol)d.natr.style.color=cndCol;
   } else {
-    setText('rtNatr','Свечи: •');
-    document.getElementById('rtNatr').style.color='';
+    if(d.natr.textContent!=='Свечи: •')d.natr.textContent='Свечи: •';
+    if(d.natr.style.color!=='')d.natr.style.color='';
   }
-  setText('rtVr',`NATR: ${natrTxt}`);
-  setText('rtTr',`ОБ*: ${vrTxt}  СД*: ${trTxt}`);
+  const vrTxt2=`NATR: ${natrTxt}`;
+  if(d.vr.textContent!==vrTxt2)d.vr.textContent=vrTxt2;
+  const trTxt2=`ОБ*: ${vrTxt}  СД*: ${trTxt}`;
+  if(d.tr.textContent!==trTxt2)d.tr.textContent=trTxt2;
+  // Position via transform: translate3d — keeps the tooltip on its own
+  // composited layer (CSS already has will-change:transform) and skips
+  // layout entirely. The old style.left/top forced a layout pass per move.
   const tw=175,th=120;
-  tt.style.left=Math.min(r.mouseX+18,window.innerWidth-tw-8)+'px';
-  tt.style.top=Math.max(r.mouseY-th-8,4)+'px';
-  tt.style.display='block';
+  const x=Math.min(r.mouseX+18,window.innerWidth-tw-8);
+  const y=Math.max(r.mouseY-th-8,4);
+  d.tt.style.transform=`translate3d(${x}px, ${y}px, 0)`;
+  d.tt.style.display='block';
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -5050,24 +5095,36 @@ function dragSpl(e,splId,leftId,bodyId){
   const spl=document.getElementById(splId);spl.classList.add('drag');
   const left=document.getElementById(leftId);
   const body=document.getElementById(bodyId);
-  const onM=(ev)=>{
-    const r=body.getBoundingClientRect();
-    const pct=Math.max(20,Math.min(85,((ev.clientX-r.left)/r.width)*100));
-    left.style.width=pct+'%';
-    // Keep the screener width consistent between main and fullscreen modes
-    if(leftId==='cpanel'){
-      const fsCA=document.getElementById('fsChartArea');
-      if(fsCA){fsCA.style.flex='none';fsCA.style.width=pct+'%';}
-      S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
-    } else if(leftId==='fsChartArea'){
-      const cp=document.getElementById('cpanel');
-      if(cp){cp.style.flex='none';cp.style.width=pct+'%';}
-      S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
-    }
-    [...S.charts,...S.fsCharts].forEach(ch=>{if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(er){}});
+  const fsCA=document.getElementById('fsChartArea');
+  const cp=document.getElementById('cpanel');
+  // Cache the body rect once — `getBoundingClientRect` is layout-bound
+  // and was the main reason dragging felt slow (called per mousemove).
+  const bodyRect0=body.getBoundingClientRect();
+  let resizeRaf=0;
+  const doResize=()=>{
+    resizeRaf=0;
+    for(const ch of S.charts){if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(_){}}
+    for(const ch of S.fsCharts){if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(_){}}
   };
-  const onU=()=>{spl.classList.remove('drag');window.removeEventListener('mousemove',onM);window.removeEventListener('mouseup',onU);};
-  window.addEventListener('mousemove',onM);window.addEventListener('mouseup',onU);
+  const onM=(ev)=>{
+    const pct=Math.max(20,Math.min(85,((ev.clientX-bodyRect0.left)/bodyRect0.width)*100));
+    left.style.width=pct+'%';
+    if(leftId==='cpanel'&&fsCA){fsCA.style.flex='none';fsCA.style.width=pct+'%';}
+    else if(leftId==='fsChartArea'&&cp){cp.style.flex='none';cp.style.width=pct+'%';}
+    S._savedCpW=pct+'%';S._savedFsCaW=pct+'%';
+    // Coalesce all per-move lc.resize() calls into a single rAF: at
+    // 120Hz mouse this turns N sync layout passes into one.
+    if(!resizeRaf)resizeRaf=requestAnimationFrame(doResize);
+  };
+  const onU=()=>{
+    spl.classList.remove('drag');
+    window.removeEventListener('mousemove',onM);
+    window.removeEventListener('mouseup',onU);
+    // Make sure the final resize still runs even if rAF is pending.
+    if(!resizeRaf)doResize();
+  };
+  window.addEventListener('mousemove',onM);
+  window.addEventListener('mouseup',onU);
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -5957,10 +6014,26 @@ async function main() {
     loadChartHeadPrefs();
     loadLineColorPrefs();
     loadUiPrefs();
+
+    // Kick off the chart-library CDN load IMMEDIATELY and in parallel
+    // with everything else. The preconnect/dns-prefetch tags in index.html
+    // have already started DNS+TLS, so by the time we need LC (only
+    // when we call initLCChart) the script is usually already in flight.
     ldSet('Загрузка библиотеки графиковвЂ¦',5);
-    for(const url of['https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js','https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js']){
-      try{await loadScript(url);if(typeof LightweightCharts!=='undefined'){S.LC=LightweightCharts;break;}}catch(e){}
-    }
+    const lcPromise = (async () => {
+      for (const url of [
+        'https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js',
+        'https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js',
+      ]) {
+        try {
+          await loadScript(url);
+          if (typeof LightweightCharts !== 'undefined') {
+            S.LC = LightweightCharts;
+            return;
+          }
+        } catch (e) { /* try the next CDN */ }
+      }
+    })();
 
     ldSet('Построение интерфейсавЂ¦',12);
     buildChartGrid();
@@ -5968,7 +6041,6 @@ async function main() {
     updateToggleScrBtn(); // first paint: replace the ASCII placeholder
     buildScreenerHeader(document.getElementById('shdr'));
     updSortHdr();
-    if(S.LC)for(let i=0;i<S.gridSize;i++)initLCChart(i);
 
     // ── IDB cache hydrate ──────────────────────────────────────────
     // Show cached ticker/symbols immediately so the screener is not
@@ -5976,7 +6048,8 @@ async function main() {
     // overwrite these values a moment later.
     let _cacheHitSyms = false;
     let _cacheHitTk = false;
-    if (cacheHasIDB()) {
+    const idbPromise = (async () => {
+      if (!cacheHasIDB()) return;
       try {
         const [cachedSyms, cachedTk] = await Promise.all([
           cacheGetFresh('binance:symbols', 24 * 60 * 60 * 1000),
@@ -5993,43 +6066,57 @@ async function main() {
         if (_cacheHitSyms || _cacheHitTk) {
           // Render placeholder rows so the UI is not blank while fresh
           // data is fetched. mx is still empty so most metrics show as
-          // '—'; we will re-render once calcAll() has run.
+          // dashes; we will re-render once calcAll() has run.
           renderTable();
         }
       } catch (e) { /* cache is best-effort, never block init */ }
-    }
+    })();
 
+    // Wait for LC AND IDB in parallel before doing anything that needs them.
+    await Promise.all([lcPromise, idbPromise]);
+    if (S.LC) for (let i = 0; i < S.gridSize; i++) initLCChart(i);
+
+    // ── Exchange info + 24h ticker in parallel ─────────────────────
+    // These two endpoints are independent — fire them together so the
+    // serial round-trips become one round-trip. Both have separate
+    // try/catch fallbacks below.
     ldSet('Получение списка фьючерсов BinanceвЂ¦',18);
-    let info;
-    try{info=await fj(`${API}/exchangeInfo`);}
-    catch(e){
-      // If we already have symbols from cache, don't fail hard — the
-      // screener can still work with stale symbols while we retry.
+    const [infoResult, tkResult] = await Promise.allSettled([
+      fj(`${API}/exchangeInfo`),
+      fj(`${API}/ticker/24hr`),
+    ]);
+
+    if (infoResult.status === 'fulfilled') {
+      const info = infoResult.value;
+      if (info && Array.isArray(info.symbols)) {
+        S.syms = info.symbols
+          .filter(s => s?.contractType === 'PERPETUAL' && s?.quoteAsset === 'USDT' && s?.status === 'TRADING')
+          .map(s => s.symbol)
+          .sort();
+        cacheSet('binance:symbols', S.syms, 24 * 60 * 60 * 1000);
+      }
+    } else {
+      const e = infoResult.reason;
       if (_cacheHitSyms) {
         console.warn('exchangeInfo refresh failed, using cache:', e.message);
       } else {
         throw new Error(`Не удалось подключиться к Binance API.\n${e.message}\n\nПричины: нет интернета, Binance заблокирован, CORS.`);
       }
     }
-    if(info&&Array.isArray(info.symbols)){
-      S.syms=info.symbols.filter(s=>s?.contractType==='PERPETUAL'&&s?.quoteAsset==='USDT'&&s?.status==='TRADING').map(s=>s.symbol).sort();
-      cacheSet('binance:symbols', S.syms, 24 * 60 * 60 * 1000);
-    }
 
     ldSet('Загрузка 24-часовых данныхвЂ¦',45);
-    try{
-      const rawTk=await fj(`${API}/ticker/24hr`);
-      if(Array.isArray(rawTk)){
-        for(const t of rawTk){
-          if(t?.symbol?.endsWith('USDT'))
-            S.tk[t.symbol]={p:+t.lastPrice,c24:+t.priceChangePercent,h24:+t.highPrice,l24:+t.lowPrice,qv:+t.quoteVolume,tr:+t.count};
+    if (tkResult.status === 'fulfilled') {
+      const rawTk = tkResult.value;
+      if (Array.isArray(rawTk)) {
+        for (const t of rawTk) {
+          if (t?.symbol?.endsWith('USDT'))
+            S.tk[t.symbol] = { p: +t.lastPrice, c24: +t.priceChangePercent, h24: +t.highPrice, l24: +t.lowPrice, qv: +t.quoteVolume, tr: +t.count };
         }
         // Persist the freshly-built map for next cold start.
         cacheSet('binance:ticker24', S.tk, 30 * 1000);
       }
-    }catch(e){
-      // If we already have ticker from cache, the UI still works.
-      if (!_cacheHitTk) console.warn('ticker/24hr failed:', e.message);
+    } else if (!_cacheHitTk) {
+      console.warn('ticker/24hr failed:', tkResult.reason && tkResult.reason.message);
     }
 
     ldSet('Вычисление метриквЂ¦',70);
@@ -6063,23 +6150,30 @@ async function main() {
       calcAll();
     }
     ldSet('Готово!',100);
-    renderTable();updSortHdr();updTime();refreshEMAButtonState();
-    setTimeout(ldHide,150);
-    const restoredLayout=hydrateUserSession();
-    if(!restoredLayout)updateCharts();
+    renderTable(); updSortHdr(); updTime(); refreshEMAButtonState();
+    setTimeout(ldHide, 150);
+
+    // Defer trivial UI-sync calls so the loader can fade out and the
+    // first paint of the chart grid happens immediately. These calls
+    // each toggle a button's `on` class — they don't block layout.
+    requestIdleCallback(() => {
+      syncFastBtnUi();
+      syncChartSyncBtnUi();
+      syncOiChartBtnUi();
+      syncBbBtnUi();
+    }, { timeout: 1000 });
+
+    const restoredLayout = hydrateUserSession();
+    if (!restoredLayout) updateCharts();
     renderTable();
-    restartChartStreams(0);startScreenerWS();
-    syncFastBtnUi();
-    syncChartSyncBtnUi();
-    syncOiChartBtnUi();
-    syncBbBtnUi();
-    S.bgDone=true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
+    restartChartStreams(0); startScreenerWS();
+    S.bgDone = true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
     loadKlinesBackground();
     startRealtimeWatchdog();
     ensureFundOiLoop();
-    setTimeout(autoResizeScreener,300);
-  }catch(err){
-    console.error('Init error:',err);ldSet('Ошибка загрузки',100);ldErr(err.message||String(err));
+    setTimeout(autoResizeScreener, 300);
+  } catch (err) {
+    console.error('Init error:', err); ldSet('Ошибка загрузки', 100); ldErr(err.message || String(err));
   }
 }
 
