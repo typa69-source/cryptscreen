@@ -89,6 +89,19 @@ export function ensureVirtualScreener(bodyEl, opts) {
       const sameCols = currentCols.length === cols.length &&
         currentCols.every((c, i) => c.id === cols[i].id);
 
+      // DIAG: temporary diagnostic to figure out why scrollTop is wrong
+      // when filters change. Will be removed once we find the root cause.
+      if (window._vsDiag) {
+        console.log('[VS] setData', {
+          prevLen, newLen, sameOrder, sameCols,
+          prevScrollTop: bodyEl.scrollTop,
+          clientHeight: bodyEl.clientHeight,
+          scrollHeight: bodyEl.scrollHeight,
+          firstSym: newRows[0] && newRows[0].sym,
+          lastSym: newRows[newLen - 1] && newRows[newLen - 1].sym,
+        });
+      }
+
       // Remember which symbol sits at the top of the viewport so we can
       // restore scroll position after the SORT changes. But if the
       // length also changed (filter on/off, threshold tweak) the anchor
@@ -106,6 +119,19 @@ export function ensureVirtualScreener(bodyEl, opts) {
         return;
       }
       this._rebuildAll();
+
+      if (window._vsDiag) {
+        console.log('[VS] after rebuild', {
+          scrollTop: bodyEl.scrollTop,
+          scrollHeight: bodyEl.scrollHeight,
+          clientHeight: bodyEl.clientHeight,
+          topSpacer: topSpacer.style.height,
+          bottomSpacer: bottomSpacer.style.height,
+          wrapHeight: wrap.offsetHeight,
+          wrapScrollHeight: wrap.scrollHeight,
+          poolCount: pool.length,
+        });
+      }
     },
 
     _sameOrdering(a, b) {
@@ -151,6 +177,7 @@ export function ensureVirtualScreener(bodyEl, opts) {
     },
 
     _restoreScrollToSymbol(sym) {
+      if (window._vsDiag) console.log('[VS] _restoreScrollToSymbol', { sym, currentRowsLen: currentRows.length, beforeScrollTop: bodyEl.scrollTop });
       if (!sym) {
         bodyEl.scrollTop = 0;
         return;
@@ -161,6 +188,7 @@ export function ensureVirtualScreener(bodyEl, opts) {
         return;
       }
       bodyEl.scrollTop = idx * ROW_HEIGHT;
+      if (window._vsDiag) console.log('[VS] _restoreScrollToSymbol done', { idx, newScrollTop: bodyEl.scrollTop });
     },
 
     _visibleRange() {
