@@ -8,6 +8,7 @@ import {
 } from './emaEditor-ui.js'
 import { cacheGetFresh, cacheSet, cacheHasIDB } from './idb-cache.js'
 import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
+import { ensureVirtualScreener } from './virtual-screener.js'
 import {
   cloneDrawings as cloneDrawingsUi,
   drawingLineColor as drawingLineColorUi,
@@ -4055,24 +4056,19 @@ function renderScreenerInto(bodyEl,rows){
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
   const cols=activeCols();
   const colsKey=cols.map(c=>c.id).join(',');
+  // Lazily set up the virtualized list once per bodyEl. The dataset.colsKey
+  // attribute survives innerHTML replacement because it lives on bodyEl itself.
   if(bodyEl.dataset.colsKey!==colsKey){
-    bodyEl.innerHTML='';
+    if(bodyEl._vs){bodyEl._vs.invalidate();}
     bodyEl._rowMap=new Map();
     bodyEl.dataset.colsKey=colsKey;
   }
-  if(!bodyEl._rowMap)bodyEl._rowMap=new Map();
-  const rowMap=bodyEl._rowMap;
-  const frag=document.createDocumentFragment();
-  for(const m of rows){
-    let row=rowMap.get(m.sym);
-    if(!row){
-      row=buildScreenerRow(m,cols);
-      rowMap.set(m.sym,row);
-    }
-    updateScreenerRow(row,m,cols,inChart);
-    frag.appendChild(row);
-  }
-  bodyEl.replaceChildren(frag);
+  const vs=ensureVirtualScreener(bodyEl,{build:buildScreenerRow,update:updateScreenerRow});
+  // Keep legacy _rowMap reference in sync for any code that still reads it.
+  bodyEl._rowMap=vs.getRowMap();
+  vs.setData(rows,cols,inChart);
+  // Clean up stale entries (rows whose symbol no longer exists in S.mx).
+  const rowMap=vs.getRowMap();
   for(const sym of Array.from(rowMap.keys())){
     if(!(sym in S.mx))rowMap.delete(sym);
   }
