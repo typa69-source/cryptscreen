@@ -73,11 +73,10 @@ export function ensureVirtualScreener(bodyEl, opts) {
     getRowMap() { return rowMap; },
 
     setData(rows, cols, inChart) {
-      // Called both on tick updates and on sort/filter changes. If the
-      // dataset is the same as last time (same length, same ordering,
-      // same cols) we treat it as a tick and only refresh the visible
-      // pool in place — avoiding full rebuild churn every ~1-2s.
-      // Otherwise we preserve scroll position and rebuild the pool.
+      // Minimal call counter — proves the function is being reached at all.
+      // Check `window._vsCount` in DevTools after a filter change.
+      window._vsCount = (window._vsCount || 0) + 1;
+
       const newRows = rows || [];
       const prevLen = currentRows.length;
       const newLen = newRows.length;
@@ -89,16 +88,16 @@ export function ensureVirtualScreener(bodyEl, opts) {
       const sameCols = currentCols.length === cols.length &&
         currentCols.every((c, i) => c.id === cols[i].id);
 
-      // DIAG: temporary diagnostic to figure out why scrollTop is wrong
-      // when filters change. Will be removed once we find the root cause.
+      // DIAG: detailed diagnostic when user sets `window._vsDiag = true`.
+      // Auto-enable on first call so user doesn't need to type anything.
+      if (newRows[0] && window._vsDiag === undefined) window._vsDiag = true;
       if (window._vsDiag) {
         console.log('[VS] setData', {
+          bodyElId: bodyEl.id,
           prevLen, newLen, sameOrder, sameCols,
-          prevScrollTop: bodyEl.scrollTop,
-          clientHeight: bodyEl.clientHeight,
+          scrollTop: bodyEl.scrollTop,
           scrollHeight: bodyEl.scrollHeight,
-          firstSym: newRows[0] && newRows[0].sym,
-          lastSym: newRows[newLen - 1] && newRows[newLen - 1].sym,
+          clientHeight: bodyEl.clientHeight,
         });
       }
 
@@ -124,11 +123,8 @@ export function ensureVirtualScreener(bodyEl, opts) {
         console.log('[VS] after rebuild', {
           scrollTop: bodyEl.scrollTop,
           scrollHeight: bodyEl.scrollHeight,
-          clientHeight: bodyEl.clientHeight,
           topSpacer: topSpacer.style.height,
           bottomSpacer: bottomSpacer.style.height,
-          wrapHeight: wrap.offsetHeight,
-          wrapScrollHeight: wrap.scrollHeight,
           poolCount: pool.length,
         });
       }
