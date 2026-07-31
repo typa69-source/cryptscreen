@@ -157,11 +157,19 @@ export function ensureVirtualScreener(bodyEl, opts) {
     },
 
     _visibleRange() {
+      // Clamp scrollTop to the current maximum so a dataset shrink below
+      // the saved scroll position can't produce negative end-start (which
+      // would infinite-loop the populate pass).
+      const maxScroll = Math.max(0, currentRows.length * ROW_HEIGHT - (bodyEl.clientHeight || 0));
+      if (bodyEl.scrollTop > maxScroll) bodyEl.scrollTop = maxScroll;
       const scrollTop = bodyEl.scrollTop;
       const viewportH = bodyEl.clientHeight || 400;
       const start = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
       const visibleCount = Math.ceil(viewportH / ROW_HEIGHT) + 1;
-      const end = Math.min(currentRows.length, start + visibleCount + BUFFER * 2);
+      const rawEnd = start + visibleCount + BUFFER * 2;
+      // Hard clamp so end <= rows.length AND end >= start (the latter
+      // matters when the dataset is smaller than the visible window).
+      const end = Math.max(start, Math.min(currentRows.length, rawEnd));
       return { start, end };
     },
 

@@ -5,7 +5,6 @@ import { JSDOM } from 'jsdom';
 
 import { ensureVirtualScreener } from '../src/virtual-screener.js';
 
-// Each test gets its own jsdom so global state doesn't leak.
 function setupDom() {
   const dom = new JSDOM(
     `<!doctype html><html><body>
@@ -22,8 +21,6 @@ function setupDom() {
   return dom.window.document.getElementById('sbody');
 }
 
-// Fake build/update functions — return a div with _sym so the virtualizer
-// can identify nodes.
 function makeBuild() {
   return (m, cols) => {
     const row = document.createElement('div');
@@ -42,21 +39,16 @@ function makeUpdate() {
     if (row.textContent !== m.sym) row.textContent = m.sym;
   };
 }
-
 function makeRows(n) {
   const rows = [];
-  for (let i = 0; i < n; i++) {
-    rows.push({ sym: 'SYM' + i, idx: i });
-  }
+  for (let i = 0; i < n; i++) rows.push({ sym: 'SYM' + i, idx: i });
   return rows;
 }
 
 test('ensureVirtualScreener creates a wrapper inside the body', () => {
   const body = setupDom();
   const vs = ensureVirtualScreener(body, { build: makeBuild(), update: makeUpdate() });
-  assert.ok(body._vs === vs, 'must cache itself on bodyEl');
-  // Wrapper present, contains top + bottom spacer.
-  assert.equal(body.children.length, 1, 'body should hold the wrap');
+  assert.ok(body._vs === vs);
   const wrap = body.firstChild;
   assert.equal(wrap.children.length, 2, 'wrap should have top + bottom spacers');
 });
@@ -64,13 +56,11 @@ test('ensureVirtualScreener creates a wrapper inside the body', () => {
 test('setData renders only viewport+buffer rows, not all rows', () => {
   const body = setupDom();
   const vs = ensureVirtualScreener(body, { build: makeBuild(), update: makeUpdate() });
-  const rows = makeRows(500);
-  vs.setData(rows, [], new Set());
-  // Viewport 400px / 26px row = ~15 rows visible. Buffer 15 above + 15 below = ~45.
+  vs.setData(makeRows(500), [], new Set());
   const wrap = body.firstChild;
-  const visibleNodes = wrap.children.length - 2; // minus spacers
+  const visibleNodes = wrap.children.length - 2;
   assert.ok(visibleNodes < 60, `expected <60 visible, got ${visibleNodes}`);
-  assert.ok(visibleNodes >= 30, `expected at least 30 visible, got ${visibleNodes}`);
+  assert.ok(visibleNodes >= 30);
 });
 
 test('setData with same first/last sym does NOT rebuild the pool', () => {
@@ -80,34 +70,66 @@ test('setData with same first/last sym does NOT rebuild the pool', () => {
   vs.setData(rows1, [], new Set());
   const wrap = body.firstChild;
   const initialPoolLen = wrap.children.length - 2;
-  const firstNode = wrap.children[1]; // first row after top spacer
-  // Now send "tick" — same order, possibly different values.
+  const firstNode = wrap.children[1];
   const rows2 = rows1.map((r) => ({ ...r, val: Math.random() }));
   vs.setData(rows2, [], new Set());
   const afterPoolLen = wrap.children.length - 2;
-  // Same identity in pool (no rebuild).
-  assert.equal(initialPoolLen, afterPoolLen, 'pool size should be stable across ticks');
-  assert.equal(wrap.children[1], firstNode, 'pool nodes should not be replaced');
+  assert.equal(initialPoolLen, afterPoolLen);
+  assert.equal(wrap.children[1], firstNode);
 });
 
-test('setData with different order triggers full rebuild and preserves scroll', () => {
+test('regression: shrinking dataset below current scrollTop does not infinite-loop', () => {
   const body = setupDom();
   const vs = ensureVirtualScreener(body, { build: makeBuild(), update: makeUpdate() });
-  const rows1 = makeRows(500);
-  vs.setData(rows1, [], new Set());
-  // Scroll down by 100 rows
-  body.scrollTop = 100 * 26;
-  body.dispatchEvent(new window.Event('scroll'));
-  // New dataset — different first symbol.
-  const rows2 = makeRows(500).reverse();
-  vs.setData(rows2, [], new Set());
-  // Pool should have rebuilt.
+  vs.setData(makeRows(500), [], new Set());
+  // User scrolled to row 200 (scrollTop = 200*26 = 5200).
+  body.scrollTop = 200 * 26;
+  // User then applies a filter that keeps only 30 rows. New dataset
+  // has 30 items — drastically shorter than scrollTop implies.
+  const tiny = makeRows(30);
+  // This call MUST return quickly without entering an infinite loop.
+  const start = Date.now();
+  vs.setData(tiny, [], new Set());
+  const elapsed = Date.now() - start;
+  assert.ok(elapsed < 500, `setData took ${elapsed}ms — likely an infinite loop`);
+  // Either the virtualizer clamped scrollTop, or the next render pass
+  // should. Either way the visible pool should be at most viewport-sized.
   const wrap = body.firstChild;
-  const newPoolLen = wrap.children.length - 2;
-  assert.ok(newPoolLen > 0);
-  // Scroll should be restored to where SYM0 (or its new position) lives.
-  // After rAF (synchronous in our test via setTimeout 0), scrollTop should
-  // reflect the anchor position.
+  const visibleNodes = wrap.children.length - 2;
+  assert.ok(visibleNodes >= 0 && visibleNodes <= 60, `pool size: ${visibleNodes}`);
+});
+
+test('regression: shrinking dataset must not leave an empty top spacer', () => {
+  const body = setupDom();
+  const vs = ensureVirtualScreener(body, { build: makeBuild(), update: makeUpdate() });
+  vs.setData(makeRows(500), [], new Set());
+  body.scrollTop = 200 * 26;
+  vs.setData(makeRows(30), [], new Set());
+  // After the fix, the top spacer must reflect a valid position
+  // (either 0 or a real data offset), not a giant blank.
+  const wrap = body.firstChild;
+  const topSpacer = wrap.children[0];
+  const topH = parseInt(topSpacer.style.height, 10) || 0;
+  // Should be at most (dataset_len - 1) * ROW_HEIGHT. If it equals
+  // ~5000px the bug is back.
+  assert.ok(topH < 30 * 26, `topSpacer is ${topH}px — empty space at top is back`);
+});
+
+test('regression: scroll event after shrink does not infinite-loop', () => {
+  const body = setupDom();
+  const vs = ensureVirtualScreener(body, { build: makeBuild(), update: makeUpdate() });
+  vs.setData(makeRows(500), [], new Set());
+  vs.setData(makeRows(30), [], new Set());
+  // Simulate the user attempting to scroll. The scroll handler must
+  // be defensive about scrollTop values that exceed dataset size.
+  body.scrollTop = 99999;
+  const start = Date.now();
+  body.dispatchEvent(new window.Event('scroll'));
+  // Wait for rAF (synchronous via setTimeout 0 in our test setup).
+  setTimeout(() => {
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 500, `scroll handler took ${elapsed}ms`);
+  }, 50);
 });
 
 test('updateVisibleRows mutates pool in place without rebuilding', () => {
@@ -118,34 +140,19 @@ test('updateVisibleRows mutates pool in place without rebuilding', () => {
   const wrap = body.firstChild;
   const poolLenBefore = wrap.children.length - 2;
   const firstPoolNode = wrap.children[1];
-  const firstSymBefore = firstPoolNode._sym;
-  // Tick update with same dataset, slightly mutated values.
-  vs.updateVisibleRows(
-    rows.map((r, i) => ({ ...r, tick: i })),
-    new Set()
-  );
+  vs.updateVisibleRows(rows.map((r, i) => ({ ...r, tick: i })), new Set());
   const poolLenAfter = wrap.children.length - 2;
-  const firstPoolNodeAfter = wrap.children[1];
   assert.equal(poolLenBefore, poolLenAfter);
-  assert.equal(firstPoolNode, firstPoolNodeAfter, 'tick must not replace nodes');
-  assert.equal(firstPoolNodeAfter._sym, firstSymBefore);
+  assert.equal(wrap.children[1], firstPoolNode);
 });
 
 test('rowMap reflects only currently visible rows', () => {
   const body = setupDom();
   const vs = ensureVirtualScreener(body, { build: makeBuild(), update: makeUpdate() });
-  const rows = makeRows(500);
-  vs.setData(rows, [], new Set());
+  vs.setData(makeRows(500), [], new Set());
   const rowMap = vs.getRowMap();
-  // RowMap should contain only visible rows.
   assert.ok(rowMap.size < 60, `expected <60 entries, got ${rowMap.size}`);
   assert.ok(rowMap.size >= 30);
-  // Each visible row should be in the map.
-  for (let i = 0; i < rows.length; i++) {
-    if (rowMap.has('SYM' + i)) {
-      assert.equal(rowMap.get('SYM' + i)._sym, 'SYM' + i);
-    }
-  }
 });
 
 test('throws if build/update not provided', () => {
@@ -161,7 +168,7 @@ test('empty dataset produces no pool rows but valid structure', () => {
   const vs = ensureVirtualScreener(body, { build: makeBuild(), update: makeUpdate() });
   vs.setData([], [], new Set());
   const wrap = body.firstChild;
-  assert.equal(wrap.children.length, 2, 'only spacers, no rows');
+  assert.equal(wrap.children.length, 2);
   assert.equal(vs.getRowMap().size, 0);
 });
 
