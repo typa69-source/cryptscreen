@@ -8,6 +8,7 @@ import {
 } from './emaEditor-ui.js'
 import { cacheGetFresh, cacheSet, cacheHasIDB } from './idb-cache.js'
 import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
+import { rowSignature } from './screener-row-sig.js'
 import {
   cloneDrawings as cloneDrawingsUi,
   drawingLineColor as drawingLineColorUi,
@@ -4156,13 +4157,17 @@ function buildScreenerRow(m,cols){
   row.onclick=()=>openFullscreenBySym(sym);
   row._sym=sym;
   const rt=document.createElement('div');rt.className='rtick';
+  // Inline padding override used to be set on every WS batch in
+  // updateScreenerRow (500 rows × 1 style write per tick = pure waste).
+  // CSS sets padding:0 6px; we want 9px on the left for the rtick label.
+  rt.style.paddingLeft='9px';
   const gdot=document.createElement('span');gdot.className='cg-dot';
   gdot.title='Группа/избранное';
   gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(sym,gdot);};
   rt.appendChild(gdot);
   const fstar=document.createElement('span');
   fstar.className='cg-fstar';
-  fstar.textContent='★…';
+  fstar.textContent='★';
   fstar.title='Избранное';
   rt.appendChild(fstar);
   const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=sym.replace(/USDT$/,'');
@@ -4202,24 +4207,22 @@ function updateScreenerRow(row,m,cols,inChart){
   const newCls='srow'+(inChart.has(sym)?' inchart':'')+(S.fsOpen&&S.fsSym===sym?' infullscreen':'')+(matchesSearch?'':' search-hidden');
   if(row.className!==newCls)row.className=newCls;
   row._sym=sym;
+  // gdot/click handlers are already wired once in buildScreenerRow; only
+  // the visual (group colour) needs to update here. Saves an arrow-fn
+  // allocation per row per WS batch.
   const gdot=row._gdot;
-  if(gdot){
-    styleGroupDot(gdot,sym);
-    gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(sym,gdot);};
-  }
+  if(gdot)styleGroupDot(gdot,sym);
+  // Only write fstar.style.display when the visibility actually flipped —
+  // otherwise we trigger a style invalidation for ~every favourite row
+  // on every tick.
   const fstar=row._fstar;
   if(fstar){
     const on=isSymFavorite(sym);
-    fstar.style.display=on?'inline-block':'none';
+    const want=on?'inline-block':'none';
+    if(fstar.style.display!==want)fstar.style.display=want;
   }
   const nameTxt=sym.replace(/USDT$/,'');
   if(row._name&&row._name.textContent!==nameTxt)row._name.textContent=nameTxt;
-  if(row._name){
-    row._name.onclick=ev=>{ev.stopPropagation();copyTicker(nameTxt);openFullscreenBySym(sym);};
-  }
-  if(row._stripe){row._stripe.remove();row._stripe=null;}
-  const rt=row.firstChild;
-  if(rt)rt.style.paddingLeft='9px';
   if(row._cells.length!==cols.length){
     row._rg.innerHTML='';
     row._cells=[];
@@ -4238,13 +4241,21 @@ function updateScreenerRow(row,m,cols,inChart){
         cell.style.maxWidth='64px';
         cell.style.width='64px';
       }
-      row._rg.appendChild(cell);
-      row._cells.push(cell);
+    row._rg.appendChild(cell);
+        row._cells.push(cell);
+      }
     }
-  }
-  cols.forEach((c,ci)=>{
-    const cell=row._cells[ci];if(!cell)return;
-    if(c.id==='sp5'){
+    // Skip the per-cell DOM write loop when none of the data this row
+    // renders has changed since the last update. On a 500-row screen with
+    // a WS batch touching ~20 symbols, this saves ~480 × ~20 cell writes
+    // per batch. The cheap header updates (className, gdot, fstar, name)
+    // above still run.
+    const _sig=rowSignature(m)+'|n='+cols.length;
+    if(row._rowSig===_sig)return;
+    row._rowSig=_sig;
+    cols.forEach((c,ci)=>{
+      const cell=row._cells[ci];if(!cell)return;
+      if(c.id==='sp5'){
       const hasPath=m.sp5d&&String(m.sp5d).length>8;
       const chgDisp=(m.sp5!=null&&!isNaN(m.sp5))?m.sp5:(m.ch24!=null&&!isNaN(m.ch24)?m.ch24:null);
       const dLine=hasPath?String(m.sp5d):'M1,20 L99,20';
