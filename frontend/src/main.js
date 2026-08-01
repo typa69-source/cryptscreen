@@ -9,6 +9,7 @@ import {
 import { cacheGetFresh, cacheSet, cacheHasIDB } from './idb-cache.js'
 import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
 import { rowSignature } from './screener-row-sig.js'
+import { markStart, markEnd, count, installConsoleHook } from './perf-monitor.js'
 import {
   cloneDrawings as cloneDrawingsUi,
   drawingLineColor as drawingLineColorUi,
@@ -717,10 +718,13 @@ function updateLiveKlineSeries(kl,intervalMs,price,nowMs){
 }
 
 function applyLiveKlineUpdate(sym,price,nowMs){
+  markStart('applyLiveKlineUpdate');
+  try{
   if(!sym)return;
   updateLiveKlineSeries(S.k1m[sym],60000,price,nowMs);
   updateLiveKlineSeries(S.k5m[sym],300000,price,nowMs);
   updateLiveKlineSeries(S.k1h[sym],3600000,price,nowMs);
+  }finally{markEnd('applyLiveKlineUpdate')}
 }
 
 function appendCandleWithGaps(arr,candle,stepMs){
@@ -3926,6 +3930,8 @@ function startScreenerWS(){
 }
 
 function _applyTickerUpdate(arr,gen){
+  markStart('_applyTickerUpdate');
+  try{
   let changed=false;
   const nowMs=Date.now();
   for(const t of arr){
@@ -3957,6 +3963,7 @@ function _applyTickerUpdate(arr,gen){
       if(!_anyChartPanning)checkAllAlerts();
     },SCREENER_BATCH_MS);
   }
+  }finally{markEnd('_applyTickerUpdate')}
 }
 
 function ensureFsHeadStatsDom(){
@@ -4097,6 +4104,8 @@ function sortedRows(){
 }
 
 function renderScreenerInto(bodyEl,rows){
+  markStart('renderScreenerInto');
+  try{
   if(!bodyEl)return;
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
   const cols=activeCols();
@@ -4135,6 +4144,7 @@ function renderScreenerInto(bodyEl,rows){
   for(const sym of Array.from(rowMap.keys())){
     if(!(sym in S.mx))rowMap.delete(sym);
   }
+  }finally{markEnd('renderScreenerInto')}
 }
 
 // O(n) check that bodyEl's existing children are in the same order as the
@@ -4340,7 +4350,7 @@ function scheduleRender(){
 let _scrolling=false,_scrollEnd=null;
 document.addEventListener('DOMContentLoaded',()=>{
   const sb=document.getElementById('sbody');
-  if(sb){sb.addEventListener('scroll',()=>{_scrolling=true;clearTimeout(_scrollEnd);_scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);});}
+  if(sb){sb.addEventListener('scroll',()=>{count('sbody.scroll');_scrolling=true;clearTimeout(_scrollEnd);_scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);});}
 });
 
 function renderTable(){
@@ -6050,6 +6060,7 @@ function hydrateUserSession(){
 }
 
 async function main() {
+  installConsoleHook()
   try {
     loadChartViewPrefs();
     loadChartHeadPrefs();
