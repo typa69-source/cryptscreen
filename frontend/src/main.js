@@ -971,11 +971,16 @@ function clearChartHeadValues(slot){
   }
 }
 
-// Coin icon cache and loader • multi-CDN with fallback chain
+// Coin icon cache and loader • multi-CDN with fallback chain.
+// coincap.io and livecoinwatch were removed: they regularly return
+// ERR_CONNECTION_RESET and flood the console for every symbol on
+// cold start (500 symbols * 1+ image each). GitHub raw is reliable
+// and slow but quiet. bin.bnbstatic covers ~95% of Binance-listed
+// tokens with sub-100ms response times.
 const _iconCache={};
 function setCoinIcon(elId,sym){
   const rawBase=sym.replace(/USDT$/,'').toUpperCase();
-  // Handle 1000X prefix tokens (e.g. 1000SHIB→SHIB, 1000BONK→BONK)
+  // Handle 1000X prefix tokens (e.g. 1000SHIB->SHIB, 1000BONK->BONK)
   const base=rawBase.replace(/^1000(?=[A-Z])/,'').replace(/^100(?=[A-Z])/,'');
   const el=document.getElementById(elId);if(!el)return;
   if(_iconCache[base]===false){el.style.display='none';return;}
@@ -983,10 +988,9 @@ function setCoinIcon(elId,sym){
   // CDN priority list • try each in order
   const cdns=[
     `https://bin.bnbstatic.com/static/assets/logos/${base}.png`,
-    `https://assets.coincap.io/assets/icons/${base.toLowerCase()}@2x.png`,
     `https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${base.toLowerCase()}.png`,
-    `https://lcw.nyc3.cdn.digitaloceanspaces.com/production/currencies/64/${base.toLowerCase()}.webp`,
-    rawBase!==base?`https://assets.coincap.io/assets/icons/${rawBase.toLowerCase()}@2x.png`:null,
+    rawBase!==base?`https://bin.bnbstatic.com/static/assets/logos/${rawBase}.png`:null,
+    rawBase!==base?`https://raw.githubusercontent.com/spothq/cryptocurrency-icons/master/128/color/${rawBase.toLowerCase()}.png`:null,
   ].filter(Boolean);
   let idx=0;
   const tryNext=()=>{
@@ -4136,7 +4140,7 @@ function buildScreenerRow(m,cols){
   rt.appendChild(gdot);
   const fstar=document.createElement('span');
   fstar.className='cg-fstar';
-  fstar.textContent='★…';
+  fstar.textContent='★';
   fstar.title='Избранное';
   rt.appendChild(fstar);
   const nameSpan=document.createElement('span');nameSpan.className='tname';nameSpan.textContent=sym.replace(/USDT$/,'');
