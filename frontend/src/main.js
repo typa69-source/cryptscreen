@@ -4107,17 +4107,6 @@ function renderScreenerInto(bodyEl,rows){
   }
   if(!bodyEl._rowMap)bodyEl._rowMap=new Map();
   const rowMap=bodyEl._rowMap;
-  // Empty-state placeholder: when filters narrow the list to 0 rows, the
-  // user has no idea why — the panel just goes blank. Show a short message
-  // naming the active filter(s) and a button to reset them. Re-rendering
-  // the same placeholder is cheap, so we only build it once.
-  if(rows.length===0){
-    if(!bodyEl.querySelector('.screener-empty')){
-      bodyEl.replaceChildren(buildEmptyFilterPlaceholder());
-      bodyEl._rowMap=new Map();
-    }
-    return;
-  }
   // Fast path: if the screener rows are in the same order as the existing
   // DOM children (no sort change, no filter change), just update each row
   // in place. This skips the expensive detach+reattach of every row that
@@ -4145,44 +4134,6 @@ function renderScreenerInto(bodyEl,rows){
   for(const sym of Array.from(rowMap.keys())){
     if(!(sym in S.mx))rowMap.delete(sym);
   }
-}
-
-// Build the empty-state placeholder. Lists the active filters so the user
-// knows why the list is blank, with a single "Reset filters" button that
-// clears the strongest active filter.
-function buildEmptyFilterPlaceholder(){
-  const reasons=[];
-  if(S.minVol>0)reasons.push(`Volume ≥ ${S.minVol}M`);
-  if(S.minTrd>0)reasons.push(`Trades ≥ ${S.minTrd>=1e6?`${(S.minTrd/1e6).toFixed(1)}M`:`${Math.round(S.minTrd/1000)}K`}`);
-  if(S.activeGroupFilter>0)reasons.push('Group filter');
-  if(S._potFilterPreset)reasons.push('Potential preset');
-  const reasonTxt=reasons.length?`Под текущий фильтр нет монет: ${reasons.join(', ')}.`:`Нет монет для отображения.`;
-  const wrap=document.createElement('div');
-  wrap.className='screener-empty';
-  wrap.style.cssText='display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px 16px;color:var(--text3);font-size:11px;text-align:center;line-height:1.5';
-  const txt=document.createElement('div');
-  txt.textContent=reasonTxt;
-  wrap.appendChild(txt);
-  const btn=document.createElement('button');
-  btn.className='hbtn';
-  btn.textContent='Сбросить фильтры';
-  btn.onclick=()=>{
-    resetScreenerFilters();
-    renderTable();
-  };
-  wrap.appendChild(btn);
-  return wrap;
-}
-
-// Clear all screener-side filters and sync their UI controls. Doesn't
-// touch chart selection, search query, or column layout.
-function resetScreenerFilters(){
-  let changed=false;
-  if(S.minVol>0){S.minVol=0;['volSlider','fsVolSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=0;});['volVal','fsVolVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent='0';});changed=true;}
-  if(S.minTrd>0){S.minTrd=0;['trdSlider','fsTrdSlider'].forEach(id=>{const el=document.getElementById(id);if(el)el.value=0;});['trdVal','fsTrdVal'].forEach(id=>{const el=document.getElementById(id);if(el)el.textContent='0';});changed=true;}
-  if(S.activeGroupFilter>0){S.activeGroupFilter=0;changed=true;}
-  if(S._potFilterPreset){S._potFilterPreset=null;changed=true;}
-  if(changed)scheduleGroupUiRefresh();
 }
 
 // O(n) check that bodyEl's existing children are in the same order as the
