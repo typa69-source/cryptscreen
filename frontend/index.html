@@ -3,6 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<!-- Disable browser/proxy caching for the HTML shell. The bundle URL
+     below is content-hashed, but if the HTML is cached stale browsers
+     keep pointing at an old bundle even after we deploy. -->
+<meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <link rel="icon" href="/favicon.svg" type="image/svg/xml">
 <title>CryptScreen &#8212; Crypto Screener</title>
 <!-- Warm DNS/TLS to chart-library CDNs before the JS even runs.
