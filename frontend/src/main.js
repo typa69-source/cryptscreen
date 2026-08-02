@@ -4880,7 +4880,7 @@ function buildGroupFilterBar(){
         btn.style.justifyContent='center';
         btn.style.fontSize='13px';
         btn.style.lineHeight='1';
-        btn.textContent='★…';
+        btn.textContent='★';
       }else{
         btn.style.background=GROUP_COLORS[g];
         btn.textContent='';
@@ -4996,7 +4996,7 @@ function showQuickGroupChanger(sym,anchorEl){
   const favOn=isSymFavorite(sym);
   const fav=document.createElement('div');
   fav.className='cg-dot cg-fav-dot';
-  fav.textContent='★…';
+  fav.textContent='★';
   fav.title='Избранное · нажмите чтобы добавить/убрать';
   if(favOn)fav.style.outline='2px solid #fff';
   fav.onclick=()=>{setSymFavorite(sym,!favOn);pick.remove();syncAllGroupDots(sym);};
@@ -5032,7 +5032,7 @@ function openGroupManager(g){
   // Header
   const hdr=document.createElement('div');
   hdr.style.cssText='display:flex;align-items:center;padding:10px 14px;border-bottom:1px solid var(--border);gap:8px;flex-shrink:0';
-  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'★…':''}</span>
+  hdr.innerHTML=`<span style="width:12px;height:12px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':col};display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;color:${FAVORITE_GROUP_COLOR}">${g===FAVORITE_GROUP_ID?'★':''}</span>
     <span style="font-size:11px;font-weight:600;color:#fff;flex:1">${g===FAVORITE_GROUP_ID?'Избранное':`Группа ${g}`}</span>
     <span style="font-size:9px;color:var(--text3)">Нажмите монету чтобы добавить/убрать</span>
     <button style="background:none;border:none;color:var(--text2);cursor:pointer;font-size:14px;padding:0 3px" onclick="document.getElementById('groupMgrModal').remove()">вњ•</button>`;
@@ -5055,7 +5055,7 @@ function openGroupManager(g){
       const inGrp=symbolInGroup(m.sym,g);
       const row=document.createElement('div');
       row.style.cssText=`display:flex;align-items:center;padding:5px 12px;cursor:pointer;gap:8px;border-bottom:1px solid rgba(37,37,48,.4);transition:background .06s;${inGrp?'background:rgba(255,255,255,.04)':''}`;
-      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'★…':'★†'):''}</span>
+      row.innerHTML=`<span style="width:10px;height:10px;${g===FAVORITE_GROUP_ID?'':'border-radius:50%;'}background:${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--bg4)')};border:1px solid ${g===FAVORITE_GROUP_ID?'transparent':(inGrp?col:'var(--border2)')};flex-shrink:0;color:${FAVORITE_GROUP_COLOR};display:inline-flex;align-items:center;justify-content:center;font-size:10px">${g===FAVORITE_GROUP_ID?(inGrp?'★':'★†'):''}</span>
         <span style="font-size:10px;font-weight:500;color:${inGrp?'#fff':'var(--text2)'};flex:1">${m.sym.replace(/USDT$/,'')}</span>
         ${inGrp?`<span style="font-size:9px;color:${col}">✓ в группе</span>`:''}`;
       row.onmouseenter=()=>row.style.background=inGrp?'rgba(255,255,255,.07)':'rgba(255,255,255,.025)';
