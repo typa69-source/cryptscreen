@@ -4099,6 +4099,19 @@ function sortedRows(){
   return rows;
 }
 
+// O(n) check that bodyEl's existing children are in the same order as
+// the new rows. Cheap enough to run on every WS batch (a few microseconds
+// for 500 rows). Returns false when length or order differs (filter change,
+// sort change, or first render after colsKey change).
+function sameDomOrder(bodyEl,rows){
+  const children=bodyEl.children;
+  if(children.length!==rows.length)return false;
+  for(let i=0;i<rows.length;i++){
+    if(!children[i]||children[i]._sym!==rows[i].sym)return false;
+  }
+  return true;
+}
+
 function renderScreenerInto(bodyEl,rows){
   if(!bodyEl)return;
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
@@ -4111,17 +4124,30 @@ function renderScreenerInto(bodyEl,rows){
   }
   if(!bodyEl._rowMap)bodyEl._rowMap=new Map();
   const rowMap=bodyEl._rowMap;
-  const frag=document.createDocumentFragment();
-  for(const m of rows){
-    let row=rowMap.get(m.sym);
-    if(!row){
-      row=buildScreenerRow(m,cols);
-      rowMap.set(m.sym,row);
+  // Fast path: if the screener rows are in the same order as the existing
+  // DOM children (no sort change, no filter change), just update each row
+  // in place. This skips the expensive detach+reattach of every row that
+  // `bodyEl.replaceChildren(frag)` does on every WS batch — at 500 rows ×
+  // ~20 cells that's ~10k DOM ops per tick. In-place update keeps it
+  // O(rows) text-mutation only, no DOM reordering.
+  if(sameDomOrder(bodyEl,rows)){
+    for(const m of rows){
+      const row=rowMap.get(m.sym);
+      if(row)updateScreenerRow(row,m,cols,inChart);
     }
-    updateScreenerRow(row,m,cols,inChart);
-    frag.appendChild(row);
+  } else {
+    const frag=document.createDocumentFragment();
+    for(const m of rows){
+      let row=rowMap.get(m.sym);
+      if(!row){
+        row=buildScreenerRow(m,cols);
+        rowMap.set(m.sym,row);
+      }
+      updateScreenerRow(row,m,cols,inChart);
+      frag.appendChild(row);
+    }
+    bodyEl.replaceChildren(frag);
   }
-  bodyEl.replaceChildren(frag);
   for(const sym of Array.from(rowMap.keys())){
     if(!(sym in S.mx))rowMap.delete(sym);
   }
