@@ -426,6 +426,10 @@ export function scheduleGridLabSync(body, gbPrefs, opt = {}) {
  * siblings via explicit deps, no self-import).
  */
 export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
+  // Fallback: if no deps injected, pick them up from body._gbDeps (set by main.js wrapper).
+  if (!deps || typeof deps.ensureBacktestCandles !== 'function') {
+    if (body._gbDeps) deps = body._gbDeps;
+  }
   const reuse = !!opt.reuseCandles;
   const lcRef = body._gbChartCtx?.lc;
   const want = reuse && lcRef

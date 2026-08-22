@@ -6511,6 +6511,16 @@ function renderManualBacktestPreview(body, out, gbPrefs, viewOpts) {
 
 
 function scheduleGridLabSync(body, gbPrefs, opt = {}) {
+  // Store deps on body so gridLab-ui.js timer can access them.
+  // The ui module's scheduleGridLabSync calls its own runGridLabSync without deps;
+  // we stash them here so the inner runGridLabSync can fall back.
+  if (!body._gbDeps) body._gbDeps = {
+    fn, fmtPrice,
+    ensureBacktestCandles,
+    readGridLabInputsFn: readGridLabInputs,
+    renderPreviewFn: renderManualBacktestPreview,
+    renderRiskFn: renderGridRiskProfile,
+  };
   scheduleGridLabSyncUi(body, gbPrefs, opt);
 }
 
