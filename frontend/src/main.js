@@ -6517,7 +6517,7 @@ function scheduleGridLabSync(body, gbPrefs, opt = {}) {
   if (!body._gbDeps) body._gbDeps = {
     fn, fmtPrice,
     ensureBacktestCandles,
-    readGridLabInputsFn: readGridLabInputs,
+    readGridLabInputsFn: readGridLabInputsUi,
     renderPreviewFn: renderManualBacktestPreview,
     renderRiskFn: renderGridRiskProfile,
   };
@@ -6528,7 +6528,7 @@ function runGridLabSync(body, gbPrefs, opt = {}) {
   return runGridLabSyncUi(body, gbPrefs, opt, {
     fn, fmtPrice,
     ensureBacktestCandles,
-    readGridLabInputsFn: readGridLabInputs,
+    readGridLabInputsFn: readGridLabInputsUi,
     renderPreviewFn: renderManualBacktestPreview,
     renderRiskFn: renderGridRiskProfile,
   });

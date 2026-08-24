@@ -38,6 +38,19 @@ import {
   runGridLabSync,
 } from '../src/gridLab-ui.js';
 
+test('runGridLabSync: renders chart with object-based input dependency', async () => {
+  const body = mkSyncBody();
+  const prefs = { global: { bars: 360 }, symbolBounds: {} };
+  const rendered = [];
+  const deps = {
+    ensureBacktestCandles: async () => candles(),
+    renderPreviewFn: (_body, out) => rendered.push(['preview', out?.ok]),
+    renderRiskFn: (_body, out) => rendered.push(['risk', out?.ok]),
+  };
+  await runGridLabSync(body, prefs, { _seq: 1 }, deps);
+  assert.deepEqual(rendered, [['preview', true], ['risk', true]]);
+});
+
 test('runGridLabSync: ignores a stale async candle response', async () => {
   const body = mkSyncBody();
   const prefs = { global: { bars: 360 }, symbolBounds: {} };
