@@ -413,11 +413,25 @@ export function renderGridRiskProfile(host, body, out, gbPrefs, deps) {
  * Debounced scheduler. Avoids spamming backtest runs while user drags inputs.
  * Honours body._gbSuppressChartSync (set during drag operations).
  */
-export function scheduleGridLabSync(body, gbPrefs, opt = {}) {
+export function scheduleGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
   if (body._gbSuppressChartSync) return;
   if (body._gridLabUiTimer) clearTimeout(body._gridLabUiTimer);
+  // Invalidate an in-flight fetch/render as soon as a newer form change is
+  // scheduled. This prevents an older, slower response from replacing the
+  // chart for the symbol/parameters currently shown in the modal.
+  const seq = (body._gbSyncSeq || 0) + 1;
+  body._gbSyncSeq = seq;
   const delay = opt.immediate ? 0 : 95;
-  body._gridLabUiTimer = setTimeout(() => { void runGridLabSync(body, gbPrefs, opt); }, delay);
+  body._gridLabUiTimer = setTimeout(() => {
+    void runGridLabSync(body, gbPrefs, { ...opt, _seq: seq }, deps).catch((err) => {
+      if (body._gbSyncSeq !== seq) return;
+      const el = body.querySelector('#gbOut');
+      if (el) el.innerHTML = '<span style="color:#ef4444">Не удалось загрузить историю для графика.</span>';
+      // Keep the failure local to this sync cycle; a later input change can
+      // retry without leaving an unhandled promise rejection in the app.
+      void err;
+    });
+  }, delay);
 }
 
 /**
@@ -426,6 +440,8 @@ export function scheduleGridLabSync(body, gbPrefs, opt = {}) {
  * siblings via explicit deps, no self-import).
  */
 export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
+  const syncSeq = opt._seq;
+  const isCurrent = () => syncSeq == null || body._gbSyncSeq === syncSeq;
   // Fallback: if no deps injected, pick them up from body._gbDeps (set by main.js wrapper).
   if (!deps || typeof deps.ensureBacktestCandles !== 'function') {
     if (body._gbDeps) deps = body._gbDeps;
@@ -442,7 +458,7 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
     // Defer to caller via global if not injected — for backward compat.
     throw new Error('runGridLabSync: deps.ensureBacktestCandles is required');
   }
-  const readGridLabInputsFn = deps.readGridLabInputsFn || readGridLabInputsUi;
+  const readGridLabInputsFn = deps.readGridLabInputsFn || readGridLabInputs;
   const renderPreviewFn = deps.renderPreviewFn || renderManualBacktestPreviewUi;
   const renderRiskFn = deps.renderRiskFn || renderGridRiskProfileUi;
   const fn = deps.fn || ((v, d) => String(v));
@@ -460,8 +476,10 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
     candles = body._gbChartCtx.merged;
   } else {
     candles = await ensureBacktestCandles(cfg.sym, cfg.tf, want);
+    if (!isCurrent()) return;
     if (candles.length > want) candles = candles.slice(-want);
   }
+  if (!isCurrent()) return;
   cfg.candles = candles;
 
   // Persist resolved settings
@@ -502,13 +520,14 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
   cfg.gridLevels = gbPrefs.symbolBounds[cfg.sym]?.gridLevels || null;
 
   const out = compileGridLabState(cfg);
+  if (!isCurrent()) return;
   out.gridRiskMode = cfg.gridMode;
 
   const el = body.querySelector('#gbOut');
   if (!out.ok) {
     if (el) el.innerHTML = `<span style="color:#ef4444">${out.msg}</span>`;
-    renderManualBacktestPreviewUi(body, null, gbPrefs, {});
-    renderGridRiskProfileUi(body, null, gbPrefs, null);
+    renderPreviewFn(body, null, gbPrefs, {});
+    renderRiskFn(body, null, gbPrefs);
     return;
   }
 
@@ -521,7 +540,7 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
   }
 
   const keepVp = !!(reuse && lcRef && body._gbChartCtx?.merged?.length);
-  renderManualBacktestPreviewUi(body, out, gbPrefs, { keepViewport: keepVp });
+  renderPreviewFn(body, out, gbPrefs, { keepViewport: keepVp });
 
   if (keepVp) {
     const lcA = body._gbChartCtx?.lc;
@@ -537,7 +556,7 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
     }
   }
 
-  renderGridRiskProfileUi(body, out, gbPrefs, null);
+  renderRiskFn(body, out, gbPrefs);
 }
 
 /**
@@ -1038,6 +1057,7 @@ export function cleanupGridLabContext(body) {
   if (!body) return;
   if (body._gridLabUiTimer) clearTimeout(body._gridLabUiTimer);
   if (body._gbPrepT) clearTimeout(body._gbPrepT);
+  body._gbSyncSeq = (body._gbSyncSeq || 0) + 1;
   const ctx = body._gbChartCtx;
   if (ctx?._gbVpLockUnsub) {
     try { ctx._gbVpLockUnsub(); } catch (e) {}
@@ -1115,7 +1135,12 @@ export function renderGridLabModal(defSymOpt, deps = {}) {
   } = deps;
 
   const old = document.getElementById('gridLabModal');
-  if (old) old.remove();
+  if (old) {
+    // Re-opening the modal must dispose the previous chart, observer, poll and
+    // abort signal before detaching its DOM; otherwise each open leaks work.
+    cleanupGridLabContext(old.querySelector('#gridLabBody'));
+    old.remove();
+  }
   const modal = document.createElement('div');
   modal.id = 'gridLabModal';
   modal.style.cssText = 'position:fixed;inset:0;z-index:820;background:rgba(0,0,0,.72);display:flex;align-items:center;justify-content:center;';

@@ -14,10 +14,47 @@ function mkBody(values) {
   };
 }
 
+function mkSyncBody() {
+  const values = {
+    gbSym: 'BTCUSDT', gbTf: '5m', gbHigh: '110', gbLow: '90',
+    gbLevels: '12', gbLev: '3', gbDep: '500', gbGridMode: 'neutral',
+    gbRatioLong: '3', gbRatioShort: '1', gbRatioStep: '0.5',
+  };
+  const body = mkBody(values);
+  body._gbSyncSeq = 1;
+  return body;
+}
+
+function candles(count = 40) {
+  return Array.from({ length: count }, (_, i) => {
+    const p = 100 + (i % 5);
+    return { t: i * 300000, o: p, h: p + 1, l: p - 1, c: p + 0.5 };
+  });
+}
+
 import {
   collectGridLabFields,
   detectBoundsChanges,
+  runGridLabSync,
 } from '../src/gridLab-ui.js';
+
+test('runGridLabSync: ignores a stale async candle response', async () => {
+  const body = mkSyncBody();
+  const prefs = { global: { bars: 360 }, symbolBounds: {} };
+  let rendered = 0;
+  let resolveCandles;
+  const pending = new Promise((resolve) => { resolveCandles = resolve; });
+  const deps = {
+    ensureBacktestCandles: () => pending,
+    renderPreviewFn: () => { rendered++; },
+    renderRiskFn: () => { rendered++; },
+  };
+  const run = runGridLabSync(body, prefs, { _seq: 1 }, deps);
+  body._gbSyncSeq = 2;
+  resolveCandles(candles());
+  await run;
+  assert.equal(rendered, 0, 'stale response must not replace the current chart');
+});
 
 test('collectGridLabFields: extracts all form fields', () => {
   const body = mkBody({

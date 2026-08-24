@@ -6521,7 +6521,7 @@ function scheduleGridLabSync(body, gbPrefs, opt = {}) {
     renderPreviewFn: renderManualBacktestPreview,
     renderRiskFn: renderGridRiskProfile,
   };
-  scheduleGridLabSyncUi(body, gbPrefs, opt);
+  scheduleGridLabSyncUi(body, gbPrefs, opt, body._gbDeps);
 }
 
 function runGridLabSync(body, gbPrefs, opt = {}) {
