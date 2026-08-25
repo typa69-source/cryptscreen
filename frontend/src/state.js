@@ -56,6 +56,13 @@ export const ALL_COLS = [
 
 export const COLS_HIDDEN_BY_DEFAULT = new Set(['fund','oi1h','oi4h']);
 
+// Guest sessions start with a focused set of high-signal screener metrics.
+// Authenticated users keep the visibility/order restored from their account.
+export const GUEST_COL_VISIBLE = new Set([
+  'ch24','sp5','r24','na30','na14','tr1h','vr1h',
+  'ch7d','trd24','vol24','corr',
+]);
+
 export const CHART_HEAD_DEFS = [
   {id:'chg', cls:'cchg', tip:'Изменение цены за 24 ч (тикер Binance Futures), %. Зелёный/красный — направление.'},
   {id:'vol', cls:'cvol', tip:'Объём торгов в USDT за 24 ч по тикеру — ликвидность инструмента.'},

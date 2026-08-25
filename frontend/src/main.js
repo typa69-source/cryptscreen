@@ -64,7 +64,7 @@ import {
   detectBoundsChanges,
   renderGridLabModal as renderGridLabModalUi,
 } from './gridLab-ui.js'
-import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
+import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
@@ -319,6 +319,10 @@ function startApp() {
 
 function applySettings(settings) {
   window.__pendingUserSettings = settings && typeof settings === 'object' ? settings : null
+}
+
+function applyGuestColumnDefaults() {
+  S.colVisible = new Set(GUEST_COL_VISIBLE)
 }
 
 // Entry point
@@ -2822,7 +2826,13 @@ function clearAllRulers(){
 
 function onRulerStart(ch,e,container){
   if(!ch.lc||!ch.cs)return;
-  const{x,y}=getCoords(container,e.clientX,e.clientY);
+  // Cache the layout rect for the duration of the drag. Reading it for every
+  // mousemove can force a synchronous layout, which is especially visible on
+  // the small chart grid where several canvases share the same frame budget.
+  const rect=container.getBoundingClientRect();
+  ch._rulerRect=rect;
+  const x=e.clientX-rect.left;
+  const y=e.clientY-rect.top;
   const pt=snapPoint(ch,x,y,e.ctrlKey)||pixelToPoint(ch,x,y);if(!pt)return;
   // Clear rulers on charts from opposite context (не трогаем основные графики из Grid Lab)
   if(!ch._gridLabChart){
@@ -2830,11 +2840,13 @@ function onRulerStart(ch,e,container){
   }
   ch.ruler={active:true,p1:pt,p2:pt,mouseX:e.clientX,mouseY:e.clientY};
   ch._rulerIsFsChart=!ch._gridLabChart&&S.fsCharts.includes(ch);
-  _rCanvasImmediate(ch);
+  scheduleRulerRedraw(ch);
 }
 function onRulerMove(ch,e,container){
   if(!ch.ruler?.active)return;
-  const{x,y}=getCoords(container,e.clientX,e.clientY);
+  const rect=ch._rulerRect||container.getBoundingClientRect();
+  const x=e.clientX-rect.left;
+  const y=e.clientY-rect.top;
   const pt=snapPoint(ch,x,y,e.ctrlKey)||pixelToPoint(ch,x,y);if(!pt)return;
   ch.ruler.p2=pt;ch.ruler.mouseX=e.clientX;ch.ruler.mouseY=e.clientY;
   // Sync ruler to all sibling FS charts (different TFs, same symbol)
@@ -2855,24 +2867,34 @@ function onRulerMove(ch,e,container){
   }
 }
 
-// rAF-throttled ruler redraw • caps redraws at the browser's frame rate even
-// when the mouse fires at 120Hz+. Each chart redraws at most once per frame.
+// One shared RAF for ruler redraws. Mirrored fullscreen charts are rendered in
+// one callback instead of scheduling a separate callback for every chart.
+let _rulerRedrawSet = null;
+let _rulerRedrawRaf = 0;
 function scheduleRulerRedraw(ch){
-  if(ch._rulerRafPending)return;
-  ch._rulerRafPending=true;
-  requestAnimationFrame(()=>{
-    ch._rulerRafPending=false;
-    _rCanvasImmediate(ch);
+  if(!_rulerRedrawSet)_rulerRedrawSet=new Set();
+  _rulerRedrawSet.add(ch);
+  if(_rulerRedrawRaf)return;
+  _rulerRedrawRaf=requestAnimationFrame(()=>{
+    _rulerRedrawRaf=0;
+    const pending=_rulerRedrawSet;
+    _rulerRedrawSet=null;
+    for(const item of pending){
+      if(item?.ruler)_rCanvasImmediate(item);
+    }
   });
 }
 function onRulerEnd(ch){
   if(!ch.ruler)return;
   ch.ruler.active=false;
+  ch._rulerRect=null;
+  scheduleRulerRedraw(ch);
   if(ch._rulerIsFsChart){
     S.fsCharts.forEach(fc=>{
       if(fc===ch||!fc.ruler)return;
       fc.ruler.active=false;
-      _rCanvasImmediate(fc);
+      fc._rulerRect=null;
+      scheduleRulerRedraw(fc);
     });
   }
   updateRulerTooltip(ch);
@@ -5126,19 +5148,28 @@ function toggleFsScreener(){
 // ───────────────────────────────────────────────────────────────
 function dragSpl(e,splId,leftId,bodyId){
   e.preventDefault();
-  const spl=document.getElementById(splId);spl.classList.add('drag');
+  const spl=document.getElementById(splId);if(!spl)return;
+  spl.classList.add('drag');
+  document.body.classList.add('is-splitting');
   const left=document.getElementById(leftId);
   const body=document.getElementById(bodyId);
+  if(!left||!body)return;
   const fsCA=document.getElementById('fsChartArea');
   const cp=document.getElementById('cpanel');
   // Cache the body rect once — `getBoundingClientRect` is layout-bound
   // and was the main reason dragging felt slow (called per mousemove).
   const bodyRect0=body.getBoundingClientRect();
   let resizeRaf=0;
+  const resizeOne=(ch,container)=>{
+    if(!ch?.lc||!ch?.cs||!container||container.clientWidth<=0||container.clientHeight<=0)return;
+    const w=container.clientWidth,h=container.clientHeight;
+    if(ch.canvas&&(ch.canvas.width!==w||ch.canvas.height!==h)){ch.canvas.width=w;ch.canvas.height=h;}
+    try{ch.lc.resize(w,h);rCanvas(ch);}catch(_){ }
+  };
   const doResize=()=>{
     resizeRaf=0;
-    for(const ch of S.charts){if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(_){}}
-    for(const ch of S.fsCharts){if(ch.lc)try{ch.lc.resize(ch.canvas?.width||1,ch.canvas?.height||1);}catch(_){}}
+    S.charts.forEach((ch,i)=>resizeOne(ch,document.getElementById(`cb${i}`)));
+    if(S.fsOpen)S.fsCharts.forEach((ch,i)=>resizeOne(ch,document.getElementById(`fsChartEl${i}`)));
   };
   const onM=(ev)=>{
     const pct=Math.max(20,Math.min(85,((ev.clientX-bodyRect0.left)/bodyRect0.width)*100));
@@ -5152,10 +5183,11 @@ function dragSpl(e,splId,leftId,bodyId){
   };
   const onU=()=>{
     spl.classList.remove('drag');
+    document.body.classList.remove('is-splitting');
     window.removeEventListener('mousemove',onM);
     window.removeEventListener('mouseup',onU);
-    // Make sure the final resize still runs even if rAF is pending.
-    if(!resizeRaf)doResize();
+    if(resizeRaf)cancelAnimationFrame(resizeRaf);
+    doResize();
   };
   window.addEventListener('mousemove',onM);
   window.addEventListener('mouseup',onU);
@@ -6198,6 +6230,9 @@ async function main() {
     }, { timeout: 1000 });
 
     const restoredLayout = hydrateUserSession();
+    if (!restoredLayout && !getToken()) {
+      applyGuestColumnDefaults();
+    }
     if (!restoredLayout) updateCharts();
     renderTable();
     restartChartStreams(0); startScreenerWS();
