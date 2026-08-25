@@ -1109,6 +1109,9 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const canvas=document.createElement('canvas');canvas.className='chart-canvas';
   canvas.width=container.clientWidth||1;canvas.height=container.clientHeight||1;
   container.appendChild(canvas);ch.canvas=canvas;
+  const rulerCanvas=document.createElement('canvas');rulerCanvas.className='chart-ruler-canvas';
+  rulerCanvas.width=canvas.width;rulerCanvas.height=canvas.height;
+  container.appendChild(rulerCanvas);ch.rulerCanvas=rulerCanvas;
 
   // Interact overlay (active only when draw mode)
   const interact=document.createElement('div');
@@ -1368,8 +1371,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   if(ch._ro){try{ch._ro.disconnect();}catch(e){}}
   const ro=new ResizeObserver(()=>{
     if(!ch.lc||!ch.cs)return; // guard: chart already disposed
-    try{canvas.width=container.clientWidth;canvas.height=container.clientHeight;
-      ch.lc.resize(container.clientWidth,container.clientHeight);rCanvas(ch);}catch(e){}
+    try{
+      canvas.width=container.clientWidth;canvas.height=container.clientHeight;
+      if(ch.rulerCanvas){ch.rulerCanvas.width=canvas.width;ch.rulerCanvas.height=canvas.height;}
+      ch.lc.resize(container.clientWidth,container.clientHeight);rCanvas(ch);scheduleRulerRedraw(ch);
+    }catch(e){}
   });
   ro.observe(container);
   ch._ro=ro;
@@ -1976,7 +1982,6 @@ function _rCanvasGridLabImmediate(ch){
   const drawW=Math.max(1,W-PRICE_AXIS_W);
   const drawH=Math.max(1,H-TIME_AXIS_H);
   ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
-  if(ch.ruler)drawRuler(ctx,ch);
   let dragPr=null,dgKind=null;
   try{
     const modal=document.getElementById('gridLabModal');
@@ -2074,12 +2079,24 @@ function _rCanvasImmediate(ch){
   }
   // EMA overlay (drawn on top of candles, below crosshair)
   drawEMAs(ctx,ch,drawW,drawH);
-  if(ch.ruler)drawRuler(ctx,ch);
   ctx.restore(); // end clip
   // Custom crosshair: всегда при X к свече; без Ctrl • Y свободно; с Ctrl • Y к O/H/L/C или к цене.
   if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
     drawCustomCrosshair(ctx,ch,drawW,H);
   }
+}
+
+function _rulerCanvasImmediate(ch){
+  const canvas=ch.rulerCanvas;
+  if(!canvas||!ch?.cs||!ch?.ruler)return;
+  const ctx=canvas.getContext('2d');
+  const W=canvas.width,H=canvas.height;
+  ctx.clearRect(0,0,W,H);
+  const drawW=Math.max(1,W-PRICE_AXIS_W);
+  const drawH=Math.max(1,H-TIME_AXIS_H);
+  ctx.save();ctx.beginPath();ctx.rect(0,0,drawW,drawH);ctx.clip();
+  drawRuler(ctx,ch);
+  ctx.restore();
 }
 
 // Custom crosshair: без Ctrl • вертикаль к свече, горизонталь свободна; с Ctrl • + магнит по цене к OHLC/текущей.
@@ -2820,7 +2837,7 @@ function clearAllRulers(){
   const tt=document.getElementById('rulerTooltip');
   if(tt)tt.style.display='none';
   for(const ch of [...S.charts,...S.fsCharts]){
-    if(ch?.ruler)ch.ruler=null;
+    if(ch?.ruler){ch.ruler=null;scheduleRulerRedraw(ch);}
   }
 }
 
@@ -2861,7 +2878,10 @@ function onRulerMove(ch,e,container){
   scheduleRulerRedraw(ch);
   // Tooltip (NATR/vol/trades) is heavier • throttle independently
   const now=performance.now();
-  if(!ch._lastRulerTipTs||now-ch._lastRulerTipTs>50){
+  // Mini charts share a much tighter frame budget. Keep the ruler geometry at
+  // display refresh rate, but update the heavier statistics less often there.
+  const tipInterval=S.charts.includes(ch)?90:50;
+  if(!ch._lastRulerTipTs||now-ch._lastRulerTipTs>tipInterval){
     ch._lastRulerTipTs=now;
     updateRulerTooltip(ch);
   }
@@ -2880,7 +2900,8 @@ function scheduleRulerRedraw(ch){
     const pending=_rulerRedrawSet;
     _rulerRedrawSet=null;
     for(const item of pending){
-      if(item?.ruler)_rCanvasImmediate(item);
+      if(item?.ruler)_rulerCanvasImmediate(item);
+    else if(item?.rulerCanvas){item.rulerCanvas.getContext('2d')?.clearRect(0,0,item.rulerCanvas.width,item.rulerCanvas.height);}
     }
   });
 }
@@ -5163,8 +5184,11 @@ function dragSpl(e,splId,leftId,bodyId){
   const resizeOne=(ch,container)=>{
     if(!ch?.lc||!ch?.cs||!container||container.clientWidth<=0||container.clientHeight<=0)return;
     const w=container.clientWidth,h=container.clientHeight;
-    if(ch.canvas&&(ch.canvas.width!==w||ch.canvas.height!==h)){ch.canvas.width=w;ch.canvas.height=h;}
-    try{ch.lc.resize(w,h);rCanvas(ch);}catch(_){ }
+    if(ch.canvas&&(ch.canvas.width!==w||ch.canvas.height!==h)){
+      ch.canvas.width=w;ch.canvas.height=h;
+      if(ch.rulerCanvas){ch.rulerCanvas.width=w;ch.rulerCanvas.height=h;}
+    }
+    try{ch.lc.resize(w,h);rCanvas(ch);scheduleRulerRedraw(ch);}catch(_){ }
   };
   const doResize=()=>{
     resizeRaf=0;
@@ -6102,6 +6126,8 @@ async function main() {
     })();
 
     ldSet('Построение интерфейсавЂ¦',12);
+    // Set guest columns before the first header/table render.
+    if(!getToken()) applyGuestColumnDefaults();
     buildChartGrid();
     ensureQuickFindUI();
     updateToggleScrBtn(); // first paint: replace the ASCII placeholder

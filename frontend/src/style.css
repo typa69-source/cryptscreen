@@ -264,6 +264,7 @@ body.is-splitting #cpanel,body.is-splitting #fsChartArea{transition:none!importa
 .chart-interact{position:absolute;inset:0;z-index:11;pointer-events:none}
 .chart-interact.draw{pointer-events:auto;cursor:crosshair}
 .chart-canvas{position:absolute;inset:0;pointer-events:none;z-index:10}
+.chart-ruler-canvas{position:absolute;inset:0;pointer-events:none;z-index:12}
 .chart-wm{position:absolute;inset:0 65px 22px 0;display:flex;align-items:center;justify-content:center;
   font-size:46px;font-weight:700;color:rgba(255,255,255,0.038);pointer-events:none;
   z-index:5;letter-spacing:4px;user-select:none;white-space:nowrap;overflow:hidden;}
