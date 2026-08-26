@@ -323,6 +323,8 @@ function applySettings(settings) {
 
 function applyGuestColumnDefaults() {
   S.colVisible = new Set(GUEST_COL_VISIBLE)
+  S.minVol = 30
+  S.minTrd = 150000
 }
 
 // Entry point
@@ -1216,12 +1218,13 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       if(isNearRuler(ch,x,y)){
         // Clear this chart AND all mirrored rulers (FS sibling charts)
         ch.ruler=null;
+        scheduleRulerRedraw(ch);
         // Clear ruler from ALL charts (not just mirrored)
         [...S.charts,...S.fsCharts].forEach(c=>{
-          if(c!==ch&&c.ruler){c.ruler=null;requestAnimationFrame(()=>rCanvas(c));}
+          if(c!==ch&&c.ruler){c.ruler=null;scheduleRulerRedraw(c);}
         });
         document.getElementById('rulerTooltip').style.display='none';
-        rCanvas(ch);return;
+        return;
       }
     }
     removeDrawingAtCursor(ch);
@@ -1588,6 +1591,7 @@ function setSlotLoading(slot,on,text='Загрузка данных...'){
 async function loadChart(slot,sym){
   const ch=S.charts[slot];
   if(!sym){
+    ch._loadSeq=(ch._loadSeq||0)+1;
     ch.sym=null;ch.candles=[];ch.drawings=[];ch._histBootstrapDone=false;
     setSlotLoading(slot,false);
     setText(`cs${slot}`,'•');
@@ -1596,6 +1600,8 @@ async function loadChart(slot,sym){
     if(cb)cb.innerHTML=`<div class="cph"><span class="cph-n">${slot+1}</span><span style="font-size:9px;color:var(--text3)">пусто</span></div>`;
     return;
   }
+  const loadSeq=(ch._loadSeq||0)+1;
+  ch._loadSeq=loadSeq;
   ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
   ch._oiHist=[];ch._oiRaw=[];ch._oiLastFetchTs=0;
   ch.drawings=getSymDrawings(sym); // shared reference
@@ -1628,12 +1634,12 @@ async function loadChart(slot,sym){
       fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`),
       fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${Date.now()-HIST_INITIAL*tfM}`)
     ]);
-    if(ch.sym!==sym)return;
+    if(ch.sym!==sym||ch._loadSeq!==loadSeq)return;
     const merged=mergeKlineChunks(parseKlines(raw1),parseKlines(raw2));
     ch.candles=merged.slice(-HIST_CACHE_MAX);
     if(ch.candles.length<MIN_CHART_CANDLES){
       const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
-      if(ch.sym!==sym)return;
+      if(ch.sym!==sym||ch._loadSeq!==loadSeq)return;
       ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
     }
     if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[cacheKey]=ch.candles.slice();
@@ -1643,7 +1649,7 @@ async function loadChart(slot,sym){
   }catch(e){
     if(cb&&ch.sym===sym)cb.innerHTML=`<div class="cph"><span style="color:var(--red);font-size:10px">Ошибка загрузки</span></div>`;
     // If network briefly drops, retry once after a short delay (prevents "dead" chart tiles).
-    setTimeout(()=>{ if(ch.sym===sym) loadChart(slot,sym); }, 3500);
+    setTimeout(()=>{ if(ch.sym===sym&&ch._loadSeq===loadSeq) loadChart(slot,sym); }, 3500);
   }
 }
 
@@ -2857,6 +2863,7 @@ function onRulerStart(ch,e,container){
   }
   ch.ruler={active:true,p1:pt,p2:pt,mouseX:e.clientX,mouseY:e.clientY};
   ch._rulerIsFsChart=!ch._gridLabChart&&S.fsCharts.includes(ch);
+  _rulerDragActive=true;
   scheduleRulerRedraw(ch);
 }
 function onRulerMove(ch,e,container){
@@ -2909,6 +2916,7 @@ function onRulerEnd(ch){
   if(!ch.ruler)return;
   ch.ruler.active=false;
   ch._rulerRect=null;
+  _rulerDragActive=false;
   scheduleRulerRedraw(ch);
   if(ch._rulerIsFsChart){
     S.fsCharts.forEach(fc=>{
@@ -4366,7 +4374,7 @@ function scheduleRender(){
   const run=()=>{
     _renderScheduled=false;
     S._renderTs=performance.now();
-    if(_anyChartPanning){setDeferredRenderNeeded();return;} // defer until pan ends
+    if(_anyChartPanning||_splitterDragActive||_rulerDragActive){setDeferredRenderNeeded();return;} // defer during pointer-critical drags
     if(!_scrolling&&!document.hidden)renderTable();
   };
   if(due<=1)_scheduleUi(run);
@@ -4374,6 +4382,8 @@ function scheduleRender(){
 }
 // Skip DOM rebuild while user is scrolling the screener
 let _scrolling=false,_scrollEnd=null;
+let _splitterDragActive=false;
+let _rulerDragActive=false;
 document.addEventListener('DOMContentLoaded',()=>{
   const sb=document.getElementById('sbody');
   if(sb){sb.addEventListener('scroll',()=>{_scrolling=true;clearTimeout(_scrollEnd);_scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);});}
@@ -4397,7 +4407,7 @@ function renderTable(){
 
 let _lastChartSyncAt=0;
 function maybeSyncChartsToTopRows(rows){
-  if(document.hidden||_anyChartPanning)return;
+  if(document.hidden||_anyChartPanning||_splitterDragActive||_rulerDragActive)return;
   if(!S.chartAutoSync)return;
   // Only meaningful when we're showing the screener and not sorting alphabetically.
   if(!S.screenerVisible||S.sortAlpha)return;
@@ -4437,6 +4447,7 @@ function updSortHdr(){
 //  CONTROLS
 // ───────────────────────────────────────────────────────────────
 function doSort(id){
+  clearAllRulers();
   if(id==='sym'){
     S.sortAlpha=true;S.sortId='sym';
     S.sortDir=(S.sortDir==='asc')?'desc':'asc';
@@ -5172,6 +5183,7 @@ function dragSpl(e,splId,leftId,bodyId){
   const spl=document.getElementById(splId);if(!spl)return;
   spl.classList.add('drag');
   document.body.classList.add('is-splitting');
+  _splitterDragActive=true;
   const left=document.getElementById(leftId);
   const body=document.getElementById(bodyId);
   if(!left||!body)return;
@@ -5208,6 +5220,7 @@ function dragSpl(e,splId,leftId,bodyId){
   const onU=()=>{
     spl.classList.remove('drag');
     document.body.classList.remove('is-splitting');
+    _splitterDragActive=false;
     window.removeEventListener('mousemove',onM);
     window.removeEventListener('mouseup',onU);
     if(resizeRaf)cancelAnimationFrame(resizeRaf);
@@ -6129,6 +6142,7 @@ async function main() {
     // Set guest columns before the first header/table render.
     if(!getToken()) applyGuestColumnDefaults();
     buildChartGrid();
+    syncVolTrdSlidersFromState();
     ensureQuickFindUI();
     updateToggleScrBtn(); // first paint: replace the ASCII placeholder
     buildScreenerHeader(document.getElementById('shdr'));
