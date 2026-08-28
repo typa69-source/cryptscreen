@@ -64,7 +64,7 @@ import {
   detectBoundsChanges,
   renderGridLabModal as renderGridLabModalUi,
 } from './gridLab-ui.js'
-import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
+import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
@@ -341,8 +341,8 @@ if (getToken()) {
 // State, constants, formatting and network helpers are imported from modules.
 
 function loadThemePref(){
-  try{const t=localStorage.getItem('cs_theme');if(t==='midnight'||t==='default')S.theme=t}catch(e){}
-  document.documentElement.dataset.theme=S.theme;
+  try{const t=localStorage.getItem('cs_theme');if(THEME_IDS.includes(t))S.theme=t}catch(e){}
+  applyTheme(S.theme);
 }
 function loadChartViewPrefs(){
   try{
@@ -1046,8 +1046,8 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     localization:{priceFormatter:p=>fmtPrice(p),timeFormatter:t=>{const d=new Date(t*1000);const pad=n=>n.toString().padStart(2,'0');return`${pad(d.getUTCFullYear())}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;}},
   });
   const cs=lc.addCandlestickSeries({
-    upColor:S.upColor,downColor:'#e04040',borderUpColor:S.upColor,borderDownColor:'#e04040',
-    wickUpColor:S.upColor,wickDownColor:'#e04040',
+    upColor:S.upColor,downColor:S.downColor,borderUpColor:S.upColor,borderDownColor:S.downColor,
+    wickUpColor:S.upColor,wickDownColor:S.downColor,
     priceFormat:{type:'custom',formatter:p=>fmtPrice(p),minMove:0.0000001},
   });
   cs.applyOptions({lastValueVisible:false,priceLineVisible:false});
@@ -5259,17 +5259,25 @@ function switchSettingsTab(tab){
 }
 
 function applyTheme(theme){
-  S.theme=theme==='midnight'?'midnight':'default';
-  document.documentElement.dataset.theme=S.theme;
-  try{localStorage.setItem('cs_theme',S.theme)}catch(e){}
+  const next=THEME_IDS.includes(theme)?theme:'default';
+  const cfg=THEME_CONFIGS[next];
+  S.theme=next;
+  document.documentElement.dataset.theme=next;
+  Object.entries(cfg.vars).forEach(([key,value])=>document.documentElement.style.setProperty(`--${key}`,value));
+  S.upColor=cfg.candles.up;
+  S.downColor=cfg.candles.down;
+  S.lineColors={...S.lineColors,hray:cfg.candles.up,tline:cfg.candles.down};
+  [...S.charts,...S.fsCharts].forEach(ch=>{
+    if(!ch?.cs)return;
+    ch.cs.applyOptions({upColor:cfg.candles.up,downColor:cfg.candles.down,borderUpColor:cfg.candles.up,borderDownColor:cfg.candles.down,wickUpColor:cfg.candles.up,wickDownColor:cfg.candles.down});
+    if(ch.vs)ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?`${cfg.candles.up}22`:`${cfg.candles.down}22`})));
+  });
+  try{localStorage.setItem('cs_theme',next)}catch(e){}
   if(S.settingsTab==='themes')renderSettingsThemes(document.getElementById('smodal-body'));
-  document.documentElement.style.setProperty('--accent',S.theme==='midnight'?'#22d3ee':'#7c3aed');
   schedulePersistUserSettings();
 }
 function renderSettingsThemes(body){
-  body.innerHTML=`<div class="theme-intro">Выберите оформление CryptScreen. Изменение применяется сразу и сохраняется между запусками.</div><div class="theme-list">
-  <button class="theme-card${S.theme==='default'?' selected':''}" data-theme-choice="default"><span class="theme-swatch theme-swatch-default"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>Классическая</strong><small>Текущая тема CryptScreen</small></span><span class="theme-check">${S.theme==='default'?'✓':''}</span></button>
-  <button class="theme-card${S.theme==='midnight'?' selected':''}" data-theme-choice="midnight"><span class="theme-swatch theme-swatch-midnight"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>Midnight Neon</strong><small>Глубокий тёмный фон · cyan + violet</small></span><span class="theme-check">${S.theme==='midnight'?'✓':''}</span></button></div><div class="theme-note">Контрастные акценты cyan обозначают интерфейс, а зелёный и красный по-прежнему отвечают только за движение цены.</div>`;
+  body.innerHTML=`<div class="theme-intro">Выберите оформление CryptScreen. Изменение применяется сразу и сохраняется между запусками.</div><div class="theme-list">${THEME_IDS.map(id=>{const cfg=THEME_CONFIGS[id];return `<button class="theme-card${S.theme===id?' selected':''}" data-theme-choice="${id}"><span class="theme-swatch" style="--theme-up:${cfg.candles.up};--theme-down:${cfg.candles.down};--theme-accent:${cfg.vars.accent}"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>${cfg.label}</strong><small>Свечи: рост ${cfg.candles.up} · падение ${cfg.candles.down}</small></span><span class="theme-check">${S.theme===id?'✓':''}</span></button>`}).join('')}</div><div class="theme-note">Цвета свечей, интерфейса и акцентов меняются одновременно.</div>`;
   body.querySelectorAll('[data-theme-choice]').forEach(button=>button.addEventListener('click',()=>applyTheme(button.dataset.themeChoice)));
 }
 

@@ -76,6 +76,31 @@ export const GROUP_COLORS = ['','#ef4444','#f97316','#eab308','#22c55e','#3b82f6
 export const FAVORITE_GROUP_ID = 8;
 export const FAVORITE_GROUP_COLOR = '#fbbf24';
 
+export const THEME_CONFIGS = {
+  default: {
+    label:'Классическая',
+    vars:{bg:'#0b0c10',bg2:'#0f1117',bg3:'#141826',bg4:'#1a2032',border:'#232a3e',border2:'#2c3550',text:'#d7dbea',text2:'#9aa3bd',text3:'#6b7390',accent:'#7c3aed',green:'#22c55e',red:'#ef4444',yellow:'#f59e0b'},
+    candles:{up:'#1fa891',down:'#e04040'},
+  },
+  midnight: {
+    label:'Midnight Neon',
+    vars:{bg:'#070b14',bg2:'#0b1220',bg3:'#101b2d',bg4:'#162844',border:'#1b3550',border2:'#285174',text:'#e2f3ff',text2:'#9bb9cc',text3:'#62839a',accent:'#22d3ee',green:'#34d399',red:'#fb7185',yellow:'#fbbf24'},
+    candles:{up:'#22d3ee',down:'#fb7185'},
+  },
+  terminal: {
+    label:'Terminal Green',
+    vars:{bg:'#07100b',bg2:'#0b1710',bg3:'#102319',bg4:'#173323',border:'#1d4630',border2:'#28613f',text:'#d8f8df',text2:'#91c69f',text3:'#5b8c68',accent:'#4ade80',green:'#86efac',red:'#fb7185',yellow:'#facc15'},
+    candles:{up:'#4ade80',down:'#f43f5e'},
+  },
+  amber: {
+    label:'Obsidian Amber',
+    vars:{bg:'#100c08',bg2:'#17110b',bg3:'#21180e',bg4:'#302012',border:'#51351a',border2:'#704a20',text:'#fff1d6',text2:'#cdb28a',text3:'#987b54',accent:'#f59e0b',green:'#a3e635',red:'#fb7185',yellow:'#fbbf24'},
+    candles:{up:'#a3e635',down:'#fb7185'},
+  },
+};
+
+export const THEME_IDS = Object.keys(THEME_CONFIGS);
+
 export function trendColShortLabel(tf){
   const m={ '1m':'1м', '3m':'3м', '5m':'5м', '15m':'15м', '30m':'30м', '1h':'1ч', '4h':'4ч', '1d':'Д' };
   return`${m[tf]||'5м'}·30`;
@@ -145,6 +170,7 @@ export const S = {
   fsChartTfs:['5m','1h','4h'],
   fsCharts:[mkFsChart('5m'), mkFsChart('1h'), mkFsChart('4h')],
   settingsTab:'gen', theme:'default',
+ downColor:'#e04040',
   showDensity:false,
   densitySettings:{},
   alertLog:[],

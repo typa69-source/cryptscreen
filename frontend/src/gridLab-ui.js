@@ -885,8 +885,8 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
     handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
   });
   const cs = lc.addCandlestickSeries({
-    upColor: S.upColor, downColor: '#e04040', borderUpColor: S.upColor, borderDownColor: '#e04040',
-    wickUpColor: S.upColor, wickDownColor: '#e04040',
+    upColor: S.upColor, downColor: S.downColor, borderUpColor: S.upColor, borderDownColor: S.downColor,
+        wickUpColor: S.upColor, wickDownColor: S.downColor,
     priceFormat: { type: 'custom', formatter: (p) => fmtPrice(p), minMove: 0.0000001 },
   });
   body._gbChartCtx.lc = lc; body._gbChartCtx.cs = cs;
