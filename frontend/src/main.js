@@ -5263,6 +5263,7 @@ function applyTheme(theme){
   document.documentElement.dataset.theme=S.theme;
   try{localStorage.setItem('cs_theme',S.theme)}catch(e){}
   if(S.settingsTab==='themes')renderSettingsThemes(document.getElementById('smodal-body'));
+  document.documentElement.style.setProperty('--accent',S.theme==='midnight'?'#22d3ee':'#7c3aed');
   schedulePersistUserSettings();
 }
 function renderSettingsThemes(body){

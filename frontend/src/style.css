@@ -427,7 +427,7 @@ body.is-splitting #cpanel,body.is-splitting #fsChartArea{transition:none!importa
   display:none;align-items:flex-start;justify-content:center;padding:56px 12px 28px;overflow-y:auto;}
 #settingsModal.open{display:flex;}
 .smodal{background:var(--bg2);border:1px solid rgba(44,53,80,.95);border-radius:var(--radius-md);
-  width:min(400px,94vw);
+  width:min(520px,94vw);
   height:min(640px,calc(100vh - 72px));
   max-height:calc(100vh - 72px);
   display:flex;flex-direction:column;overflow:hidden;margin-top:0;}
