@@ -240,7 +240,7 @@ const S = {
   fsCharts:[
     mkFsChart('5m'), mkFsChart('1h'), mkFsChart('4h'),
   ],
-  settingsTab:'gen',
+  settingsTab:'gen', theme:'default',
   showDensity:false,
   densitySettings:{}, // per symbol: {largeMult, medMult, smallMult}
   alertLog:[],
@@ -2058,14 +2058,27 @@ function closeSettings(){document.getElementById('settingsModal').classList.remo
 
 function switchSettingsTab(tab){
   S.settingsTab=tab;
-  ['gen','ind','density','alerts'].forEach(t=>{
+  ['gen','ind','density','alerts','themes'].forEach(t=>{
     const el=document.getElementById(`stab-${t}`);if(el)el.classList.toggle('on',t===tab);
   });
   const body=document.getElementById('smodal-body');
   if(tab==='gen')renderSettingsGen(body);
   else if(tab==='ind')renderSettingsInd(body);
   else if(tab==='density')renderSettingsDensity(body);
+  else if(tab==='themes')renderSettingsThemes(body);
   else renderSettingsAlerts(body);
+}
+
+function applyTheme(theme){
+  S.theme=theme==='midnight'?'midnight':'default';
+  document.documentElement.dataset.theme=S.theme;
+  try{localStorage.setItem('cs_theme',S.theme)}catch(e){}
+  renderSettingsThemes(document.getElementById('smodal-body'));
+}
+function renderSettingsThemes(body){
+  body.innerHTML=`<div class="theme-intro">Выберите оформление CryptScreen. Изменение применяется сразу.</div><div class="theme-list">
+  <button class="theme-card${S.theme==='default'?' selected':''}" onclick="applyTheme('default')"><span class="theme-card-copy"><strong>Классическая</strong><small>Текущая тема CryptScreen</small></span><span class="theme-check">${S.theme==='default'?'✓':''}</span></button>
+  <button class="theme-card${S.theme==='midnight'?' selected':''}" onclick="applyTheme('midnight')"><span class="theme-card-copy"><strong>Midnight Neon</strong><small>Глубокий тёмный фон · cyan + violet</small></span><span class="theme-check">${S.theme==='midnight'?'✓':''}</span></button></div>`;
 }
 
 function tbtnHtml(id,label,onclick,active){return`<button class="tbtn${active?' on':''}" id="${id}" onclick="${onclick}">${label}</button>`;}
@@ -2369,6 +2382,8 @@ function loadScript(url){return new Promise((res,rej)=>{const s=document.createE
 // ═══════════════════════════════════════════════════════════════
 async function main(){
   try{
+    try{const t=localStorage.getItem('cs_theme');if(t==='midnight'||t==='default')S.theme=t}catch(e){}
+    document.documentElement.dataset.theme=S.theme;
     ldSet('Загрузка библиотеки графиков…',5);
     for(const url of['https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js','https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js']){
       try{await loadScript(url);if(typeof LightweightCharts!=='undefined'){S.LC=LightweightCharts;break;}}catch(e){}
@@ -2414,6 +2429,7 @@ window.toggleFsScreener   = toggleFsScreener;
 window.openSettings       = openSettings;
 window.closeSettings      = closeSettings;
 window.switchSettingsTab  = switchSettingsTab;
+window.applyTheme          = applyTheme;
 window.toggleAlertLog     = toggleAlertLog;
 window.clearFsDrawings    = clearFsDrawings;
 window.closeFullscreen    = closeFullscreen;

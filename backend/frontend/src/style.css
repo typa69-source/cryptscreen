@@ -7,6 +7,21 @@
   --green:#1fa891;--red:#e04040;--yellow:#e8a020;--accent:#e03030;
   --hh:40px;--th:36px;
 }
+html[data-theme="midnight"]{
+  --bg:#070b14;--bg2:#0b1220;--bg3:#101b2d;--bg4:#162844;
+  --border:#1b3550;--border2:#285174;--text:#e2f3ff;--text2:#9bb9cc;--text3:#62839a;
+  --accent:#22d3ee;--green:#34d399;--red:#fb7185;--yellow:#fbbf24;
+}
+html[data-theme="midnight"] .logo-sq{background:linear-gradient(135deg,#22d3ee,#8b5cf6);color:#061018}
+html[data-theme="midnight"] .hbtn:hover{border-color:rgba(34,211,238,.55);background:rgba(34,211,238,.09)}
+html[data-theme="midnight"] .hbtn.on,.smodal-tab.on{color:#cffafe;border-color:rgba(34,211,238,.7);background:rgba(34,211,238,.14)}
+html[data-theme="midnight"] .tbtn.on{color:#cffafe;background:rgba(34,211,238,.12);border-color:rgba(34,211,238,.4)}
+html[data-theme="midnight"]{--bg:#070b14;--bg2:#0b1220;--bg3:#101b2d;--bg4:#162844;--border:#1b3550;--border2:#285174;--text:#e2f3ff;--text2:#9bb9cc;--text3:#62839a;--accent:#22d3ee;--green:#34d399;--red:#fb7185;--yellow:#fbbf24}
+html[data-theme="midnight"] .logo-sq{background:linear-gradient(135deg,#22d3ee,#8b5cf6);color:#061018}
+html[data-theme="midnight"] .hbtn.on,.smodal-tab.on{color:#cffafe;border-color:rgba(34,211,238,.7);background:rgba(34,211,238,.14)}
+html[data-theme="midnight"]{--bg:#070b14;--bg2:#0b1220;--bg3:#101b2d;--bg4:#162844;--border:#1b3550;--border2:#285174;--text:#e2f3ff;--text2:#9bb9cc;--text3:#62839a;--accent:#22d3ee;--green:#34d399;--red:#fb7185;--yellow:#fbbf24}
+html[data-theme="midnight"] .logo-sq{background:linear-gradient(135deg,#22d3ee,#8b5cf6);color:#061018}
+html[data-theme="midnight"] .hbtn.on,.smodal-tab.on{color:#cffafe;border-color:rgba(34,211,238,.7);background:rgba(34,211,238,.14)}
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(--text);
   font-family:'JetBrains Mono',monospace;font-size:11px;line-height:1}
@@ -249,14 +264,14 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
   display:none;align-items:center;justify-content:center;}
 #settingsModal.open{display:flex;}
 .smodal{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;
-  width:380px;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;}
+  width:min(520px,94vw);max-height:80vh;display:flex;flex-direction:column;overflow:hidden;}
 .smodal-hdr{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 0;flex-shrink:0}
 .smodal-title{font-size:12px;font-weight:600;color:#fff;}
 .smodal-x{background:none;border:none;color:var(--text2);cursor:pointer;font-size:16px;
   padding:2px 5px;border-radius:3px;transition:color .1s;}
 .smodal-x:hover{color:var(--text);}
-.smodal-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 18px;margin-top:10px;flex-shrink:0}
-.smodal-tab{padding:6px 12px;font:inherit;font-size:10px;color:var(--text2);cursor:pointer;
+.smodal-tabs{display:flex;gap:0;border-bottom:1px solid var(--border);padding:0 18px;margin-top:10px;flex-shrink:0;overflow-x:auto;white-space:nowrap}
+.smodal-tab{padding:6px 12px;font:inherit;font-size:10px;color:var(--text2);cursor:pointer;white-space:nowrap;
   border:none;background:none;border-bottom:2px solid transparent;transition:all .1s;margin-bottom:-1px}
 .smodal-tab:hover{color:var(--text)}
 .smodal-tab.on{color:var(--accent);border-bottom-color:var(--accent)}
@@ -268,6 +283,7 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 .smodal-btns{display:flex;gap:3px;}
 .smodal-ver{font-size:9px;color:var(--text3);text-align:center;padding-top:10px;
   border-top:1px solid var(--border);}
+.theme-intro{font-size:9px;color:var(--text3);line-height:1.6;margin:2px 0 12px}.theme-list{display:flex;flex-direction:column;gap:8px}.theme-card{display:flex;align-items:center;gap:10px;width:100%;padding:10px;border:1px solid var(--border);border-radius:4px;background:var(--bg3);color:var(--text);font:inherit;text-align:left;cursor:pointer}.theme-card:hover,.theme-card.selected{border-color:var(--accent)}.theme-card-copy{display:flex;flex-direction:column;gap:3px;flex:1}.theme-card-copy strong{font-size:10px}.theme-card-copy small{font-size:8px;color:var(--text3)}.theme-check{font-size:14px;color:var(--accent)}
 /* Indicators list */
 .ind-list{display:flex;flex-direction:column;gap:3px;margin-top:6px}
 .ind-item{display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:4px;
