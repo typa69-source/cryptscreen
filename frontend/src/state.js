@@ -97,6 +97,11 @@ export const THEME_CONFIGS = {
     vars:{bg:'#100c08',bg2:'#17110b',bg3:'#21180e',bg4:'#302012',border:'#51351a',border2:'#704a20',text:'#fff1d6',text2:'#cdb28a',text3:'#987b54',accent:'#f59e0b',green:'#a3e635',red:'#fb7185',yellow:'#fbbf24'},
     candles:{up:'#a3e635',down:'#fb7185'},
   },
+  graphite: {
+    label:'Graphite Pulse',
+    vars:{bg:'#17191d',bg2:'#202329',bg3:'#292d34',bg4:'#353b44',border:'#454c57',border2:'#596370',text:'#eef1f4',text2:'#b8c0ca',text3:'#818b98',accent:'#a78bfa',green:'#5eead4',red:'#fb7185',yellow:'#fbbf24'},
+    candles:{up:'#5eead4',down:'#fb7185'},
+  },
 };
 
 export const THEME_IDS = Object.keys(THEME_CONFIGS);
