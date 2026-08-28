@@ -340,6 +340,10 @@ if (getToken()) {
 // ───────────────────────────────────────────────────────────
 // State, constants, formatting and network helpers are imported from modules.
 
+function loadThemePref(){
+  try{const t=localStorage.getItem('cs_theme');if(t==='midnight'||t==='default')S.theme=t}catch(e){}
+  document.documentElement.dataset.theme=S.theme;
+}
 function loadChartViewPrefs(){
   try{
     const raw=localStorage.getItem('cs_chartView');
@@ -1450,6 +1454,7 @@ function collectUserSettings(){
     draw:{brushColor:_brushColor,brushWidth:_brushWidth},
     autoTrend:{...S.autoTrend},
     fastMode:true,
+    theme:S.theme,
   };
 }
 
@@ -5241,7 +5246,7 @@ function closeSettings(){document.getElementById('settingsModal').classList.remo
 
 function switchSettingsTab(tab){
   S.settingsTab=tab;
-  ['gen','chead','ind','density','alerts'].forEach(t=>{
+  ['gen','chead','ind','density','alerts','themes'].forEach(t=>{
     const el=document.getElementById(`stab-${t}`);if(el)el.classList.toggle('on',t===tab);
   });
   const body=document.getElementById('smodal-body');
@@ -5249,7 +5254,21 @@ function switchSettingsTab(tab){
   else if(tab==='chead')renderSettingsChartHead(body);
   else if(tab==='ind')renderSettingsInd(body);
   else if(tab==='density')renderSettingsDensity(body);
+  else if(tab==='themes')renderSettingsThemes(body);
   else renderSettingsAlerts(body);
+}
+
+function applyTheme(theme){
+  S.theme=theme==='midnight'?'midnight':'default';
+  document.documentElement.dataset.theme=S.theme;
+  try{localStorage.setItem('cs_theme',S.theme)}catch(e){}
+  if(S.settingsTab==='themes')renderSettingsThemes(document.getElementById('smodal-body'));
+  schedulePersistUserSettings();
+}
+function renderSettingsThemes(body){
+  body.innerHTML=`<div class="theme-intro">Выберите оформление CryptScreen. Изменение применяется сразу и сохраняется между запусками.</div><div class="theme-list">
+  <button class="theme-card${S.theme==='default'?' selected':''}" onclick="applyTheme('default')"><span class="theme-swatch theme-swatch-default"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>Классическая</strong><small>Текущая тема CryptScreen</small></span><span class="theme-check">${S.theme==='default'?'✓':''}</span></button>
+  <button class="theme-card${S.theme==='midnight'?' selected':''}" onclick="applyTheme('midnight')"><span class="theme-swatch theme-swatch-midnight"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>Midnight Neon</strong><small>Глубокий тёмный фон · cyan + violet</small></span><span class="theme-check">${S.theme==='midnight'?'✓':''}</span></button></div><div class="theme-note">Контрастные акценты cyan обозначают интерфейс, а зелёный и красный по-прежнему отвечают только за движение цены.</div>`;
 }
 
 function tbtnHtml(id,label,onclick,active){return`<button class="tbtn${active?' on':''}" id="${id}" onclick="${onclick}">${label}</button>`;}
@@ -6040,6 +6059,7 @@ function hydrateUserSession(){
     if(typeof ps.draw.brushColor==='string'&&ps.draw.brushColor.startsWith('#'))_brushColor=ps.draw.brushColor;
     if(ps.draw.brushWidth!=null&&!isNaN(+ps.draw.brushWidth))_brushWidth=Math.max(1,Math.min(12,+ps.draw.brushWidth));
   }
+  if(ps.theme==='midnight'||ps.theme==='default')applyTheme(ps.theme);
   if(ps.autoTrend&&typeof ps.autoTrend==='object'){
     const at=ps.autoTrend;
     if(at.pivotBars!=null)S.autoTrend.pivotBars=Math.max(2,Math.min(8,+at.pivotBars));
@@ -6114,6 +6134,7 @@ function hydrateUserSession(){
 async function main() {
   try {
     loadChartViewPrefs();
+    loadThemePref();
     loadChartHeadPrefs();
     loadLineColorPrefs();
     loadUiPrefs();

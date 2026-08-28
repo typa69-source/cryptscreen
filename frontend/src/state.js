@@ -144,7 +144,7 @@ export const S = {
   fsChartCount:3,
   fsChartTfs:['5m','1h','4h'],
   fsCharts:[mkFsChart('5m'), mkFsChart('1h'), mkFsChart('4h')],
-  settingsTab:'gen',
+  settingsTab:'gen', theme:'default',
   showDensity:false,
   densitySettings:{},
   alertLog:[],
