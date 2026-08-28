@@ -5268,8 +5268,9 @@ function applyTheme(theme){
 }
 function renderSettingsThemes(body){
   body.innerHTML=`<div class="theme-intro">Выберите оформление CryptScreen. Изменение применяется сразу и сохраняется между запусками.</div><div class="theme-list">
-  <button class="theme-card${S.theme==='default'?' selected':''}" onclick="applyTheme('default')"><span class="theme-swatch theme-swatch-default"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>Классическая</strong><small>Текущая тема CryptScreen</small></span><span class="theme-check">${S.theme==='default'?'✓':''}</span></button>
-  <button class="theme-card${S.theme==='midnight'?' selected':''}" onclick="applyTheme('midnight')"><span class="theme-swatch theme-swatch-midnight"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>Midnight Neon</strong><small>Глубокий тёмный фон · cyan + violet</small></span><span class="theme-check">${S.theme==='midnight'?'✓':''}</span></button></div><div class="theme-note">Контрастные акценты cyan обозначают интерфейс, а зелёный и красный по-прежнему отвечают только за движение цены.</div>`;
+  <button class="theme-card${S.theme==='default'?' selected':''}" data-theme-choice="default"><span class="theme-swatch theme-swatch-default"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>Классическая</strong><small>Текущая тема CryptScreen</small></span><span class="theme-check">${S.theme==='default'?'✓':''}</span></button>
+  <button class="theme-card${S.theme==='midnight'?' selected':''}" data-theme-choice="midnight"><span class="theme-swatch theme-swatch-midnight"><i></i><i></i><i></i></span><span class="theme-card-copy"><strong>Midnight Neon</strong><small>Глубокий тёмный фон · cyan + violet</small></span><span class="theme-check">${S.theme==='midnight'?'✓':''}</span></button></div><div class="theme-note">Контрастные акценты cyan обозначают интерфейс, а зелёный и красный по-прежнему отвечают только за движение цены.</div>`;
+  body.querySelectorAll('[data-theme-choice]').forEach(button=>button.addEventListener('click',()=>applyTheme(button.dataset.themeChoice)));
 }
 
 function tbtnHtml(id,label,onclick,active){return`<button class="tbtn${active?' on':''}" id="${id}" onclick="${onclick}">${label}</button>`;}
