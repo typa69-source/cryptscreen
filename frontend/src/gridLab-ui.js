@@ -18,6 +18,7 @@ import {
   gbWantBarsFromVisible,
   compileGridLabState,
 } from './gridLab.js';
+import { chartThemeColors } from './state.js';
 
 const MAX_UNDO = 50;
 
@@ -872,15 +873,15 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
   const lc = S.LC.createChart(host, {
     width: wrap.clientWidth || 400,
     height: wrap.clientHeight || 420,
-    layout: { background: { color: '#0a0a0b' }, textColor: '#606070' },
-    grid: { vertLines: { color: '#141418' }, horzLines: { color: '#141418' } },
+    layout: (() => { const t = chartThemeColors(); return { background: { color: t.background }, textColor: t.text }; })(),
+    grid: (() => { const t = chartThemeColors(); return { vertLines: { color: t.grid }, horzLines: { color: t.grid } }; })(),
     crosshair: {
       mode: 0,
       vertLine: { color: 'transparent', width: 0, style: 0, labelBackgroundColor: '#252530', labelVisible: false },
       horzLine: { color: 'transparent', width: 0, style: 0, labelBackgroundColor: '#252530', labelVisible: false },
     },
-    rightPriceScale: { borderColor: '#252530' },
-    timeScale: { borderColor: '#252530', timeVisible: true, secondsVisible: false, fixRightEdge: false },
+    rightPriceScale: { borderColor: chartThemeColors().border },
+    timeScale: { borderColor: chartThemeColors().border, timeVisible: true, secondsVisible: false, fixRightEdge: false },
     handleScroll: { mouseWheel: true, pressedMouseMove: true },
     handleScale: { mouseWheel: true, pinch: true, axisPressedMouseMove: true },
   });

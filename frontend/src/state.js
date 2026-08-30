@@ -102,9 +102,55 @@ export const THEME_CONFIGS = {
     vars:{bg:'#17191d',bg2:'#202329',bg3:'#292d34',bg4:'#353b44',border:'#454c57',border2:'#596370',text:'#eef1f4',text2:'#b8c0ca',text3:'#818b98',accent:'#a78bfa',green:'#5eead4',red:'#fb7185',yellow:'#fbbf24'},
     candles:{up:'#5eead4',down:'#fb7185'},
   },
+  crimson: {
+    label:'Crimson Depth',
+    vars:{bg:'#140a0d',bg2:'#1c0f13',bg3:'#26141a',bg4:'#341a22',border:'#4a2530',border2:'#63323f',text:'#ffe9ee',text2:'#cf9aa8',text3:'#8f6070',accent:'#f43f5e',green:'#34d399',red:'#f87171',yellow:'#fbbf24'},
+    candles:{up:'#34d399',down:'#f43f5e'},
+  },
+  ocean: {
+    label:'Deep Ocean',
+    vars:{bg:'#081420',bg2:'#0b1c2c',bg3:'#102436',bg4:'#16304a',border:'#1f4260',border2:'#2a567c',text:'#e3f2ff',text2:'#8fb4d4',text3:'#5f80a0',accent:'#38bdf8',green:'#2dd4bf',red:'#f472b6',yellow:'#fbbf24'},
+    candles:{up:'#2dd4bf',down:'#f472b6'},
+  },
+  solarized: {
+    label:'Nordic Frost',
+    vars:{bg:'#1e252d',bg2:'#242d37',bg3:'#2c3743',bg4:'#384554',border:'#48586a',border2:'#5d7186',text:'#eceff4',text2:'#b6c2d2',text3:'#7b8b9e',accent:'#88c0d0',green:'#a3be8c',red:'#bf616a',yellow:'#ebcb8b'},
+    candles:{up:'#a3be8c',down:'#bf616a'},
+  },
+  carbon: {
+    label:'Carbon Gold',
+    vars:{bg:'#141416',bg2:'#1b1b1f',bg3:'#24242a',bg4:'#303038',border:'#3f3f49',border2:'#545461',text:'#f2ede2',text2:'#b9b3a4',text3:'#827d6f',accent:'#d4af37',green:'#6ee7b7',red:'#f87171',yellow:'#fbbf24'},
+    candles:{up:'#6ee7b7',down:'#f87171'},
+  },
+  paper: {
+    label:'Paper Light',
+    vars:{bg:'#f4f2ee',bg2:'#ffffff',bg3:'#e9e6df',bg4:'#ddd9d0',border:'#cfcbc1',border2:'#b5b0a4',text:'#1f2430',text2:'#565f6e',text3:'#8b93a1',accent:'#0f766e',green:'#15803d',red:'#dc2626',yellow:'#ca8a04'},
+    candles:{up:'#15803d',down:'#dc2626'},
+  },
+  porcelain: {
+    label:'Porcelain Blue',
+    vars:{bg:'#eef3f8',bg2:'#ffffff',bg3:'#e2eaf2',bg4:'#d3dfeb',border:'#c0cede',border2:'#a3b5ca',text:'#16283b',text2:'#48607a',text3:'#7d92a8',accent:'#2563eb',green:'#059669',red:'#e11d48',yellow:'#d97706'},
+    candles:{up:'#059669',down:'#e11d48'},
+  },
 };
 
 export const THEME_IDS = Object.keys(THEME_CONFIGS);
+
+/** Chart-library palette resolved from the active theme's CSS vars. */
+export function chartThemeColors(){
+  try{
+    const cs=getComputedStyle(document.documentElement);
+    const get=k=>{const v=cs.getPropertyValue(k).trim();return v||undefined;};
+    return{
+      background:get('--bg')||'#0a0a0b',
+      text:get('--text2')||'#606070',
+      grid:get('--bg3')||'#141418',
+      border:get('--border')||'#252530',
+    };
+  }catch(e){
+    return{background:'#0a0a0b',text:'#606070',grid:'#141418',border:'#252530'};
+  }
+}
 
 export function trendColShortLabel(tf){
   const m={ '1m':'1м', '3m':'3м', '5m':'5м', '15m':'15м', '30m':'30м', '1h':'1ч', '4h':'4ч', '1d':'Д' };

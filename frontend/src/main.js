@@ -64,7 +64,7 @@ import {
   detectBoundsChanges,
   renderGridLabModal as renderGridLabModalUi,
 } from './gridLab-ui.js'
-import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
+import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, chartThemeColors, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
@@ -1033,14 +1033,14 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   container.innerHTML='';
 
   const lc=S.LC.createChart(container,{
-    layout:{background:{color:'#0a0a0b'},textColor:'#404050'},
-    grid:{vertLines:{color:'#141418'},horzLines:{color:'#141418'}},
+    layout:(()=>{const t=chartThemeColors();return{background:{color:t.background},textColor:t.text}})(),
+    grid:(()=>{const t=chartThemeColors();return{vertLines:{color:t.grid},horzLines:{color:t.grid}}})(),
     crosshair:{
       vertLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#1c1c22',labelVisible:false},
       horzLine:{color:'transparent',width:0,style:0,labelBackgroundColor:'#1c1c22',labelVisible:false}
     },
-    rightPriceScale:{borderColor:'#252530',textColor:'#606070'},
-    timeScale:{borderColor:'#252530',timeVisible:true,secondsVisible:false,fixRightEdge:false},
+    rightPriceScale:(()=>{const t=chartThemeColors();return{borderColor:t.border,textColor:t.text}})(),
+    timeScale:(()=>{const t=chartThemeColors();return{borderColor:t.border,timeVisible:true,secondsVisible:false,fixRightEdge:false}})(),
     handleScroll:{mouseWheel:true,pressedMouseMove:true},
     handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},
     localization:{priceFormatter:p=>fmtPrice(p),timeFormatter:t=>{const d=new Date(t*1000);const pad=n=>n.toString().padStart(2,'0');return`${pad(d.getUTCFullYear())}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;}},
@@ -1053,7 +1053,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   cs.applyOptions({lastValueVisible:false,priceLineVisible:false});
   const pls=S.LC?.PriceLineSource?.LastBar;
   if(pls!=null)cs.applyOptions({priceLineSource:pls});
-  const vs=lc.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol',color:'#1fa89120'});
+  const vs=lc.addHistogramSeries({priceFormat:{type:'volume'},priceScaleId:'vol',color:S.upColor+'20'});
   // Hide the volume "last value" indicator (bottom-right) on small charts.
   // We keep histogram bars but remove any corner/scale label.
   vs.applyOptions({lastValueVisible:false,priceLineVisible:false});
@@ -5264,11 +5264,20 @@ function applyTheme(theme){
   S.theme=next;
   document.documentElement.dataset.theme=next;
   Object.entries(cfg.vars).forEach(([key,value])=>document.documentElement.style.setProperty(`--${key}`,value));
+  document.documentElement.style.setProperty('--wm',S.theme==='paper'||S.theme==='porcelain'?'rgba(0,0,0,0.05)':'rgba(255,255,255,0.038)');
   S.upColor=cfg.candles.up;
   S.downColor=cfg.candles.down;
   S.lineColors={...S.lineColors,hray:cfg.candles.up,tline:cfg.candles.down};
   [...S.charts,...S.fsCharts].forEach(ch=>{
     if(!ch?.cs)return;
+    try{
+      ch.lc.applyOptions({
+        layout:{background:{color:cfg.vars.bg},textColor:cfg.vars.text2},
+        grid:{vertLines:{color:cfg.vars.bg3},horzLines:{color:cfg.vars.bg3}},
+        rightPriceScale:{borderColor:cfg.vars.border},
+        timeScale:{borderColor:cfg.vars.border},
+      });
+    }catch(e){}
     ch.cs.applyOptions({upColor:cfg.candles.up,downColor:cfg.candles.down,borderUpColor:cfg.candles.up,borderDownColor:cfg.candles.down,wickUpColor:cfg.candles.up,wickDownColor:cfg.candles.down});
     if(ch.vs)ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?`${cfg.candles.up}22`:`${cfg.candles.down}22`})));
   });
@@ -6069,7 +6078,7 @@ function hydrateUserSession(){
     if(typeof ps.draw.brushColor==='string'&&ps.draw.brushColor.startsWith('#'))_brushColor=ps.draw.brushColor;
     if(ps.draw.brushWidth!=null&&!isNaN(+ps.draw.brushWidth))_brushWidth=Math.max(1,Math.min(12,+ps.draw.brushWidth));
   }
-  if(ps.theme==='midnight'||ps.theme==='default')applyTheme(ps.theme);
+  if(THEME_IDS.includes(ps.theme))applyTheme(ps.theme);
   if(ps.autoTrend&&typeof ps.autoTrend==='object'){
     const at=ps.autoTrend;
     if(at.pivotBars!=null)S.autoTrend.pivotBars=Math.max(2,Math.min(8,+at.pivotBars));
