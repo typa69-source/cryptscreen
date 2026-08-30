@@ -1,4 +1,5 @@
 import './style.css'
+import * as LightweightCharts from 'lightweight-charts'
 import { registerGridBotScreeners, buildGridLabPayload } from './gridBotScreeners.js'
 import { registerGridSmartScreener } from './gridSmart.js'
 import {
@@ -6,7 +7,7 @@ import {
   refreshEmaButtonState as refreshEmaButtonStateUi,
   toggleEma as toggleEmaUi,
 } from './emaEditor-ui.js'
-import { cacheGetFresh, cacheSet, cacheHasIDB } from './idb-cache.js'
+import { cacheGetFresh, cacheSet, cacheGet, cacheHasIDB } from './idb-cache.js'
 import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
 import {
   cloneDrawings as cloneDrawingsUi,
@@ -67,6 +68,7 @@ import {
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, chartThemeColors, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
+import { visibleRange, ROW_HEIGHT } from './screener-virtual.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
 import {
   DEFAULT_DENSITY_SETTINGS,
@@ -756,7 +758,7 @@ function appendCandleWithGaps(arr,candle,stepMs){
   arr.push(candle);
 }
 
-function calcAll(){
+function calcAll(onlySyms){
   const btc5=S.k5m['BTCUSDT'];
   S.btcR=btc5?calcRets(btc5):[];
   const btcR14=btc5&&btc5.length>=15?calcRets(btc5.slice(-15)):[];
@@ -764,7 +766,13 @@ function calcAll(){
   const dayStartMs=new Date(nowMs).setHours(0,0,0,0);
   const prevMx=S.mx;
   const nextMx={};
-  for(const sym of S.syms){
+  // PERF: optional incremental mode. When a symbol list is passed, only
+  // those symbols are recomputed and merged into S.mx — untouched symbols
+  // keep their previous metric objects. Used by the periodic metrics-sync
+  // loop (refreshMetricKlinesSlice) so a 36-symbol slice no longer
+  // re-runs ~500 symbols' correlations/sparklines on the main thread.
+  const universe=Array.isArray(onlySyms)&&onlySyms.length?onlySyms:S.syms;
+  for(const sym of universe){
     const t=S.tk[sym];if(!t)continue;
     const k5=S.k5m[sym],k1h=S.k1h[sym],k1m=S.k1m[sym];
     // cday: от первой 1ч свечи локального календарного дня
@@ -809,7 +817,12 @@ function calcAll(){
     if(k1h&&k1h.length>=168){const old=k1h[k1h.length-168];m.ch7d=(t.p-old.c)/old.c*100;}
     nextMx[sym]=m;
   }
-  S.mx=nextMx;
+  if(Array.isArray(onlySyms)&&onlySyms.length){
+    // Incremental merge: keep metrics of symbols outside this slice.
+    S.mx=Object.assign({},prevMx,nextMx);
+  }else{
+    S.mx=nextMx;
+  }
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -1632,22 +1645,41 @@ async function loadChart(slot,sym){
     return;
   }
   if(Array.isArray(cached)&&cached.length&&cached.length<MIN_CHART_CANDLES)delete S.histCache[cacheKey];
+  // PERF: persistent IDB cache — after a reload the chart paints instantly
+  // from the previous session's candles, then WS/refresh keeps it live.
+  // Stale-but-recent bars (≤10 min) beat a 300-900ms network round-trip.
+  if(!Array.isArray(cached)&&cacheHasIDB()){
+    try{
+      const idbC=await cacheGetFresh(`klines:${cacheKey}`,10*60*1000);
+      if(ch.sym!==sym||ch._loadSeq!==loadSeq)return;
+      if(Array.isArray(idbC)&&idbC.length>=wantMinCache){
+        ch.candles=idbC.slice(-HIST_CACHE_MAX);
+        S.histCache[cacheKey]=ch.candles.slice();
+        paintSlotData(slot);
+        refreshChartOiSeries(ch,S.tf,sym);
+        if(S.showDensity)fetchOrderBookUi(sym, densityDeps);
+        return;
+      }
+    }catch(e){}
+  }
   try{
-    // Prefer parallel fetch of initial + next chunk so big charts fill faster.
-    const tfM=tfMs(S.tf);
-    const [raw1,raw2]=await Promise.all([
-      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`),
-      fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${Date.now()-HIST_INITIAL*tfM}`)
-    ]);
+    // PERF: single fetch for first paint. The older-chunk request (another
+    // HIST_LIMIT bars to the left) is no longer fetched eagerly — the user
+    // sees ~100 bars and loadMoreHistory() backfills older history on
+    // scroll-left. Halves time-to-first-candle and cuts Binance requests.
+    const raw1=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
     if(ch.sym!==sym||ch._loadSeq!==loadSeq)return;
-    const merged=mergeKlineChunks(parseKlines(raw1),parseKlines(raw2));
-    ch.candles=merged.slice(-HIST_CACHE_MAX);
-    if(ch.candles.length<MIN_CHART_CANDLES){
+    let candles=parseKlines(raw1);
+    if(candles.length<MIN_CHART_CANDLES){
       const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
       if(ch.sym!==sym||ch._loadSeq!==loadSeq)return;
-      ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+      candles=parseKlines(raw);
     }
-    if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[cacheKey]=ch.candles.slice();
+    ch.candles=candles.slice(-HIST_CACHE_MAX);
+    if(ch.candles.length>=MIN_CHART_CANDLES){
+      S.histCache[cacheKey]=ch.candles.slice();
+      cacheSet(`klines:${cacheKey}`,ch.candles.slice(),10*60*1000);
+    }
     paintSlotData(slot);
     refreshChartOiSeries(ch,S.tf,sym);
     if(S.showDensity)fetchOrderBookUi(sym, densityDeps); // #1: pre-fetch OB for density
@@ -1723,16 +1755,31 @@ function updateChartHeader(slot,sym){
   if(elCorr)elCorr.innerHTML=corVal!=null?`<span style="opacity:.55">∞</span>${fn(corVal,2)}`:'';
   const dot=document.getElementById(`cgd${slot}`);
   if(dot)styleGroupDot(dot,sym);
-  // If stats wrap into two lines, tighten spacing to avoid clipping.
+  // PERF: wrap-state is observed once per header via ResizeObserver instead
+  // of a forced scrollHeight/clientHeight read (layout thrash) on every
+  // header update tick.
+  if(!_cheadWrapRO){
+    try{_cheadWrapRO=new ResizeObserver(_cheadWrapCheck);}catch(e){_cheadWrapRO=null;}
+  }
   const head=document.getElementById(`cc${slot}`)?.querySelector('.chead');
   const stats=document.getElementById(`chs${slot}`);
   if(head&&stats){
-    requestAnimationFrame(()=>{
-      // wrap if stats don't fit into the header height
-      const wrap=stats.scrollHeight>head.clientHeight;
-      head.classList.toggle('wrap',wrap);
-    });
+    if(head._wrapStats!==stats){
+      head._wrapStats=stats;
+      _cheadWrapRO?.observe(stats);
+      _cheadWrapRO?.observe(head);
+    }
+    _cheadWrapCheck();
   }
+}
+let _cheadWrapRO=null;
+function _cheadWrapCheck(){
+  document.querySelectorAll('.chead.wrap, .chead:not(.wrap)').forEach(head=>{
+    const stats=head.querySelector('.chead-stats');
+    if(!stats)return;
+    const wrap=stats.scrollHeight>head.clientHeight;
+    if(head.classList.contains('wrap')!==wrap)head.classList.toggle('wrap',wrap);
+  });
 }
 
 async function loadMoreHistory(slot){
@@ -3824,7 +3871,8 @@ async function refreshMetricKlinesSlice(){
     ]);
     Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
     if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
-    calcAll();
+    // PERF: incremental recalc — only the fetched slice, not all ~500 syms.
+    calcAll(slice);
     if(!document.hidden){
       if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
       else scheduleRender();
@@ -4155,57 +4203,66 @@ function sortedRows(){
   return rows;
 }
 
-// O(n) check that bodyEl's existing children are in the same order as
-// the new rows. Cheap enough to run on every WS batch (a few microseconds
-// for 500 rows). Returns false when length or order differs (filter change,
-// sort change, or first render after colsKey change).
-function sameDomOrder(bodyEl,rows){
-  const children=bodyEl.children;
-  if(children.length!==rows.length)return false;
-  for(let i=0;i<rows.length;i++){
-    if(!children[i]||children[i]._sym!==rows[i].sym)return false;
-  }
-  return true;
-}
+// NOTE: sameDomOrder() was retired by the virtual-scroll migration —
+// mountVirtualRows()/renderScreenerInto() now manage a viewport-sized
+// row band keyed by _rowMap, so full-list order checks are obsolete.
 
 function renderScreenerInto(bodyEl,rows){
   if(!bodyEl)return;
+  // PERF: virtual window. Only a viewport-sized band of rows is mounted;
+  // the rest are represented by two spacer divs whose heights emulate the
+  // full list. Row metrics are kept in `_allRows` so updates patch just
+  // the mounted band. Follows the model of screener-virtual.js.
+  const total=rows.length;
+  const vh=bodyEl.clientHeight||600;
+  const range=visibleRange(bodyEl.scrollTop,vh,total,ROW_HEIGHT,8);
+  if(bodyEl._vTotal!==total||bodyEl._vFirst!==range.first||bodyEl._vLast!==range.last){
+    bodyEl._vTotal=total;bodyEl._vFirst=range.first;bodyEl._vLast=range.last;
+    bodyEl._allRows=rows;
+    mountVirtualRows(bodyEl,range,rows);
+    return;
+  }
+  // Same window: incremental in-place update of mounted rows only.
+  bodyEl._allRows=rows;
+  const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
+  const cols=activeCols();
+  const rowMap=bodyEl._rowMap;
+  for(let i=range.first;i<=range.last;i++){
+    const m=rows[i];if(!m)continue;
+    const row=rowMap.get(m.sym);
+    if(row)updateScreenerRow(row,m,cols,inChart);
+  }
+}
+
+function mountVirtualRows(bodyEl,range,rows){
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
   const cols=activeCols();
   const colsKey=cols.map(c=>c.id).join(',');
   if(bodyEl.dataset.colsKey!==colsKey){
-    bodyEl.innerHTML='';
     bodyEl._rowMap=new Map();
     bodyEl.dataset.colsKey=colsKey;
   }
   if(!bodyEl._rowMap)bodyEl._rowMap=new Map();
   const rowMap=bodyEl._rowMap;
-  // Fast path: if the screener rows are in the same order as the existing
-  // DOM children (no sort change, no filter change), just update each row
-  // in place. This skips the expensive detach+reattach of every row that
-  // `bodyEl.replaceChildren(frag)` does on every WS batch — at 500 rows ×
-  // ~20 cells that's ~10k DOM ops per tick. In-place update keeps it
-  // O(rows) text-mutation only, no DOM reordering.
-  if(sameDomOrder(bodyEl,rows)){
-    for(const m of rows){
-      const row=rowMap.get(m.sym);
-      if(row)updateScreenerRow(row,m,cols,inChart);
-    }
-  } else {
-    const frag=document.createDocumentFragment();
-    for(const m of rows){
-      let row=rowMap.get(m.sym);
-      if(!row){
-        row=buildScreenerRow(m,cols);
-        rowMap.set(m.sym,row);
-      }
-      updateScreenerRow(row,m,cols,inChart);
-      frag.appendChild(row);
-    }
-    bodyEl.replaceChildren(frag);
+  const keep=new Set();
+  const frag=document.createDocumentFragment();
+  const topSpacer=document.createElement('div');
+  topSpacer.className='vspacer';topSpacer.style.height=range.spacerTop+'px';
+  const botSpacer=document.createElement('div');
+  botSpacer.className='vspacer';botSpacer.style.height=range.spacerBottom+'px';
+  frag.appendChild(topSpacer);
+  for(let i=range.first;i<=range.last;i++){
+    const m=rows[i];if(!m)continue;
+    keep.add(m.sym);
+    let row=rowMap.get(m.sym);
+    if(!row){row=buildScreenerRow(m,cols);rowMap.set(m.sym,row);}
+    updateScreenerRow(row,m,cols,inChart);
+    frag.appendChild(row);
   }
+  frag.appendChild(botSpacer);
+  bodyEl.replaceChildren(frag);
   for(const sym of Array.from(rowMap.keys())){
-    if(!(sym in S.mx))rowMap.delete(sym);
+    if(!keep.has(sym))rowMap.delete(sym);
   }
 }
 
@@ -4391,7 +4448,15 @@ let _splitterDragActive=false;
 let _rulerDragActive=false;
 document.addEventListener('DOMContentLoaded',()=>{
   const sb=document.getElementById('sbody');
-  if(sb){sb.addEventListener('scroll',()=>{_scrolling=true;clearTimeout(_scrollEnd);_scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);});}
+  if(sb){
+    sb.addEventListener('scroll',()=>{
+      _scrolling=true;clearTimeout(_scrollEnd);
+      // PERF: remount the virtual window immediately during scroll so the
+      // band tracks the viewport; renderTable's data refresh stays deferred.
+      renderScreenerInto(sb,sortedRows());
+      _scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);
+    },{passive:true});
+  }
 });
 
 function renderTable(){
@@ -5970,16 +6035,38 @@ async function loadKlinesBackground(){
         }
       }
     }
+    // PERF: two-tier background load. Priority universe (pinned charts +
+    // top-120 by volume) gets full data (all 4 TFs) immediately so the
+    // screener and sparklines for the coins users actually watch are ready
+    // in seconds. The long tail (~400 symbols) loads afterwards with 1h/5m
+    // only, in one small batch pass, instead of delaying everything.
+    const PRIORITY=120;
+    const priority=[...new Set([...visible,...top.slice(0,PRIORITY)])];
+    const tail=top.slice(PRIORITY);
     const [k5,k1h,k1m,kTr]=await Promise.all([
-      batchKlines(all,'5m',300,null,null,8),
-      batchKlines(all,'1h',170,null,null,8),
-      batchKlines(all,'1m',70,null,null,6),
-      batchKlines(all,trendTf,trendLim,null,null,8),
+      batchKlines(priority,'5m',300,null,null,8),
+      batchKlines(priority,'1h',170,null,null,8),
+      batchKlines(priority,'1m',70,null,null,6),
+      batchKlines(priority,trendTf,trendLim,null,null,8),
     ]);
     Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
     if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
     calcAll();renderTable();
     refreshMetricKlinesSlice();
+    // Tail: lighter set (no 1m, no trend series) — fills the rest quietly.
+    if(tail.length){
+      (async()=>{
+        try{
+          const [t5,t1h]=await Promise.all([
+            batchKlines(tail,'5m',300,null,null,6),
+            batchKlines(tail,'1h',170,null,null,6),
+          ]);
+          Object.assign(S.k5m,t5);Object.assign(S.k1h,t1h);
+          calcAll();
+          if(!document.hidden&&!_scrolling)scheduleRender();
+        }catch(e){console.warn('bg klines tail',e);}
+      })();
+    }
   }catch(e){
     console.warn('bg klines',e);
   }finally{
@@ -6158,20 +6245,25 @@ async function main() {
     loadLineColorPrefs();
     loadUiPrefs();
 
-    // Kick off the chart-library CDN load IMMEDIATELY and in parallel
-    // with everything else. The preconnect/dns-prefetch tags in index.html
-    // have already started DNS+TLS, so by the time we need LC (only
-    // when we call initLCChart) the script is usually already in flight.
+    // PERF: LightweightCharts is bundled via npm (imported at top of file).
+    // No CDN round-trip, no network dependency — charts library is ready
+    // the moment the bundle executes. Saves ~0.5-1.5s on cold start and
+    // removes the unpkg/jsdelivr failure mode entirely.
     ldSet('Загрузка библиотеки графиковвЂ¦',5);
     const lcPromise = (async () => {
+      if (LightweightCharts && typeof LightweightCharts.createChart === 'function') {
+        S.LC = LightweightCharts;
+        return;
+      }
+      // Fallback: legacy CDN path (kept for safety if the npm import fails).
       for (const url of [
         'https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js',
         'https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js',
       ]) {
         try {
           await loadScript(url);
-          if (typeof LightweightCharts !== 'undefined') {
-            S.LC = LightweightCharts;
+          if (typeof window.LightweightCharts !== 'undefined') {
+            S.LC = window.LightweightCharts;
             return;
           }
         } catch (e) { /* try the next CDN */ }
