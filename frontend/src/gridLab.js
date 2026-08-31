@@ -199,6 +199,10 @@ export function buildGridRiskRows(cfg) {
     if (n <= maxDown) {
       const pxNow = downPrices[n - 1];
       downPrice = pxNow;
+      // FIX(model): when price walks down from the anchor, the fill happens
+      // at the level being LEFT (the anchor itself for the first step).
+      // Filled entries so far: anchor, downPrices[0..n-2] → n orders.
+      downUsdt += (perStepNotional / Math.max(anchorPx, 1e-12)) * (pxNow - anchorPx);
       for (let i = 0; i < n - 1; i++) {
         const ent = downPrices[i];
         const qty = perStepNotional / Math.max(ent, 1e-12);
@@ -212,7 +216,11 @@ export function buildGridRiskRows(cfg) {
         upUsdt = 0;
       } else {
         upPrice = pxNow;
-        for (let j = 1; j < n - 1; j++) {
+        // FIX(model): mirror of the down side — walking up from the anchor
+        // fills a short at the anchor first, then at each crossed level.
+        // Filled entries so far: anchor, upLevels[1..n-1] → n orders.
+        upUsdt += (perStepNotional / Math.max(anchorPx, 1e-12)) * (anchorPx - pxNow);
+        for (let j = 1; j < n; j++) {
           const ent = upLevels[j];
           const qty = perStepNotional / Math.max(ent, 1e-12);
           upUsdt += qty * (ent - pxNow);
@@ -256,30 +264,30 @@ export function buildGridFavorableRows(cfg) {
   const rows = [];
 
   if (mode === 'long') {
-    const maxUp = upLevels.length;
-    for (let n = 1; n < maxUp; n++) {
+    // FIX(model): the favorable scenario must be consistent with the risk
+    // model — the pre-opened long position (openK levels at the anchor) rides
+    // the move up; there are no "buys on the way up" in a long grid.
+    // MTM at level px = openK * perStepNotional * (px - anchor) / anchor.
+    const openK = Math.max(0, upLevels.length - 1);
+    if (openK <= 0) return rows;
+    const qtyOpen = perStepNotional / Math.max(anchorPx, 1e-12);
+    for (let n = 1; n < upLevels.length; n++) {
       const pxNow = upLevels[n];
-      let pnl = 0;
-      for (let i = 1; i <= n; i++) {
-        const ent = upLevels[i - 1];
-        const q = perStepNotional / Math.max(ent, 1e-12);
-        pnl += q * (pxNow - ent);
-      }
+      const pnl = openK * qtyOpen * (pxNow - anchorPx);
       rows.push({ step: n, price: pxNow, usdt: pnl, pct: (pnl / dep) * 100 });
     }
     return rows;
   }
 
   if (mode === 'short') {
-    const maxDn = downPrices.length;
-    for (let n = 1; n <= maxDn; n++) {
+    // FIX(model): mirror of long — the pre-opened short (openK = levels below
+    // anchor) gains as price walks down; no averaging on the favorable side.
+    const openK = Math.max(0, downPrices.length);
+    if (openK <= 0) return rows;
+    const qtyOpen = perStepNotional / Math.max(anchorPx, 1e-12);
+    for (let n = 1; n <= downPrices.length; n++) {
       const pxNow = downPrices[n - 1];
-      let pnl = 0;
-      for (let i = 1; i <= n; i++) {
-        const ent = i === 1 ? anchorPx : downPrices[i - 2];
-        const q = perStepNotional / Math.max(ent, 1e-12);
-        pnl += q * (ent - pxNow);
-      }
+      const pnl = openK * qtyOpen * (anchorPx - pxNow);
       rows.push({ step: n, price: pxNow, usdt: pnl, pct: (pnl / dep) * 100 });
     }
     return rows;
