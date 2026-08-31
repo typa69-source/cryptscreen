@@ -312,11 +312,12 @@ export function renderGridRiskProfile(host, body, out, gbPrefs, deps) {
       ? Math.max(0, ai)
       : 0;
   const modeTitle = gm === 'long' ? 'Long grid' : gm === 'short' ? 'Short grid' : 'Neutral grid';
+  const openNotional = autoK > 0 ? ` (~${fn((autoK * ((+out.startEq || 0) * (+out.leverage || 1))) / Math.max(1, +out.levels || 1), 2)} USDT)` : '';
   const modeHint = gm === 'long'
-    ? `Стартовая long-позиция считается автоматически по числу верхних сеток: ${autoK}. Цена #0: ${anchorLbl}. Сверху — прибыль при росте по сетке; снизу — просадка при доборе вниз.`
+    ? `Long-бот: при старте сразу открыта позиция на все верхние сетки — ${autoK} ур.${openNotional} по цене #0 ${anchorLbl}. Сверху — прибыль при росте; снизу — просадка с УСРЕДНЕНИЕМ: на каждом нижнем уровне бот докупает, поэтому минус растёт медленнее, чем у открытой позиции, но быстрее, чем в neutral.`
     : gm === 'short'
-      ? `Стартовая short-позиция считается автоматически по числу нижних сеток: ${autoK}. Цена #0: ${anchorLbl}. Сверху — убыток при росте; снизу — прибыль при падении по сетке.`
-      : '#0 = первый уровень ≥ цены в neutral; симметричные сценарии вверх/вниз (как в отлаженной модели).';
+      ? `Short-бот: при старте сразу открыта короткая позиция на все нижние сетки — ${autoK} ур.${openNotional} по цене #0 ${anchorLbl}. Сверху — просадка с усреднением при росте; снизу — прибыль при падении.`
+      : 'Neutral-бот: на старте позиции НЕТ. Ордера заполняются только при пересечении уровней, в обе стороны. Просадка считается по фактически набранным ордерам — поэтому она меньше, чем у long/short при том же ходе цены против старта.';
   let topBlock, bottomBlock;
   if (gm === 'long') {
     topBlock = renderFavorableBars(favSortedDesc, { numRev: true, tone: TONE_FAV }, ctx);
@@ -632,7 +633,10 @@ export function buildPreviewPriceLines(out, lastClose) {
   return gridLv.map((p, i) => {
     const meta = gridRiskMetaForPrice(p, anchorPx, step, riskRows, gridMode);
     const color = PREVIEW_LINE_COLORS[meta.side] || PREVIEW_LINE_COLORS.neutral;
-    const title = fmtGridLineTitle(meta, (v) => v);
+    // FIX(round): the price-line title is drawn on the chart — a raw float
+    // here rendered as «0.099454384348434%». Round through the same 2-dec
+    // formatter used everywhere else in the panel.
+    const title = fmtGridLineTitle(meta, (v) => (v == null || !isFinite(v)) ? '—' : v.toFixed(2));
     return {
       price: p,
       color,
