@@ -98,6 +98,54 @@ export function visibleCount(range) {
 }
 
 /**
+ * Columns whose "desc" sort may rank by absolute magnitude (via S.sortAbs).
+ * Single source of truth shared by sortRows() and main.js settings UI.
+ */
+export const SORT_ABS_IDS = new Set(['ch24','ch7d','cday','sp5','spv','oi1h','oi4h']);
+
+/**
+ * Pure, deterministic row sorter for the screener.
+ *
+ * Extracted from main.js sortedRows() so the ordering rules are unit-testable
+ * and the UI comparator can never drift from the tested behaviour:
+ *   - null/NaN values always sort to the BOTTOM in both directions
+ *   - abs mode ranks by |value| (signed metrics like ИЗМ/OIΔ)
+ *   - alpha mode sorts by symbol (localeCompare)
+ *   - 'sp5' sort key reads the volume-spark field `spv` (legacy alias)
+ *   - never mutates the input array (Array.prototype.toSorted semantics)
+ *
+ * @param {Array<object>} rows
+ * @param {{key?:string, dir?:'asc'|'desc', abs?:boolean, alpha?:boolean}} opt
+ * @returns {Array<object>} new sorted array
+ */
+export function sortRows(rows, opt = {}) {
+  const { key = 'ch24', dir = 'desc', abs = false, alpha = false } = opt;
+  const sortKey = key === 'sp5' ? 'spv' : key;
+  const mul = dir === 'desc' ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    if (alpha) {
+      const r = String(a.sym).localeCompare(String(b.sym));
+      return dir === 'asc' ? r : -r;
+    }
+    let va = a[sortKey];
+    let vb = b[sortKey];
+    if (abs && SORT_ABS_IDS.has(key)) {
+      if (va != null && !isNaN(va)) va = Math.abs(va);
+      if (vb != null && !isNaN(vb)) vb = Math.abs(vb);
+    }
+    const aBad = va == null || isNaN(va);
+    const bBad = vb == null || isNaN(vb);
+    // Nulls sink to the bottom regardless of direction — a missing value
+    // must never outrank a real one (was flaky under abs mode before).
+    if (aBad && bBad) return 0;
+    if (aBad) return 1;
+    if (bBad) return -1;
+    // desc: larger first → comparator negative when va > vb.
+    return dir === 'desc' ? vb - va : va - vb;
+  });
+}
+
+/**
  * Scroll a specific row index to the top of the viewport.
  * Returns the scrollTop to assign.
  */

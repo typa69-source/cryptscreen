@@ -68,7 +68,7 @@ import {
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, chartThemeColors, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
-import { visibleRange, ROW_HEIGHT } from './screener-virtual.js'
+import { visibleRange, ROW_HEIGHT, sortRows } from './screener-virtual.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
 import {
   DEFAULT_DENSITY_SETTINGS,
@@ -4188,19 +4188,12 @@ function sortedRows(){
   }else if(S.activeGroupFilter>0){
     rows=rows.filter(r=>symbolInGroup(r.sym,S.activeGroupFilter));
   }
-  rows.sort((a,b)=>{
-    if(S.sortAlpha){
-      const r=a.sym.localeCompare(b.sym);return S.sortDir==='asc'?r:-r;
-    }
-    const sortKey=S.sortId==='spv'?'spVol':S.sortId;
-    let va=a[sortKey],vb=b[sortKey];
-    if(S.sortAbs&&(S.sortId==='ch24'||S.sortId==='ch7d'||S.sortId==='cday'||S.sortId==='sp5'||S.sortId==='spv'||S.sortId==='oi1h'||S.sortId==='oi4h')){
-      va=va!=null&&!isNaN(va)?Math.abs(va):va;vb=vb!=null&&!isNaN(vb)?Math.abs(vb):vb;
-    }
-    if(va==null||isNaN(va))return 1;if(vb==null||isNaN(vb))return-1;
-    return S.sortDir==='desc'?vb-va:va-vb;
-  });
-  return rows;
+  // FIX(sort): delegate to the unit-tested pure comparator (screener-virtual).
+  // The old inline comparator had the same rules but was duplicated logic;
+  // sp5 legacy alias maps to the volume-spark field. sortRows is stable and
+  // never mutates the source array.
+  const sorted=sortRows(rows,{key:S.sortId,dir:S.sortDir,abs:!!S.sortAbs,alpha:!!S.sortAlpha});
+  return sorted;
 }
 
 // NOTE: sameDomOrder() was retired by the virtual-scroll migration —
@@ -4211,18 +4204,24 @@ function renderScreenerInto(bodyEl,rows){
   if(!bodyEl)return;
   // PERF: virtual window. Only a viewport-sized band of rows is mounted;
   // the rest are represented by two spacer divs whose heights emulate the
-  // full list. Row metrics are kept in `_allRows` so updates patch just
-  // the mounted band. Follows the model of screener-virtual.js.
+  // full list. Follows the model of screener-virtual.js.
   const total=rows.length;
   const vh=bodyEl.clientHeight||600;
   const range=visibleRange(bodyEl.scrollTop,vh,total,ROW_HEIGHT,8);
-  if(bodyEl._vTotal!==total||bodyEl._vFirst!==range.first||bodyEl._vLast!==range.last){
-    bodyEl._vTotal=total;bodyEl._vFirst=range.first;bodyEl._vLast=range.last;
+  // FIX(sort): the window must rebuild not only when its indices change,
+  // but when the SYMBOL SEQUENCE inside the window changes (sort flip,
+  // live re-sort while total/scrollTop stay identical). Otherwise the
+  // incremental branch would patch data into stale DOM positions and the
+  // table would visually ignore the new sort order — the reported bug.
+  const bandSig=rows.slice(Math.max(0,range.first),Math.min(total-1,range.last)+1)
+    .map(r=>r.sym).join(',');
+  if(bodyEl._vTotal!==total||bodyEl._vFirst!==range.first||bodyEl._vLast!==range.last||bodyEl._vSig!==bandSig){
+    bodyEl._vTotal=total;bodyEl._vFirst=range.first;bodyEl._vLast=range.last;bodyEl._vSig=bandSig;
     bodyEl._allRows=rows;
     mountVirtualRows(bodyEl,range,rows);
     return;
   }
-  // Same window: incremental in-place update of mounted rows only.
+  // Same window & same symbol order: incremental in-place update.
   bodyEl._allRows=rows;
   const inChart=new Set(S.charts.map(c=>c.sym).filter(Boolean));
   const cols=activeCols();
@@ -4450,12 +4449,13 @@ document.addEventListener('DOMContentLoaded',()=>{
   const sb=document.getElementById('sbody');
   if(sb){
     sb.addEventListener('scroll',()=>{
-      _scrolling=true;clearTimeout(_scrollEnd);
-      // PERF: remount the virtual window immediately during scroll so the
-      // band tracks the viewport; renderTable's data refresh stays deferred.
-      renderScreenerInto(sb,sortedRows());
-      _scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);
-    },{passive:true});
+          _scrolling=true;clearTimeout(_scrollEnd);
+          // PERF+FIX: remount the virtual window immediately during scroll so the
+          // band tracks the viewport; the rows array is reused from the last
+          // render (no per-event resort), data refresh stays deferred to idle.
+          renderScreenerInto(sb,sb._allRows||sortedRows());
+          _scrollEnd=setTimeout(()=>{_scrolling=false;renderTable();},150);
+        },{passive:true});
   }
 });
 
@@ -4527,6 +4527,13 @@ function doSort(id){
     else{S.sortId=id;S.sortDir='desc';}
   }
   S.page=0;updSortHdr();
+  // FIX(sort): jump back to the top so the user sees the new #1 rows and the
+  // virtual window remounts against a clean scrollTop instead of a random
+  // band of the re-ordered list.
+  ['sbody','fsSbody'].forEach(sid=>{
+    const el=document.getElementById(sid);
+    if(el)el.scrollTop=0;
+  });
   // Rebuild both headers to refresh tick-col arrow
   buildScreenerHeader(document.getElementById('shdr'));
   if(document.getElementById('fsShdr'))buildScreenerHeader(document.getElementById('fsShdr'));
