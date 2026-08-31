@@ -635,8 +635,20 @@ export function buildPreviewPriceLines(out, lastClose) {
   });
   const anchorIdx = gridRiskAnchorIdx(gridLv, lastClose, step, gridMode, out.anchorPrice);
   const anchorPx = gridLv[anchorIdx] ?? lastClose;
+  // FIX(labels): favorable rows give TP levels their real cumulative profit.
+  const favRows = buildGridFavorableRows({
+    lower: out.lower,
+    upper: out.upper,
+    currentPrice: lastClose,
+    levels: out.levels,
+    leverage: out.leverage,
+    deposit: out.startEq,
+    gridMode,
+    anchorPrice: out.anchorPrice,
+    gridLevels: gridLv,
+  });
   return gridLv.map((p, i) => {
-    const meta = gridRiskMetaForPrice(p, anchorPx, step, riskRows, gridMode);
+    const meta = gridRiskMetaForPrice(p, anchorPx, step, riskRows, gridMode, favRows);
     const color = PREVIEW_LINE_COLORS[meta.side] || PREVIEW_LINE_COLORS.neutral;
     // FIX(round): the price-line title is drawn on the chart — a raw float
     // here rendered as «0.099454384348434%». Round through the same 2-dec

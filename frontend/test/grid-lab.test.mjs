@@ -577,8 +577,11 @@ test('fmtGridLineTitle: anchor', () => {
 });
 
 test('fmtGridLineTitle: tp-up / tp-down', () => {
-  assert.equal(fmtGridLineTitle({ side: 'tp-up', usdt: 0, pct: 0 }, fn2), '0%, 0 USDT (фиксация)');
-  assert.equal(fmtGridLineTitle({ side: 'tp-down', usdt: 0, pct: 0 }, fn2), '0%, 0 USDT (фиксация)');
+  // Real cumulative values are rendered now (partial-TP model).
+  assert.equal(fmtGridLineTitle({ side: 'tp-up', usdt: 0.3, pct: 3 }, fn2), '3.00%, 0.30 USDT (фиксация)');
+  assert.equal(fmtGridLineTitle({ side: 'tp-down', usdt: 1.25, pct: 12.5 }, fn2), '12.50%, 1.25 USDT (фиксация)');
+  // Fallback when no favorable data: zeros.
+  assert.equal(fmtGridLineTitle({ side: 'tp-up', usdt: 0, pct: 0 }, fn2), '0.00%, 0.00 USDT (фиксация)');
 });
 
 test('fmtGridLineTitle: unknown / null → empty', () => {

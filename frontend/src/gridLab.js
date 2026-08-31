@@ -564,16 +564,28 @@ export function runManualGridBacktest(cfg) {
 /** Look up risk-grid metadata for a given price level.
  *  Returns { side, usdt, pct } where side ∈ { 'anchor', 'tp-up', 'tp-down',
  *  'short', 'long', 'unknown' }. Pure function. */
-export function gridRiskMetaForPrice(price, anchorPx, step, riskRows, gridMode) {
+export function gridRiskMetaForPrice(price, anchorPx, step, riskRows, gridMode, favRows) {
   const tol = Math.max(1e-10, (step || 0) * 1e-7);
   const gm = String(gridMode || 'neutral');
   if (Math.abs(price - anchorPx) <= tol) return { side: 'anchor', usdt: 0, pct: 0 };
   if (price > anchorPx + tol) {
-    if (gm === 'long') return { side: 'tp-up', usdt: 0, pct: 0 };
+    if (gm === 'long') {
+      // FIX(labels): TP levels must show the cumulative realized profit at
+      // that grid level (partial closes), not hardcoded zeros.
+      const f = Array.isArray(favRows) && favRows.find
+        ? favRows.find((x) => x.price != null && Math.abs(x.price - price) <= tol)
+        : null;
+      return { side: 'tp-up', usdt: f ? f.usdt : 0, pct: f ? f.pct : 0 };
+    }
     const r = riskRows.find((x) => x.upPrice != null && Math.abs(x.upPrice - price) <= tol);
     if (r) return { side: 'short', usdt: r.upUsdt, pct: r.upPct };
   } else {
-    if (gm === 'short') return { side: 'tp-down', usdt: 0, pct: 0 };
+    if (gm === 'short') {
+      const f = Array.isArray(favRows) && favRows.find
+        ? favRows.find((x) => x.price != null && Math.abs(x.price - price) <= tol)
+        : null;
+      return { side: 'tp-down', usdt: f ? f.usdt : 0, pct: f ? f.pct : 0 };
+    }
     const r = riskRows.find((x) => x.downPrice != null && Math.abs(x.downPrice - price) <= tol);
     if (r) return { side: 'long', usdt: r.downUsdt, pct: r.downPct };
   }
@@ -583,7 +595,10 @@ export function gridRiskMetaForPrice(price, anchorPx, step, riskRows, gridMode) 
 /** Format a label for a grid-line hover. `fn` is the number formatter (provided via deps). */
 export function fmtGridLineTitle(meta, fn) {
   if (meta.side === 'anchor') return '#0 · 0%, 0 USDT';
-  if (meta.side === 'tp-up' || meta.side === 'tp-down') return '0%, 0 USDT (фиксация)';
+  if (meta.side === 'tp-up' || meta.side === 'tp-down') {
+    if (meta.usdt == null || !isFinite(meta.usdt)) return '0%, 0 USDT (фиксация)';
+    return `${fn(meta.pct, 2)}%, ${fn(meta.usdt, 2)} USDT (фиксация)`;
+  }
   if (meta.usdt == null || meta.pct == null || !isFinite(meta.usdt) || !isFinite(meta.pct)) return '';
   return `${fn(meta.pct, 2)}%, ${fn(meta.usdt, 2)} USDT`;
 }

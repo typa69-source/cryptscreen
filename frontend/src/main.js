@@ -2965,6 +2965,11 @@ function scheduleRulerRedraw(ch){
     const pending=_rulerRedrawSet;
     _rulerRedrawSet=null;
     for(const item of pending){
+      // FIX(ruler): Grid Lab charts paint everything (incl. the ruler) on one
+      // canvas via the gridLab painter — a dedicated rulerCanvas pass would
+      // early-return (no .rulerCanvas prop) and the ruler stayed invisible.
+      // Route them through the full painter instead.
+      if(item?._gridLabChart){rCanvas(item);continue;}
       if(item?.ruler)_rulerCanvasImmediate(item);
     else if(item?.rulerCanvas){item.rulerCanvas.getContext('2d')?.clearRect(0,0,item.rulerCanvas.width,item.rulerCanvas.height);}
     }
