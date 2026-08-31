@@ -574,7 +574,7 @@ export function collectGridLabFields(body) {
     levels: body.querySelector('#gbLevels')?.value,
     leverage: body.querySelector('#gbLev')?.value,
     deposit: body.querySelector('#gbDep')?.value,
-    gridMode: body.querySelector('#gbMode')?.value,
+    gridMode: body.querySelector('#gbGridMode')?.value,
     anchorPrice: body.querySelector('#gbAnchor')?.value,
   };
 }

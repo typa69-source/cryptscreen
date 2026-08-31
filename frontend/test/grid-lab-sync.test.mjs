@@ -78,7 +78,7 @@ test('collectGridLabFields: extracts all form fields', () => {
     gbLevels: '14',
     gbLev: '5',
     gbDep: '500',
-    gbMode: 'long',
+    gbGridMode: 'long',
     gbAnchor: '65000',
   });
   const out = collectGridLabFields(body);
