@@ -2135,6 +2135,12 @@ function _rCanvasImmediate(ch){
       }
     }
   }
+  // FIX(ruler): the middle-click ruler was never painted on the Grid Lab
+  // chart — its draw branch lives only in the normal-chart painter. Draw it
+  // here (inside the same clip) so the rect/labels are visible.
+  if(ch.ruler?.p1){
+    drawRuler(ctx,ch);
+  }
   // EMA overlay (drawn on top of candles, below crosshair)
   drawEMAs(ctx,ch,drawW,drawH);
   ctx.restore(); // end clip

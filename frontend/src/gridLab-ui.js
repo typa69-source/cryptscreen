@@ -231,11 +231,16 @@ export function renderFavorableBars(list, opts, ctx) {
     const w = Math.max(2, Math.round((Math.abs(val) / maxAbs) * 100));
     const pxTxt = px != null && isFinite(px) ? fmtPrice(px) : '—';
     const num = numRev ? list.length - idx : idx + 1;
+    // Partial-TP info: how much this level's chunk closed for.
+    const chunk = r.chunkUsdt;
+    const chunkTxt = (chunk != null && isFinite(chunk))
+      ? ` · закрыто ${fmtSigned(chunk, fn)} USDT`
+      : '';
     return `<div style="display:flex;align-items:center;gap:6px;height:16px">
       <div style="width:26px;text-align:right;color:var(--text2);font-size:9px">#${num}</div>
       <div style="position:relative;flex:1;height:100%;background:${tone.bg};border:1px solid ${tone.bd};border-radius:4px;overflow:hidden">
         <span style="position:absolute;left:0;top:0;bottom:0;width:${w}%;background:${tone.fill}"></span>
-        <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmtSigned(val, fn)} USDT · ${fmtSigned(pct, fn)}% · ${pxTxt}</span>
+        <span style="position:relative;z-index:1;padding-left:4px;font-size:8.5px;color:${tone.tx}">${fmtSigned(val, fn)} USDT · ${fmtSigned(pct, fn)}% · ${pxTxt}${chunkTxt}</span>
       </div>
     </div>`;
   }).join('');
@@ -314,9 +319,9 @@ export function renderGridRiskProfile(host, body, out, gbPrefs, deps) {
   const modeTitle = gm === 'long' ? 'Long grid' : gm === 'short' ? 'Short grid' : 'Neutral grid';
   const openNotional = autoK > 0 ? ` (~${fn((autoK * ((+out.startEq || 0) * (+out.leverage || 1))) / Math.max(1, +out.levels || 1), 2)} USDT)` : '';
   const modeHint = gm === 'long'
-    ? `Long-бот: при старте сразу открыта позиция на все верхние сетки — ${autoK} ур.${openNotional} по цене #0 ${anchorLbl}. Сверху — прибыль при росте; снизу — просадка с УСРЕДНЕНИЕМ: на каждом нижнем уровне бот докупает, поэтому минус растёт медленнее, чем у открытой позиции, но быстрее, чем в neutral.`
+    ? `Long-бот: при старте сразу открыта позиция на все верхние сетки — ${autoK} ур.${openNotional} по цене #0 ${anchorLbl}. Сверху — НАКОПЛЕННАЯ прибыль частичных закрытий: на каждом верхнем уровне бот закрывает 1/N позиции (строка показывает «закрыто …» за уровень и итог), снизу — просадка с усреднением (докупки).`
     : gm === 'short'
-      ? `Short-бот: при старте сразу открыта короткая позиция на все нижние сетки — ${autoK} ур.${openNotional} по цене #0 ${anchorLbl}. Сверху — просадка с усреднением при росте; снизу — прибыль при падении.`
+      ? `Short-бот: при старте сразу открыта короткая позиция на все нижние сетки — ${autoK} ур.${openNotional} по цене #0 ${anchorLbl}. Сверху — просадка с усреднением при росте; снизу — накопленная прибыль частичных закрытий при падении (каждый нижний уровень закрывает часть шорта).`
       : 'Neutral-бот: на старте позиции НЕТ. Ордера заполняются только при пересечении уровней, в обе стороны. Просадка считается по фактически набранным ордерам — поэтому она меньше, чем у long/short при том же ходе цены против старта.';
   let topBlock, bottomBlock;
   if (gm === 'long') {
@@ -799,6 +804,18 @@ export function wireRulerHandlers({ wrap, gbCh, sig, deps }) {
   const { onRulerStart, onRulerMove, onRulerEnd, isNearRuler, getCoords, rCanvas } = deps;
   wrap.addEventListener('mousedown', (e) => {
     if (e.button === 1) { e.preventDefault(); onRulerStart(gbCh, e, wrap); }
+  }, { capture: true, signal: sig });
+  // FIX(ruler): LMB click anywhere on the chart (not on the ruler line itself)
+  // dismisses the existing ruler, same as the main charts' UX.
+  wrap.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (!gbCh.ruler?.p1 || gbCh.ruler?.active) return;
+    const { x, y } = getCoords(wrap, e.clientX, e.clientY);
+    if (isNearRuler(gbCh, x, y)) return; // click near the line keeps it (context menu removes)
+    gbCh.ruler = null;
+    const tt = document.getElementById('rulerTooltip');
+    if (tt) tt.style.display = 'none';
+    rCanvas(gbCh);
   }, { capture: true, signal: sig });
   wrap.addEventListener('mousemove', (e) => {
     if (gbCh.ruler?.active) onRulerMove(gbCh, e, wrap);

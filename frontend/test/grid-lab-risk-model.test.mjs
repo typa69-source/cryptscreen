@@ -24,13 +24,13 @@ test('long risk: pre-opened position spans maxUp-1 levels; down rows average', (
   assert.ok(Math.abs(last.downUsdt - (-0.708425)) < 1e-4, `got ${last.downUsdt}`)
 })
 
-test('long favorable: profit = pre-opened position MTM, not per-level sum', () => {
+test('long favorable: cumulative realized profit from partial closes', () => {
   const fav = buildGridFavorableRows(longCfg)
-  // at 102: 5$*(2/100) = +0.10
-  assert.ok(Math.abs(fav[0].usdt - 0.10) < 1e-9, `got ${fav[0].usdt}`)
-  // at 110: 5$*(10/100) = +0.50
+  // at 102: 1 of 5 chunks closed: 0.01*(102-100) = +0.02
+  assert.ok(Math.abs(fav[0].usdt - 0.02) < 1e-9, `got ${fav[0].usdt}`)
+  // at 110: all 5 chunks closed: 0.30
   const last = fav[fav.length - 1]
-  assert.ok(Math.abs(last.usdt - 0.5) < 1e-9, `got ${last.usdt}`)
+  assert.ok(Math.abs(last.usdt - 0.30) < 1e-9, `got ${last.usdt}`)
 })
 
 test('short risk mirrors long risk', () => {
@@ -40,12 +40,11 @@ test('short risk mirrors long risk', () => {
   assert.ok(Math.abs(rows[0].upUsdt - (-0.10)) < 1e-9, `got ${rows[0].upUsdt}`)
 })
 
-test('short favorable: open short MTM (5 levels down), not per-level sum', () => {
+test('short favorable: cumulative realized profit from partial closes', () => {
   const shortCfg = { ...longCfg, gridMode: 'short' }
   const fav = buildGridFavorableRows(shortCfg)
-  // at 90: open short 5$*(10/100) = +0.50
   const last = fav[fav.length - 1]
-  assert.ok(Math.abs(last.usdt - 0.5) < 1e-9, `got ${last.usdt}`)
+  assert.ok(Math.abs(last.usdt - 0.30) < 1e-9, `got ${last.usdt}`)
 })
 
 test('neutral risk: first crossed level includes the anchor fill (off-by-one)', () => {

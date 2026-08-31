@@ -264,31 +264,34 @@ export function buildGridFavorableRows(cfg) {
   const rows = [];
 
   if (mode === 'long') {
-    // FIX(model): the favorable scenario must be consistent with the risk
-    // model — the pre-opened long position (openK levels at the anchor) rides
-    // the move up; there are no "buys on the way up" in a long grid.
-    // MTM at level px = openK * perStepNotional * (px - anchor) / anchor.
+    // MODEL (partial TP): the pre-opened long (openK levels at the anchor) is
+    // closed in chunks — one chunk per grid level as price walks up, exactly
+    // how directional grid bots take profit. Each level realizes
+    // q·(P_i − anchor), q = perStepNotional / anchor; the bar shows the
+    // CUMULATIVE realized profit after that level's close.
     const openK = Math.max(0, upLevels.length - 1);
     if (openK <= 0) return rows;
-    const qtyOpen = perStepNotional / Math.max(anchorPx, 1e-12);
-    for (let n = 1; n < upLevels.length; n++) {
+    const q = perStepNotional / Math.max(anchorPx, 1e-12);
+    let cum = 0;
+    for (let n = 1; n <= openK; n++) {
       const pxNow = upLevels[n];
-      const pnl = openK * qtyOpen * (pxNow - anchorPx);
-      rows.push({ step: n, price: pxNow, usdt: pnl, pct: (pnl / dep) * 100 });
+      cum += q * (pxNow - anchorPx);
+      rows.push({ step: n, price: pxNow, usdt: cum, pct: (cum / dep) * 100, chunkUsdt: q * (pxNow - anchorPx) });
     }
     return rows;
   }
 
   if (mode === 'short') {
-    // FIX(model): mirror of long — the pre-opened short (openK = levels below
-    // anchor) gains as price walks down; no averaging on the favorable side.
+    // MODEL (partial TP): mirror of long — the pre-opened short is covered in
+    // chunks as price walks down; cumulative realized profit per level.
     const openK = Math.max(0, downPrices.length);
     if (openK <= 0) return rows;
-    const qtyOpen = perStepNotional / Math.max(anchorPx, 1e-12);
-    for (let n = 1; n <= downPrices.length; n++) {
+    const q = perStepNotional / Math.max(anchorPx, 1e-12);
+    let cum = 0;
+    for (let n = 1; n <= openK; n++) {
       const pxNow = downPrices[n - 1];
-      const pnl = openK * qtyOpen * (anchorPx - pxNow);
-      rows.push({ step: n, price: pxNow, usdt: pnl, pct: (pnl / dep) * 100 });
+      cum += q * (anchorPx - pxNow);
+      rows.push({ step: n, price: pxNow, usdt: cum, pct: (cum / dep) * 100, chunkUsdt: q * (anchorPx - pxNow) });
     }
     return rows;
   }
