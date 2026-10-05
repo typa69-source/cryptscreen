@@ -11,6 +11,18 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // Split the chart library into its own chunk: it is ~160KB of stable
+    // vendor code that never changes between deploys. Keeping it separate
+    // lets the browser cache it across releases (app code re-hash no longer
+    // invalidates the vendor chunk) and download/parse in parallel.
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-charts': ['lightweight-charts'],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 600,
     minify: 'terser',
     terserOptions: {
       compress: { drop_console: true, drop_debugger: true },

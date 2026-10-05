@@ -3972,7 +3972,12 @@ function scheduleRealtimeMetricRecalc(gen){
           if(!tk||tk.p==null||isNaN(tk.p))continue;
           applyLiveKlineUpdate(sym,tk.p,nowMs);
         }
-        calcAll();
+        // PERF: incremental — recompute ONLY the universe whose klines we
+        // just touched; the remaining ~260 symbols keep their previous mx
+        // entries. The old bare calcAll() re-ran correlations (300 bars),
+        // sparklines and BB signals for all ~500 symbols on the main thread
+        // every debounce tick — the single biggest source of UI jank.
+        calcAll(universe);
         if(!document.hidden){
           if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
           else scheduleRender();
@@ -4282,7 +4287,7 @@ function buildScreenerRow(m,cols){
   row.className='srow';
   row.onclick=()=>openFullscreenBySym(sym);
   row._sym=sym;
-  const rt=document.createElement('div');rt.className='rtick';
+  const rt=document.createElement('div');rt.className='rtick';rt.style.paddingLeft='9px';
   const gdot=document.createElement('span');gdot.className='cg-dot';
   gdot.title='Группа/избранное';
   gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(sym,gdot);};
@@ -4320,6 +4325,41 @@ function buildScreenerRow(m,cols){
   return row;
 }
 
+// PERF: in-place spark cell painter. The old code rebuilt cell.innerHTML
+// (HTML + SVG parse!) on every visible row whenever the raw chgDisp float
+// changed — ~80 SVG parses per WS batch. Now:
+//  1) the change signature is built from DISPLAYED values (rounded pct,
+//     heat color, path), so ticks that don't change what the user sees
+//     cost zero work;
+//  2) when something did change, attributes are patched in place instead
+//     of re-parsing markup.
+function paintSparkCell(cell,chgDisp,dLine,fcId){
+  const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'•';
+  const ud=(chgDisp!=null&&chgDisp<0)?'down':'up';
+  const bg=sparkHeatBackground(chgDisp);
+  const sig=`${pct}|${ud}|${bg}|${dLine}`;
+  if(cell._sparkSig===sig)return;
+  cell._sparkSig=sig;
+  const inner=cell.firstElementChild;
+  if(inner&&inner.classList&&inner.classList.contains('spark-inner')){
+    const wantCls='spark-inner '+ud;
+    if(inner.className!==wantCls)inner.className=wantCls;
+    if(cell._sparkBg!==bg){cell._sparkBg=bg;inner.style.background=bg;}
+    const path=inner.querySelector('path');
+    if(path){
+      const d=svgPathAttr(dLine);
+      if(path.getAttribute('d')!==d)path.setAttribute('d',d);
+    }
+    const span=inner.querySelector('.spark-pct');
+    if(span&&span.textContent!==pct)span.textContent=pct;
+  }else{
+    cell._sparkBg=bg;
+    cell.innerHTML=`<div class="spark-inner ${escapeHtml(ud)}" style="background:${escapeHtml(bg)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${svgPathAttr(dLine)}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${escapeHtml(pct)}</span></div>`;
+  }
+  const clsBase='mc spark-col '+(chgDisp==null||isNaN(chgDisp)?'d':fc(chgDisp,fcId));
+  if(cell.className!==clsBase)cell.className=clsBase;
+}
+
 function updateScreenerRow(row,m,cols,inChart){
   const sym=m.sym;
   const grp=getSymGroup(sym);
@@ -4332,7 +4372,9 @@ function updateScreenerRow(row,m,cols,inChart){
   const gdot=row._gdot;
   if(gdot){
     styleGroupDot(gdot,sym);
-    gdot.onclick=ev=>{ev.stopPropagation();showGroupPicker(sym,gdot);};
+    // PERF: onclick handlers are bound once in buildScreenerRow (rows are
+    // cached per-symbol in _rowMap), so re-attaching closures every tick was
+    // pure GC churn. Only the group dot's *appearance* can change at runtime.
   }
   const fstar=row._fstar;
   if(fstar){
@@ -4341,12 +4383,7 @@ function updateScreenerRow(row,m,cols,inChart){
   }
   const nameTxt=sym.replace(/USDT$/,'');
   if(row._name&&row._name.textContent!==nameTxt)row._name.textContent=nameTxt;
-  if(row._name){
-    row._name.onclick=ev=>{ev.stopPropagation();copyTicker(nameTxt);openFullscreenBySym(sym);};
-  }
   if(row._stripe){row._stripe.remove();row._stripe=null;}
-  const rt=row.firstChild;
-  if(rt)rt.style.paddingLeft='9px';
   if(row._cells.length!==cols.length){
     row._rg.innerHTML='';
     row._cells=[];
@@ -4375,32 +4412,14 @@ function updateScreenerRow(row,m,cols,inChart){
       const hasPath=m.sp5d&&String(m.sp5d).length>8;
       const chgDisp=(m.sp5!=null&&!isNaN(m.sp5))?m.sp5:(m.ch24!=null&&!isNaN(m.ch24)?m.ch24:null);
       const dLine=hasPath?String(m.sp5d):'M1,20 L99,20';
-      const sig=`${chgDisp}|${dLine}`;
-      if(cell._sparkSig!==sig){
-        cell._sparkSig=sig;
-        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'•';
-        const ud=(chgDisp!=null&&chgDisp<0)?'down':'up';
-        const bg=sparkHeatBackground(chgDisp);
-        cell.innerHTML=`<div class="spark-inner ${escapeHtml(ud)}" style="background:${escapeHtml(bg)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${svgPathAttr(dLine)}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${escapeHtml(pct)}</span></div>`;
-      }
-      const clsBase='mc spark-col '+(chgDisp==null||isNaN(chgDisp)?'d':fc(chgDisp,'ch24'));
-      if(cell.className!==clsBase)cell.className=clsBase;
+      paintSparkCell(cell,chgDisp,dLine,'ch24');
       return;
     }
     if(c.id==='spv'){
       const hasPath=m.spVold&&String(m.spVold).length>8;
       const chgDisp=(m.spVol!=null&&!isNaN(m.spVol))?m.spVol:null;
       const dLine=hasPath?String(m.spVold):'M1,20 L99,20';
-      const sig=`spv|${chgDisp}|${dLine}`;
-      if(cell._sparkSig!==sig){
-        cell._sparkSig=sig;
-        const pct=chgDisp!=null&&!isNaN(chgDisp)?(chgDisp>=0?'+':'')+chgDisp.toFixed(1)+'%':'•';
-        const ud=(chgDisp!=null&&chgDisp<0)?'down':'up';
-        const bg=sparkHeatBackground(chgDisp);
-        cell.innerHTML=`<div class="spark-inner ${escapeHtml(ud)}" style="background:${escapeHtml(bg)}"><svg viewBox="0 0 100 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg"><path d="${svgPathAttr(dLine)}" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="spark-pct">${escapeHtml(pct)}</span></div>`;
-      }
-      const clsBase='mc spark-col '+(chgDisp==null||isNaN(chgDisp)?'d':fc(chgDisp,'spv'));
-      if(cell.className!==clsBase)cell.className=clsBase;
+      paintSparkCell(cell,chgDisp,dLine,'spv');
       return;
     }
     const val=m[c.id];
@@ -4777,10 +4796,13 @@ function updateCharts(){
   if(changed){
     clearAllRulers();
     (async()=>{
-      for(let i=0;i<S.charts.length;i++){
-        const ns=pageSyms[i]||null;
-        if(S.charts[i].sym!==ns)await loadChart(i,ns);
-      }
+      // PERF: load all slots in PARALLEL. The api.js request queue already
+      // caps concurrency at 3 (Binance ban protection), so this is safe —
+      // the old sequential `await` loop took 9×300-900ms to fill the grid.
+      // Each slot paints itself as soon as its own fetch resolves.
+      await Promise.allSettled(
+        S.charts.map((ch,i)=>{ const ns=pageSyms[i]||null; return ch.sym!==ns ? loadChart(i,ns) : Promise.resolve(); })
+      );
       restartChartStreams(600);
     })();
   }

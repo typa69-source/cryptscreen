@@ -11,13 +11,15 @@
 <meta http-equiv="Expires" content="0">
 <link rel="icon" href="/favicon.svg" type="image/svg/xml">
 <title>CryptScreen &#8212; Crypto Screener</title>
-<!-- Warm DNS/TLS to chart-library CDNs before the JS even runs.
-     Saves 100-400ms on the first cold start by letting the browser
-     start the handshake while it parses HTML/CSS. -->
-<link rel="preconnect" href="https://unpkg.com" crossorigin>
-<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link rel="dns-prefetch" href="//unpkg.com">
-<link rel="dns-prefetch" href="//cdn.jsdelivr.net">
+<!-- PERF: the chart library is now bundled via npm (no CDN round-trip), so the
+     old unpkg/jsdelivr preconnects were dead DNS/TLS handshakes on every cold
+     start. Replace them with preconnects to the hosts we actually hit: the
+     Binance REST + WebSocket endpoints. Warming these saves ~100-300ms before
+     the first kline/ticker request resolves. -->
+<link rel="preconnect" href="https://fapi.binance.com" crossorigin>
+<link rel="preconnect" href="https://fstream.binance.com" crossorigin>
+<link rel="dns-prefetch" href="//fapi.binance.com">
+<link rel="dns-prefetch" href="//fstream.binance.com">
 </head>
 <body>
 
