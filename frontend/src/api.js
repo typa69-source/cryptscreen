@@ -30,9 +30,9 @@ export function fj(url,timeout=15000,retries=2){
       return;
     }
     const doFetch=()=>new Promise((rs,rj)=>{
-      const t=setTimeout(()=>rj(new Error('Timeout')),timeout);
-      fetch(url).then(async r=>{
-        clearTimeout(t);
+      const controller=new AbortController();
+      const t=setTimeout(()=>{rj(new Error('Timeout'));controller.abort();},timeout);
+      fetch(url,{signal:controller.signal}).then(async r=>{
         const text=await r.text();
         let data;
         try{data=JSON.parse(text);}catch(e){rj(new Error('JSON parse error'));return;}
@@ -44,7 +44,7 @@ export function fj(url,timeout=15000,retries=2){
         }
         if(!r.ok){rj(new Error('HTTP '+r.status));return;}
         rs(data);
-      }).catch(e=>{clearTimeout(t);rj(e);});
+      }).catch(e=>{rj(e);}).finally(()=>clearTimeout(t));
     });
     const attempt=(n)=>{
       _reqQueue.push({fn:doFetch,res:rs=>{res(rs);},rej:e=>{

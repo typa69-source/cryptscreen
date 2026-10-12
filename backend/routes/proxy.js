@@ -17,6 +17,7 @@ router.get('/coingecko/markets', async (req, res) => {
   url.searchParams.set('per_page', '250')
   url.searchParams.set('page', String(page))
 
+  let deadline
   try {
     const cached = _cgCache.get(page)
     if (cached && Date.now() - cached.ts < CG_TTL_MS && cached.status === 200) {
@@ -26,7 +27,7 @@ router.get('/coingecko/markets', async (req, res) => {
     }
 
     const controller = new AbortController()
-    const t = setTimeout(() => controller.abort(), 15000)
+    deadline = setTimeout(() => controller.abort(), 15000)
     const r = await fetch(url.toString(), {
       signal: controller.signal,
       headers: {
@@ -34,7 +35,6 @@ router.get('/coingecko/markets', async (req, res) => {
         'user-agent': 'cryptscreen/1.0',
       },
     })
-    clearTimeout(t)
     const text = await r.text()
     if (r.ok) {
       _cgCache.set(page, { ts: Date.now(), body: text, status: 200 })
@@ -59,6 +59,8 @@ router.get('/coingecko/markets', async (req, res) => {
       return
     }
     res.status(502).json({ error: 'Proxy error' })
+  } finally {
+    if (deadline != null) clearTimeout(deadline)
   }
 })
 

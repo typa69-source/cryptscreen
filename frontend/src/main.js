@@ -3310,6 +3310,9 @@ let _lastHiddenAt=0;
 let _resumeRecoveryAt=0;
 async function backfillChartGap(ch,sym,tf,limit=500){
   if(!ch?.candles?.length||!sym)return;
+  const candlesAtStart=ch.candles;
+  const loadSeq=ch._loadSeq;
+  const isFs=!!S.fsCharts?.includes(ch);
   const tfM=tfMs(tf);
   const last=ch.candles[ch.candles.length-1];
   if(!last?.t)return;
@@ -3317,6 +3320,8 @@ async function backfillChartGap(ch,sym,tf,limit=500){
   if(gapMs<tfM*2)return;
   const need=Math.min(1500,Math.max(30,Math.ceil(gapMs/tfM)+5,limit));
   const raw=await fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${need}`,9000,1);
+  if(ch.candles!==candlesAtStart||ch._loadSeq!==loadSeq)return;
+  if(isFs ? (!S.fsOpen||S.fsSym!==sym||ch.tf!==tf) : (ch.sym!==sym||S.tf!==tf))return;
   const nc=parseKlines(raw);
   if(!nc.length)return;
   const byT=new Map(ch.candles.map(c=>[c.t,c]));

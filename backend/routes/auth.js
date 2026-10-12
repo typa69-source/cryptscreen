@@ -8,7 +8,11 @@ const MAX_EMAIL_LEN = 254
 const MAX_PASSWORD_LEN = 128
 
 function validateEmailPassword(req, res) {
-  const { email, password } = req.body
+  const { email, password } = req.body || {}
+  if (typeof email !== "string" || typeof password !== "string") {
+    res.status(400).json({ error: "Email and password must be strings" })
+    return null
+  }
   if (!email || !password) {
     res.status(400).json({ error: 'Нужен email и пароль' })
     return null
