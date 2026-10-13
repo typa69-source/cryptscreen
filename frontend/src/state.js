@@ -122,6 +122,16 @@ export const THEME_CONFIGS = {
     vars:{bg:'#141416',bg2:'#1b1b1f',bg3:'#24242a',bg4:'#303038',border:'#3f3f49',border2:'#545461',text:'#f2ede2',text2:'#b9b3a4',text3:'#827d6f',accent:'#d4af37',green:'#6ee7b7',red:'#f87171',yellow:'#fbbf24'},
     candles:{up:'#6ee7b7',down:'#f87171'},
   },
+  obsidian_violet: {
+    label:'Obsidian Violet',
+    vars:{bg:'#0a0812',bg2:'#100d1c',bg3:'#18132b',bg4:'#241c3d',border:'#352857',border2:'#493775',text:'#f3eefd',text2:'#bcaad8',text3:'#8772a8',accent:'#a855f7',green:'#34d399',red:'#fb7185',yellow:'#fcd34d'},
+    candles:{up:'#a855f7',down:'#fb7185'},
+  },
+  cyber_neon: {
+    label:'Cyber Neon',
+    vars:{bg:'#050811',bg2:'#090e1a',bg3:'#101729',bg4:'#19243f',border:'#23345c',border2:'#324a82',text:'#ecfdf5',text2:'#93c5fd',text3:'#6085be',accent:'#06b6d4',green:'#10b981',red:'#f43f5e',yellow:'#fbbf24'},
+    candles:{up:'#06b6d4',down:'#f43f5e'},
+  },
   paper: {
     label:'Paper Light',
     vars:{bg:'#f4f2ee',bg2:'#ffffff',bg3:'#e9e6df',bg4:'#ddd9d0',border:'#cfcbc1',border2:'#b5b0a4',text:'#1f2430',text2:'#565f6e',text3:'#8b93a1',accent:'#0f766e',green:'#15803d',red:'#dc2626',yellow:'#ca8a04'},
