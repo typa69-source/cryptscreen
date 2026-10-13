@@ -257,8 +257,8 @@ export function snapPoint(ch, x, y, ctrl = false, ctx = makeCtx()) {
  * keep their extrapolated time — otherwise the user couldn't draw a
  * projection past the right edge.
  *
- * anchor='c' (freehand / free snap) preserves the original price;
- * otherwise OHLC anchor prices are taken from the nearest candle.
+ * Preserve the price selected when the point was placed, including Ctrl
+ * OHLC snaps. Resolving onto another candle grid must not change its level.
  */
 export function resolveDrawPoint(ch, pt) {
   if (!pt || !ch?.candles?.length) return pt;
@@ -280,13 +280,9 @@ export function resolveDrawPoint(ch, pt) {
     if (pt.time > tLast || pt.time < tFirst) time = pt.time;
   }
   const anchor = pt.anchor || 'c';
-  if (anchor === 'c') {
-    return { time, price: pt.price, tMs: best.t, anchor: 'c' };
-  }
-  const byAnchor = { o: best.o, h: best.h, l: best.l, c: best.c };
-  let price = byAnchor[anchor];
-  if (price == null || !isFinite(price)) price = pt.price;
-  return { time, price, tMs: best.t, anchor };
+  // OHLC magnetism applies at placement, not on every render. A daily high
+  // must retain its saved price when displayed against 15-minute candles.
+  return { time, price: pt.price, tMs: pt.tMs ?? tMs, anchor };
 }
 
 // ─── Hit testing ────────────────────────────────────────────────────────────

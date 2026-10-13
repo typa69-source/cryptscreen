@@ -9,6 +9,7 @@ import {
 } from './emaEditor-ui.js'
 import { cacheGetFresh, cacheSet, cacheGet, cacheHasIDB } from './idb-cache.js'
 import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
+import { sessionScope, createSessionPersistence } from './sessionPersistence.js'
 import {
   cloneDrawings as cloneDrawingsUi,
   drawingLineColor as drawingLineColorUi,
@@ -289,14 +290,22 @@ async function loadUserDrawingsMap() {
 // Save user settings to backend
 export async function saveUserSettings(settings) {
   const token = getToken()
-  if (!token) return
+  if (!token) return false
+  const persistence = _sessionPersistence
   try {
-    await fetch(`${BACKEND}/api/user/settings`, {
+    const sentJson = JSON.stringify(settings)
+    const res = await fetch(`${BACKEND}/api/user/settings`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ settings })
     })
-  } catch (e) { console.warn('save settings error', e) }
+    if (!res.ok) return false
+    if (getToken() === token) persistence?.acknowledgeSettings(sentJson)
+    return true
+  } catch (e) {
+    console.warn('save settings error', e)
+    return false
+  }
 }
 
 // Add logout button to header
@@ -310,11 +319,30 @@ function addLogoutBtn() {
   hright.appendChild(btn)
 }
 
+let _sessionPersistence = null;
+let _sessionStateReady = false;
+let _restoredSettingsDirty = false;
+
 function startApp() {
   addLogoutBtn()
+  _sessionStateReady = false;
+  const startupToken = getToken();
   Promise.all([loadUserSettings(), loadUserDrawingsMap()]).then(([settings, drawings]) => {
-    applySettings(settings)
-    window.__pendingDrawings = drawings
+    const currentToken = getToken();
+    // A rejected account token must not restore that account into guest mode.
+    if (currentToken !== startupToken) {
+      settings = null;
+      drawings = null;
+    }
+    let storage = null;
+    try { storage = window.localStorage; } catch {}
+    _sessionPersistence = createSessionPersistence(storage, sessionScope(currentToken));
+    const restored = _sessionPersistence.restore(settings, drawings);
+    _restoredSettingsDirty = restored.settingsDirty;
+    _dirtyDrawSyms.clear();
+    for (const sym of restored.dirtyDrawSyms) _dirtyDrawSyms.add(sym);
+    applySettings(restored.settings)
+    window.__pendingDrawings = restored.drawings
     main()
   })
 }
@@ -1472,17 +1500,40 @@ function collectUserSettings(){
 }
 
 let _lastPersistedSettingsJson='';
+let _settingsPersistInFlight=false;
+let _pendingSettingsJson='';
 function schedulePersistUserSettings(){
+  if(!_sessionStateReady)return;
+  const payload=collectUserSettings();
+  const json=JSON.stringify(payload);
+  _sessionPersistence?.saveSettings(payload);
   if(!getToken())return;
+  _pendingSettingsJson=json;
   clearTimeout(_persistSettingsTimer);
-  _persistSettingsTimer=setTimeout(()=>{
-    _persistSettingsTimer=null;
-    const payload=collectUserSettings();
-    const json=JSON.stringify(payload);
-    if(json===_lastPersistedSettingsJson)return;
-    _lastPersistedSettingsJson=json;
-    saveUserSettings(payload);
-  },2000);
+  _persistSettingsTimer=setTimeout(flushUserSettingsToServer,2000);
+}
+async function flushUserSettingsToServer(){
+  _persistSettingsTimer=null;
+  if(_settingsPersistInFlight||!_sessionStateReady)return;
+  const token=getToken();
+  const json=_pendingSettingsJson;
+  if(!token||!json)return;
+  if(json===_lastPersistedSettingsJson){
+    _sessionPersistence?.acknowledgeSettings(json);
+    return;
+  }
+  _settingsPersistInFlight=true;
+  let saved=false;
+  try{
+    saved=await saveUserSettings(JSON.parse(json));
+    if(saved&&getToken()===token)_lastPersistedSettingsJson=json;
+  }finally{
+    _settingsPersistInFlight=false;
+    if(getToken()===token&&_sessionStateReady&&(!saved||_pendingSettingsJson!==json)){
+      clearTimeout(_persistSettingsTimer);
+      _persistSettingsTimer=setTimeout(flushUserSettingsToServer,saved?0:5000);
+    }
+  }
 }
 
 function syncVolTrdSlidersFromState(){
@@ -1510,26 +1561,55 @@ function rebumpDrawIdAfterLoad(){
   S.drawIdCounter=m;
 }
 
+let _drawPersistInFlight=false;
 async function flushDrawingsToServer(){
   _drawPersistTimer=null;
-  if(!getToken()||!_dirtyDrawSyms.size)return;
-  const syms=[..._dirtyDrawSyms];
-  _dirtyDrawSyms.clear();
+  if(_drawPersistInFlight||!_sessionStateReady||!_dirtyDrawSyms.size)return;
   const token=getToken();
   if(!token)return;
-  for(const sym of syms){
-    try{
-      await fetch(`${BACKEND}/api/user/drawings/${encodeURIComponent(sym)}`,{
-        method:'POST',
-        headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
-        body:JSON.stringify({ drawings:cloneDrawings(getSymDrawings(sym)) }),
-      });
-    }catch(e){ console.warn('drawings persist',sym,e); }
+  const persistence=_sessionPersistence;
+  const syms=[..._dirtyDrawSyms];
+  _drawPersistInFlight=true;
+  let failed=false;
+  try{
+    for(const sym of syms){
+      if(getToken()!==token||!_sessionStateReady)break;
+      if(!_dirtyDrawSyms.has(sym))continue;
+      const drawings=cloneDrawings(getSymDrawings(sym));
+      const sentJson=JSON.stringify(drawings);
+      _dirtyDrawSyms.delete(sym);
+      try{
+        const res=await fetch(`${BACKEND}/api/user/drawings/${encodeURIComponent(sym)}`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+          body:JSON.stringify({ drawings }),
+        });
+        if(!res.ok)throw new Error(`Drawings save failed: ${res.status}`);
+        if(getToken()!==token||!_sessionStateReady)break;
+        persistence?.acknowledgeDrawings(sym,sentJson);
+        if(JSON.stringify(cloneDrawings(getSymDrawings(sym)))!==sentJson){
+          _dirtyDrawSyms.add(sym);
+        }
+      }catch(e){
+        console.warn('drawings persist',sym,e);
+        if(getToken()!==token||!_sessionStateReady)break;
+        _dirtyDrawSyms.add(sym);
+        failed=true;
+      }
+    }
+  }finally{
+    _drawPersistInFlight=false;
+    if(getToken()===token&&_sessionStateReady&&_dirtyDrawSyms.size){
+      clearTimeout(_drawPersistTimer);
+      _drawPersistTimer=setTimeout(flushDrawingsToServer,failed?5000:1500);
+    }
   }
 }
 
 function schedulePersistDrawings(sym){
-  if(!getToken()||!sym)return;
+  if(!sym||!_sessionStateReady)return;
+  _sessionPersistence?.saveDrawings(sym,cloneDrawings(getSymDrawings(sym)));
+  if(!getToken())return;
   _dirtyDrawSyms.add(sym);
   clearTimeout(_drawPersistTimer);
   _drawPersistTimer=setTimeout(flushDrawingsToServer,1500);
@@ -2082,6 +2162,10 @@ function _rCanvasGridLabImmediate(ch){
       ctx.restore();
     }
   }
+  // Grid Lab has no dedicated ruler canvas; paint it inside the plot clip.
+  if(ch.ruler?.p1){
+    drawRuler(ctx,ch);
+  }
   ctx.restore();
   if(ch.hoverX>0&&ch.hoverX<drawW&&ch.hoverY>0&&ch.hoverY<H){
     drawCustomCrosshair(ctx,ch,drawW,H);
@@ -2135,12 +2219,9 @@ function _rCanvasImmediate(ch){
       }
     }
   }
-  // FIX(ruler): the middle-click ruler was never painted on the Grid Lab
-  // chart — its draw branch lives only in the normal-chart painter. Draw it
-  // here (inside the same clip) so the rect/labels are visible.
-  if(ch.ruler?.p1){
-    drawRuler(ctx,ch);
-  }
+  // Normal charts render the ruler only on its dedicated canvas.
+  // Refresh that layer after viewport changes, including zoom and pan.
+  scheduleRulerRedraw(ch);
   // EMA overlay (drawn on top of candles, below crosshair)
   drawEMAs(ctx,ch,drawW,drawH);
   ctx.restore(); // end clip
@@ -2941,14 +3022,26 @@ function onRulerMove(ch,e,container){
     });
   }
   scheduleRulerRedraw(ch);
-  // Tooltip (NATR/vol/trades) is heavier • throttle independently
-  const now=performance.now();
-  // Mini charts share a much tighter frame budget. Keep the ruler geometry at
-  // display refresh rate, but update the heavier statistics less often there.
-  const tipInterval=S.charts.includes(ch)?90:50;
-  if(!ch._lastRulerTipTs||now-ch._lastRulerTipTs>tipInterval){
-    ch._lastRulerTipTs=now;
-    updateRulerTooltip(ch);
+  // Move the tooltip every frame; throttle only its heavier statistics.
+  if(!ch._rulerTipRaf){
+    ch._rulerTipRaf=requestAnimationFrame(()=>{
+      ch._rulerTipRaf=0;
+      const r=ch.ruler;
+      if(!r?.active||r._mirror)return;
+      const d=_rtDom();
+      if(!d.tt)return;
+      const tw=175,th=120;
+      const x=Math.min(r.mouseX+18,window.innerWidth-tw-8);
+      const y=Math.max(r.mouseY-th-8,4);
+      d.tt.style.transform=`translate3d(${x}px, ${y}px, 0)`;
+      d.tt.style.display='block';
+      const now=performance.now();
+      const tipInterval=S.charts.includes(ch)?90:50;
+      if(!ch._lastRulerTipTs||now-ch._lastRulerTipTs>tipInterval){
+        ch._lastRulerTipTs=now;
+        updateRulerTooltip(ch);
+      }
+    });
   }
 }
 
@@ -3267,6 +3360,15 @@ document.addEventListener('keydown',e=>{
     return;
   }
   if(mod&&!e.altKey&&(isZ||isY)&&!editable)return;
+  if(!qfOpen&&!editable&&!mod&&!e.altKey&&!e.isComposing&&e.shiftKey&&(code==='keys'||key==='s'||key==='ы')){
+    const blocks=document.getElementById('settingsModal')?.classList.contains('open')||!!document.getElementById('emaEditorModal')||!!document.getElementById('alertPctOverlay')||!!document.getElementById('gridLabModal');
+    const rulerOn=[...S.charts,...S.fsCharts].some(c=>c.ruler?.active);
+    if(!blocks&&!rulerOn){
+      e.preventDefault();
+      if(!e.repeat)setDrawMode('hray');
+      return;
+    }
+  }
   if(!qfOpen&&!editable&&!S.drawMode&&!mod&&!e.altKey&&e.key.length===1){
     // Open quickfind if either the raw key or its RU→EN mapping is a
     // Latin alphanum. This way typing on a Russian keyboard (where the
@@ -3315,9 +3417,25 @@ async function backfillChartGap(ch,sym,tf,limit=500){
   const isFs=!!S.fsCharts?.includes(ch);
   const tfM=tfMs(tf);
   const last=ch.candles[ch.candles.length-1];
-  if(!last?.t)return;
-  const gapMs=Date.now()-last.t;
-  if(gapMs<tfM*2)return;
+  if(!last||!Number.isFinite(last.t)||tfM<=0)return;
+  const now=Date.now();
+  let repairFrom=null;
+  // A fresh realtime candle can conceal an older hole in the history.
+  // Synthetic carry-forward candles also need authoritative OHLCV data.
+  for(let i=0;i<ch.candles.length;i++){
+    const candle=ch.candles[i];
+    if(!Number.isFinite(candle?.t))continue;
+    if(candle._synthetic){
+      repairFrom=repairFrom==null?candle.t:Math.min(repairFrom,candle.t);
+    }
+    const previous=ch.candles[i-1];
+    if(previous&&Number.isFinite(previous.t)&&candle.t-previous.t>tfM){
+      repairFrom=repairFrom==null?previous.t:Math.min(repairFrom,previous.t);
+    }
+  }
+  const tailAgeMs=now-last.t;
+  if(repairFrom==null&&tailAgeMs<tfM*2)return;
+  const gapMs=Math.max(tailAgeMs,repairFrom==null?0:now-repairFrom);
   const need=Math.min(1500,Math.max(30,Math.ceil(gapMs/tfM)+5,limit));
   const raw=await fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${need}`,9000,1);
   if(ch.candles!==candlesAtStart||ch._loadSeq!==loadSeq)return;
@@ -3328,6 +3446,38 @@ async function backfillChartGap(ch,sym,tf,limit=500){
   for(const c of nc)byT.set(c.t,c);
   ch.candles=[...byT.values()].sort((a,b)=>a.t-b.t).slice(-HIST_CACHE_MAX);
 }
+function requestChartGapRepair(ch,sym,tf){
+  if(!ch?.cs||!ch?.candles?.length||!sym)return;
+  const isFs=!!S.fsCharts?.includes(ch);
+  const series=ch.cs,loadSeq=ch._loadSeq;
+  const current=()=>ch.cs===series&&ch._loadSeq===loadSeq&&
+    (isFs?S.fsOpen&&S.fsSym===sym&&ch.tf===tf:ch.sym===sym&&S.tf===tf);
+  if(!current())return;
+  const previous=ch._gapRepairJob;
+  if(previous&&previous.series===series&&previous.loadSeq===loadSeq&&previous.sym===sym&&previous.tf===tf)return;
+  const now=Date.now();
+  const key=`${sym}:${tf}`;
+  if(ch._gapRepairKey===key&&ch._gapRepairAt!=null&&now-ch._gapRepairAt<10000)return;
+  ch._gapRepairKey=key;
+  ch._gapRepairAt=now;
+  const job={series,loadSeq,sym,tf};
+  ch._gapRepairJob=job;
+  // Defer until the realtime handler has finished updating the candle array.
+  job.promise=Promise.resolve().then(async()=>{
+    if(!current())return;
+    const before=ch.candles;
+    await backfillChartGap(ch,sym,tf,30);
+    if(current()&&ch.candles!==before&&ch.vs&&ch.lc){
+      repaintChartSeries(ch,`${tf}:${sym}`);
+    }
+  }).catch(error=>{
+    console.warn('chart gap repair',sym,tf,error);
+  }).finally(()=>{
+    if(ch._gapRepairJob===job)ch._gapRepairJob=null;
+  });
+  return job.promise;
+}
+
 async function backfillVisibleCharts(limit=900){
   for(const ch of S.charts){
     if(!ch.sym||!ch.cs||!ch.candles.length)continue;
@@ -3471,6 +3621,9 @@ function startChartWS(){
     const ch=S.charts[slot];if(!ch.cs||!ch._histBootstrapDone)return;
     const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q,v:+k.v,tr:+k.n};
     const lastC=ch.candles[ch.candles.length-1];
+    if(lastC&&(candle.t-lastC.t>tfMs(S.tf)||lastC._synthetic)){
+      requestChartGapRepair(ch,symU,S.tf);
+    }
     if(lastC&&lastC.t===candle.t){
       // Update existing candle only if close differs meaningfully (avoid jitter from identical re-broadcasts)
       if(lastC.c!==candle.c||lastC.h!==candle.h||lastC.l!==candle.l||lastC.o!==candle.o||lastC.qv!==candle.qv){
@@ -3528,15 +3681,26 @@ function applyLivePriceToCandle(ch,tfStr,price,tsMs){
   if(!ch?.candles?.length)return false;
   if(price==null||!isFinite(price))return false;
   const last=ch.candles[ch.candles.length-1];
-  const ref=last?.c||last?.o;
+  if(!last)return false;
+  const ms=tfMs(tfStr);
+  const ts=tsMs||Date.now();
+  const bucketTs=Math.floor(ts/ms)*ms;
+  // A book quote cannot reconstruct OHLC across missed bars. Repair history
+  // before using the stale close as the opening price of a new candle.
+  if(bucketTs-last.t>ms){
+    const isMain=!!S.charts?.includes(ch);
+    const isFs=!!S.fsCharts?.includes(ch);
+    if(isMain||isFs){
+      requestChartGapRepair(ch,isMain?ch.sym:S.fsSym,tfStr);
+      return false;
+    }
+  }
+  const ref=last.c||last.o;
   if(ref&&isFinite(ref)&&ref>0){
     const rel=Math.abs(price-ref)/ref;
     // Ignore websocket spikes / stale ticks that create giant phantom candles.
     if(rel>0.25)return false;
   }
-  const ms=tfMs(tfStr);
-  const ts=tsMs||Date.now();
-  const bucketTs=Math.floor(ts/ms)*ms;
   let c=ch.candles[ch.candles.length-1];
   if(!c)return false;
   if(bucketTs===c.t){
@@ -3700,45 +3864,58 @@ function startRealtimeWatchdog(){
       if(!ch?.sym||!ch?.cs||!ch.candles?.length)return;
       const staleFor=now-(ch._lastRtUpdateTs||0);
       if(staleFor<5000)return;
-      const need=Math.max(3,Math.min(800,Math.ceil(staleFor/tfMs(S.tf))+2));
-      fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=${need}`,6000,0).then(raw=>{
-        if(!ch?.cs||!ch.candles?.length)return;
+      if(ch._fallbackFetching)return;
+      const sym=ch.sym,tf=S.tf,loadSeq=ch._loadSeq;
+      const candlesAtStart=ch.candles,seriesAtStart=ch.cs;
+      const rtAtStart=ch._lastRtUpdateTs;
+      const tailAge=Math.max(0,now-ch.candles[ch.candles.length-1].t);
+      const need=Math.max(3,Math.min(800,Math.ceil(Math.max(staleFor,tailAge)/tfMs(tf))+2));
+      ch._fallbackFetching=true;
+      fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${need}`,6000,0).then(raw=>{
+        if(ch.sym!==sym||S.tf!==tf||ch._loadSeq!==loadSeq||ch.cs!==seriesAtStart||ch.candles!==candlesAtStart)return;
+        if(!ch.cs||!ch.vs||!ch.lc||!ch.candles?.length)return;
         const nc=parseKlines(raw);
+        if(!nc.length)return;
         const byT=new Map(ch.candles.map(c=>[c.t,c]));
-        for(const c of nc)byT.set(c.t,c);
+        for(const c of nc){
+          const current=byT.get(c.t);
+          // Keep a newer realtime update to the forming candle.
+          if(current&&!current._synthetic&&ch._lastRtUpdateTs!==rtAtStart&&c.t===ch.candles[ch.candles.length-1].t)continue;
+          byT.set(c.t,c);
+        }
         ch.candles=[...byT.values()].sort((a,b)=>a.t-b.t).slice(-HIST_CACHE_MAX);
-        const lc=ch.candles[ch.candles.length-1];
-        if(!lc)return;
-        ch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
-        ch.vs.update({time:toChartTime(lc.t),value:lc.qv,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
-        syncLivePriceLabel(ch,lc.c,lc.o);
+        repaintChartSeries(ch,`${tf}:${sym}`);
         ch._lastRtUpdateTs=Date.now();
-        const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
-        if(ch.candles.length>=wantMinCache)S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice(-HIST_CACHE_MAX);
-      }).catch(()=>{});
+      }).catch(()=>{}).finally(()=>{ch._fallbackFetching=false;});
     });
     if(S.fsOpen&&S.fsSym){
       S.fsCharts.forEach(fch=>{
         if(!fch?.cs||!fch.candles?.length)return;
         const staleFor=now-(fch._lastRtUpdateTs||0);
         if(staleFor<5000)return;
-        const need=Math.max(3,Math.min(800,Math.ceil(staleFor/tfMs(fch.tf))+2));
-        fj(`${API}/klines?symbol=${S.fsSym}&interval=${fch.tf}&limit=${need}`,6000,0).then(raw=>{
-          if(!fch?.cs||!fch.candles?.length)return;
+        if(fch._fallbackFetching)return;
+        const sym=S.fsSym,tf=fch.tf,loadSeq=fch._loadSeq;
+        const candlesAtStart=fch.candles,seriesAtStart=fch.cs;
+        const rtAtStart=fch._lastRtUpdateTs;
+        const tailAge=Math.max(0,now-fch.candles[fch.candles.length-1].t);
+        const need=Math.max(3,Math.min(800,Math.ceil(Math.max(staleFor,tailAge)/tfMs(tf))+2));
+        fch._fallbackFetching=true;
+        fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${need}`,6000,0).then(raw=>{
+          if(!S.fsOpen||S.fsSym!==sym||fch.tf!==tf||fch._loadSeq!==loadSeq||fch.cs!==seriesAtStart||fch.candles!==candlesAtStart)return;
+          if(!fch.cs||!fch.vs||!fch.lc||!fch.candles?.length)return;
           const nc=parseKlines(raw);
+          if(!nc.length)return;
           const byT=new Map(fch.candles.map(c=>[c.t,c]));
-          for(const c of nc)byT.set(c.t,c);
+          for(const c of nc){
+            const current=byT.get(c.t);
+            // Keep a newer realtime update to the forming candle.
+            if(current&&!current._synthetic&&fch._lastRtUpdateTs!==rtAtStart&&c.t===fch.candles[fch.candles.length-1].t)continue;
+            byT.set(c.t,c);
+          }
           fch.candles=[...byT.values()].sort((a,b)=>a.t-b.t).slice(-HIST_CACHE_MAX);
-          const lc=fch.candles[fch.candles.length-1];
-          if(!lc)return;
-          fch.cs.update({time:toChartTime(lc.t),open:lc.o,high:lc.h,low:lc.l,close:lc.c});
-          fch.vs.update({time:toChartTime(lc.t),value:lc.qv,color:lc.c>=lc.o?'#1fa89122':'#e0404022'});
-          repaintBbSeries(fch);
-          syncLivePriceLabel(fch,lc.c,lc.o);
+          repaintChartSeries(fch,`${tf}:${sym}`);
           fch._lastRtUpdateTs=Date.now();
-          const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
-          if(fch.candles.length>=wantMinCache)S.histCache[`${fch.tf}:${S.fsSym}`]=fch.candles.slice(-HIST_CACHE_MAX);
-        }).catch(()=>{});
+        }).catch(()=>{}).finally(()=>{fch._fallbackFetching=false;});
       });
     }
   },2500);
@@ -4149,7 +4326,7 @@ function buildScreenerHeader(hdrEl){
   hdrEl.innerHTML='';
   const tickCol=document.createElement('div');
   tickCol.className='tick-col';tickCol.title='Сортировать по тикеру';
-  tickCol.innerHTML='<span class="tick-lbl">ТИКЕР '+(S.sortAlpha?(S.sortDir==='asc'?'–І':'–ј'):'')+' </span>';
+  tickCol.innerHTML='<span class="tick-lbl">ТИКЕР</span>';
   tickCol.onclick=()=>doSort('sym');
   hdrEl.appendChild(tickCol);
   const ms=document.createElement('div');ms.className='mscroll';
@@ -6031,6 +6208,10 @@ function startFsWs(){
     S.fsCharts.forEach(fch=>{
       if(fch.tf!==tf||!fch.cs||!fch._histBootstrapDone)return;
       const candle={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c,qv:+k.q,v:+k.v,tr:+k.n};
+      const lastC=fch.candles[fch.candles.length-1];
+      if(lastC&&(candle.t-lastC.t>tfMs(tf)||lastC._synthetic)){
+        requestChartGapRepair(fch,S.fsSym,tf);
+      }
       try{
         fch.cs.update({time:toChartTime(candle.t),open:candle.o,high:candle.h,low:candle.l,close:candle.c});
         fch.vs.update({time:toChartTime(candle.t),value:candle.qv,color:candle.c>=candle.o?'#1fa89122':'#e0404022'});
@@ -6277,8 +6458,6 @@ function hydrateUserSession(){
     localStorage.setItem('cs_oi_chart',S.showOiOnChart?'1':'0');
     localStorage.setItem('cs_bb_overlay',S.showBbOverlay?'1':'0');
   }catch(e){}
-  _lastPersistedSettingsJson=JSON.stringify(collectUserSettings());
-  schedulePersistUserSettings();
   return validArr;
 }
 
@@ -6446,11 +6625,19 @@ async function main() {
       syncBbBtnUi();
     }, { timeout: 1000 });
 
+    const hadSavedSettings = !!window.__pendingUserSettings;
     const restoredLayout = hydrateUserSession();
-    if (!restoredLayout && !getToken()) {
+    if (!hadSavedSettings && !getToken()) {
       applyGuestColumnDefaults();
     }
     if (!restoredLayout) updateCharts();
+    _lastPersistedSettingsJson = _restoredSettingsDirty ? '' : JSON.stringify(collectUserSettings());
+    _sessionStateReady = true;
+    schedulePersistUserSettings();
+    if (getToken() && _dirtyDrawSyms.size) {
+      clearTimeout(_drawPersistTimer);
+      _drawPersistTimer = setTimeout(flushDrawingsToServer,1500);
+    }
     renderTable();
     restartChartStreams(0); startScreenerWS();
     S.bgDone = true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории

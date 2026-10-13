@@ -252,15 +252,42 @@ test('resolveDrawPoint: extrapolates when left of first candle', () => {
   assert.equal(r.time, pastT);
 });
 
-test('resolveDrawPoint: snaps to nearest candle when inside range (OHLC)', () => {
+test('resolveDrawPoint: snaps time to the candle grid but preserves saved OHLC price', () => {
   const candles = makeCandles(4);
   const ch = makeMockChart(candles);
   const midT = Math.floor(candles[1].t / 1000) + TZ;
-  const r = resolveDrawPoint(ch, { time: midT, price: 1000, anchor: 'h' });
-  // time should snap to candle 1 (or near)
-  const tCandle1 = Math.floor(candles[1].t / 1000) + TZ;
-  assert.equal(r.time, tCandle1);
-  assert.equal(r.price, candles[1].h);
+  const pt = { time: midT, price: 1000, tMs: candles[1].t, anchor: 'h' };
+  const r = resolveDrawPoint(ch, pt);
+  assert.equal(r.time, midT);
+  assert.equal(r.price, pt.price);
+  assert.equal(r.tMs, pt.tMs);
+  assert.equal(r.anchor, 'h');
+});
+
+test('resolveDrawPoint: daily Ctrl-snapped ray retains its price on a 15-minute chart', () => {
+  const startMs = 1_700_000_000_000;
+  const dailyCandles = makeCandles(4, startMs, 86_400_000);
+  const daily = makeMockChart(dailyCandles, { tf: '1d' });
+  const candle = dailyCandles[1];
+  const time = Math.floor(candle.t / 1000) + TZ;
+  const x = daily.lc.timeScale().timeToCoordinate(time);
+  const y = daily.cs.priceToCoordinate(candle.h);
+  const pt = snapPoint(daily, x, y, true);
+  assert.ok(pt);
+  assert.equal(pt.anchor, 'h');
+  assert.equal(pt.price, candle.h);
+
+  const intradayCandles = makeCandles(288, startMs, 900_000);
+  const intraday = makeMockChart(intradayCandles, { tf: '15m' });
+  assert.notEqual(intradayCandles[96].h, pt.price);
+  const original = { ...pt };
+  const resolved = resolveDrawPoint(intraday, pt);
+  assert.equal(resolved.price, candle.h);
+  assert.equal(resolved.time, time);
+  assert.equal(resolved.tMs, candle.t);
+  assert.equal(resolved.anchor, 'h');
+  assert.deepEqual(pt, original, 'rendering must not mutate the saved point');
+  assert.equal(resolveDrawPoint(daily, resolved).price, candle.h);
 });
 
 test('resolveDrawPoint: returns pt unchanged when no candles', () => {
