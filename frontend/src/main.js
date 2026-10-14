@@ -68,7 +68,8 @@ import {
 } from './gridLab-ui.js'
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, chartThemeColors, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
-import { fj, parseKlines, mergeKlineChunks, batchKlines } from './api.js'
+import { fj, parseKlines, mergeKlineChunks, batchKlines, fjBybit, fetchBybitTickers, fetchBybitKlines, batchBybitKlines } from './api.js'
+import { EXCHANGES, EXCHANGE_LABEL, EXCHANGE_BADGE, buildUniverse, resolveSymbolExchange, isBybitSymbol, tfToBybitInterval } from './exchanges.js'
 import { visibleRange, ROW_HEIGHT, sortRows } from './screener-virtual.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
 import {
@@ -373,6 +374,23 @@ if (getToken()) {
 function loadThemePref(){
   try{const t=localStorage.getItem('cs_theme');if(THEME_IDS.includes(t))S.theme=t}catch(e){}
   applyTheme(S.theme);
+}
+function loadExchangePrefs(){
+  try{
+    const p=localStorage.getItem('cs_exPriority');
+    if(EXCHANGES.includes(p))S.exPriority=p;
+    const raw=localStorage.getItem('cs_symExOverrides');
+    if(raw){
+      const ov=JSON.parse(raw);
+      if(ov&&typeof ov==='object'){
+        const clean={};
+        for(const [sym,ex] of Object.entries(ov)){
+          if(typeof sym==='string'&&EXCHANGES.includes(ex))clean[sym]=ex;
+        }
+        S.symExOverrides=clean;
+      }
+    }
+  }catch(e){}
 }
 function loadChartViewPrefs(){
   try{
@@ -965,6 +983,7 @@ function buildChartGrid(){
       <div class="ccell" id="cc${i}">
         <div class="chead">
           <span class="chart-cg-dot cg-dot" id="cgd${i}" title="Цветовая группа" onclick="showChartGroupPicker(S.charts[${i}].sym,this)"></span>
+          <span class="ex-badge" id="exb${i}" title="Биржа источника — клик для смены" onclick="toggleSymExchange(S.charts[${i}].sym,this)"></span>
           <img class="coin-icon" id="ci${i}" src="" alt="" style="display:none;width:14px;height:14px;border-radius:50%;flex-shrink:0">
           <span class="csym" id="cs${i}" title="Нажмите для копирования" onclick="copyTicker(this.textContent)" style="cursor:pointer">•</span>
           <span class="cprc" id="cp${i}"></span>
@@ -1496,6 +1515,8 @@ function collectUserSettings(){
     autoTrend:{...S.autoTrend},
     fastMode:true,
     theme:S.theme,
+    exPriority:S.exPriority,
+    symExOverrides:{...S.symExOverrides},
   };
 }
 
@@ -1686,6 +1707,21 @@ function setSlotLoading(slot,on,text='Загрузка данных...'){
   }
   m.title=text;
 }
+/** Route a klines fetch to the symbol's resolved venue.
+ *  Returns {candles, ex} or null on failure. Bybit has no trade count:
+ *  tr=0 keeps column math valid (NaN-safe). */
+async function fetchKlinesFor(sym,iv,limit){
+  const ex=symExchange(sym);
+  if(ex==='bybit'&&S.exData.bybit){
+    try{
+      const candles=await fetchBybitKlines(sym,iv,limit);
+      if(Array.isArray(candles)&&candles.length)return{candles,ex};
+    }catch(e){/* fall through to binance when symbol also listed there */}
+  }
+  const raw=await fj(`${API}/klines?symbol=${sym}&interval=${iv}&limit=${limit}`);
+  return{candles:parseKlines(raw),ex:'binance'};
+}
+
 async function loadChart(slot,sym){
   const ch=S.charts[slot];
   if(!sym){
@@ -1705,6 +1741,7 @@ async function loadChart(slot,sym){
   ch.drawings=getSymDrawings(sym); // shared reference
   setText(`cs${slot}`,sym.replace(/USDT$/,''));
   setCoinIcon(`ci${slot}`,sym);
+  paintExBadge(document.getElementById(`exb${slot}`),sym);
   const cb=document.getElementById(`cb${slot}`);
   if(cb)cb.innerHTML='<div class="cloading"><span class="cloading-dot"></span><span class="cloading-dot"></span><span class="cloading-dot"></span></div>';
   initLCChart(slot);
@@ -1747,13 +1784,13 @@ async function loadChart(slot,sym){
     // HIST_LIMIT bars to the left) is no longer fetched eagerly — the user
     // sees ~100 bars and loadMoreHistory() backfills older history on
     // scroll-left. Halves time-to-first-candle and cuts Binance requests.
-    const raw1=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${HIST_INITIAL}`);
+    const r1=await fetchKlinesFor(sym,S.tf,HIST_INITIAL);
     if(ch.sym!==sym||ch._loadSeq!==loadSeq)return;
-    let candles=parseKlines(raw1);
+    let candles=r1.candles;
     if(candles.length<MIN_CHART_CANDLES){
-      const raw=await fj(`${API}/klines?symbol=${sym}&interval=${S.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      const r2=await fetchKlinesFor(sym,S.tf,Math.max(HIST_INITIAL,800));
       if(ch.sym!==sym||ch._loadSeq!==loadSeq)return;
-      candles=parseKlines(raw);
+      candles=r2.candles;
     }
     ch.candles=candles.slice(-HIST_CACHE_MAX);
     if(ch.candles.length>=MIN_CHART_CANDLES){
@@ -1782,9 +1819,9 @@ function paintSlotData(slot){
       delete S.histCache[ck];
       (async()=>{
         try{
-          const raw=await fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+          const r=await fetchKlinesFor(sym,tf,Math.max(HIST_INITIAL,800));
           if(ch.sym!==sym||!ch.cs)return;
-          ch.candles=parseKlines(raw).slice(-HIST_CACHE_MAX);
+          ch.candles=r.candles.slice(-HIST_CACHE_MAX);
           if(ch.candles.length>=MIN_CHART_CANDLES)S.histCache[ck]=ch.candles.slice();
           paintSlotData(slot);
         }catch(e){}
@@ -1867,9 +1904,19 @@ async function loadMoreHistory(slot){
   if(!ch.sym||ch.histLoading||!ch.candles.length||!ch.lc)return;
   ch.histLoading=true;
   try{
-    const raw=await fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${ch.candles[0].t-1}`);
-    if(!raw||!raw.length){ch.histLoading=false;return;}
-    const nc=parseKlines(raw);if(!ch.cs||!ch.lc)return;
+    const ex=symExchange(ch.sym);
+    let nc;
+    if(ex==='bybit'&&S.exData.bybit){
+      // Bybit pagination is cursor-less from the client side: fetch the
+      // window and merge, dropping newer overlap.
+      const candles=await fetchBybitKlines(ch.sym,S.tf,Math.min(1000,HIST_LIMIT*2));
+      nc=(candles||[]).filter(k=>k.t<ch.candles[0].t);
+    }else{
+      const raw=await fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${ch.candles[0].t-1}`);
+      nc=parseKlines(raw);
+    }
+    if(!nc||!nc.length){ch.histLoading=false;return;}
+    if(!ch.cs||!ch.lc)return;
     const tsApi=ch.lc.timeScale();
     let logRange=null,vTime=null;
     try{
@@ -3447,10 +3494,16 @@ async function backfillChartGap(ch,sym,tf,limit=500){
   if(repairFrom==null&&tailAgeMs<tfM*2)return;
   const gapMs=Math.max(tailAgeMs,repairFrom==null?0:now-repairFrom);
   const need=Math.min(1500,Math.max(30,Math.ceil(gapMs/tfM)+5,limit));
-  const raw=await fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${need}`,9000,1);
+  let raw;
+  const ex=symExchange(sym);
+  if(ex==='bybit'&&S.exData.bybit){
+    raw=await fetchBybitKlines(sym,tf,need);
+  }else{
+    raw=parseKlines(await fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${need}`,9000,1));
+  }
   if(ch.candles!==candlesAtStart||ch._loadSeq!==loadSeq)return;
   if(isFs ? (!S.fsOpen||S.fsSym!==sym||ch.tf!==tf) : (ch.sym!==sym||S.tf!==tf))return;
-  const nc=parseKlines(raw);
+  const nc=raw;
   if(!nc.length)return;
   const byT=new Map(ch.candles.map(c=>[c.t,c]));
   for(const c of nc)byT.set(c.t,c);
@@ -3511,6 +3564,7 @@ async function backfillVisibleCharts(limit=900){
 function closeAllRealtimeSockets(){
   if(S.wsCharts){try{S.wsCharts.close();}catch(e){}}
   if(S.wsScreener){try{S.wsScreener.close();}catch(e){}}
+  if(S.wsBybitCharts){try{S.wsBybitCharts.close();}catch(e){}}
   closeChartTradesSockets();
   if(S.fsWs){try{S.fsWs.close();}catch(e){}S.fsWs=null;}
 }
@@ -3609,7 +3663,137 @@ function restartChartStreams(delayMs=350){
     _chartWsRestartTimer=null;
     startChartWS();
     startChartTradesWS();
+    startBybitChartWS();
   },Math.max(0,delayMs|0));
+}
+
+// ───────────────────────────────────────────────────────────────
+//  BYBIT chart WS — kline stream for slots resolved to Bybit.
+//  One connection, subscribe in args, ping every 20s.
+//  Bybit kline WS pushes: {topic:'kline.5.BTCUSDT', data:[{start,open,high,low,close,volume,turnover,confirm,timestamp}]}
+// ───────────────────────────────────────────────────────────────
+let _bybitChartWsGen=0;
+let _bybitChartWsReconnectTimer=null;
+let _bybitChartPingTimer=null;
+
+function startBybitChartWS(){
+  if(_bybitChartWsReconnectTimer){clearTimeout(_bybitChartWsReconnectTimer);_bybitChartWsReconnectTimer=null;}
+  if(_bybitChartPingTimer){clearInterval(_bybitChartPingTimer);_bybitChartPingTimer=null;}
+  if(S.wsBybitCharts){try{S.wsBybitCharts.close();}catch(e){}S.wsBybitCharts=null;}
+  if(!S.exData.bybit)return;
+  // Symbols shown in chart slots AND resolved to bybit.
+  const bybitSyms=[...new Set(S.charts.map(c=>c.sym).filter(s=>s&&symExchange(s)==='bybit'))];
+  const fsBy=S.fsOpen&&S.fsSym&&symExchange(S.fsSym)==='bybit'?[S.fsSym]:[];
+  const syms=[...new Set([...bybitSyms,...fsBy])];
+  if(!syms.length||!S.LC)return;
+  const gen=++_bybitChartWsGen;
+  const ws=new WebSocket('wss://stream.bybit.com/v5/public/linear');
+  ws.onopen=()=>{
+    if(gen!==_bybitChartWsGen)return;
+    // Subscribe per-TF kline topics for the bybit slots.
+    const tfs=new Set([S.tf]);
+    if(S.fsOpen)S.fsCharts.forEach(c=>{if(c.tf)tfs.add(c.tf);});
+    const args=[];
+    for(const sym of syms)for(const tf of tfs)args.push(`kline.${tfToBybitInterval(tf)}.${sym}`);
+    if(S.fsOpen&&fsBy.length)for(const tf of tfs)args.push(`tickers.${S.fsSym}`);
+    try{ws.send(JSON.stringify({op:'subscribe',args}));}catch(e){}
+    // Bybit requires a heartbeat every ~20s.
+    _bybitChartPingTimer=setInterval(()=>{
+      if(gen!==_bybitChartWsGen||ws.readyState!==1)return;
+      try{ws.send(JSON.stringify({op:'ping'}));}catch(e){}
+    },18000);
+  };
+  ws.onmessage=(evt)=>{
+    if(gen!==_bybitChartWsGen)return;
+    let msg;
+    try{msg=JSON.parse(evt.data);}catch(e){return;}
+    if(msg.topic&&String(msg.topic).startsWith('kline.')){
+      const parts=String(msg.topic).split('.');
+      const ivCode=parts[1];
+      const sym=parts.slice(2).join('.');
+      _applyBybitKlineMsg(sym,ivCode,msg.data,gen);
+    }else if(msg.topic&&String(msg.topic).startsWith('tickers.')){
+      const sym=String(msg.topic).split('.').pop();
+      const d=msg.data;
+      if(d?.lastPrice!=null){
+        const c=+d.lastPrice;
+        if(isFinite(c)){
+          if(S.fsOpen&&S.fsSym===sym&&S.tk[sym]){
+            S.tk[sym].p=c;
+            if(d.price24hPcnt!=null)S.tk[sym].c24=+d.price24hPcnt*100;
+            if(d.turnover24h!=null)S.tk[sym].qv=+d.turnover24h;
+            updateFsHeaderValues();
+          }
+        }
+      }
+    }
+  };
+  const schedReconnect=()=>{
+    if(gen!==_bybitChartWsGen)return;
+    if(_bybitChartWsReconnectTimer)return;
+    _bybitChartWsReconnectTimer=setTimeout(startBybitChartWS,4000);
+  };
+  ws.onclose=()=>schedReconnect();
+  ws.onerror=()=>{try{ws.close();}catch(e){}schedReconnect();};
+  S.wsBybitCharts=ws;
+}
+
+/** Apply a Bybit WS kline update to any chart showing that symbol+TF. */
+function _applyBybitKlineMsg(sym,ivCode,data,gen){
+  if(gen!==_bybitChartWsGen||!Array.isArray(data)||!data.length)return;
+  // Map bybit interval code back to the app TF that subscribed it.
+  const ivMap={'1':'1m','3':'3m','5':'5m','15':'15m','30':'30m','60':'1h','240':'4h','D':'1d'};
+  const tf=ivMap[ivCode];
+  if(!tf)return;
+  for(const k of data){
+    if(k.confirm===false){
+      // Forming candle — update the current bar only.
+      _applyBybitCandleToCharts(sym,tf,{
+        t:+k.start,o:+k.open,h:+k.high,l:+k.low,c:+k.close,
+        v:+k.volume,qv:+k.turnover,tr:0,
+      },false);
+    }else{
+      // Confirmed (closed) candle — append/replace.
+      _applyBybitCandleToCharts(sym,tf,{
+        t:+k.start,o:+k.open,h:+k.high,l:+k.low,c:+k.close,
+        v:+k.volume,qv:+k.turnover,tr:0,
+      },true);
+    }
+  }
+}
+
+function _applyBybitCandleToCharts(sym,tf,candle,confirmed){
+  const targets=[];
+  S.charts.forEach(ch=>{if(ch.sym===sym&&ch.tf===undefined&&tf===S.tf)targets.push(ch);});
+  if(S.fsOpen&&S.fsSym===sym)S.fsCharts.forEach(ch=>{if(ch.tf===tf)targets.push(ch);});
+  for(const ch of targets){
+    if(!ch?.cs||!ch._histBootstrapDone||!ch.candles?.length)continue;
+    const lastC=ch.candles[ch.candles.length-1];
+    if(lastC&&lastC.t===candle.t){
+      if(lastC.c!==candle.c||lastC.h!==candle.h||lastC.l!==candle.l)ch.candles[ch.candles.length-1]=candle;
+    }else if(!lastC||candle.t>lastC.t){
+      appendCandleWithGaps(ch.candles,candle,tfMs(tf));
+      if(ch.candles.length>HIST_CACHE_MAX)ch.candles.splice(0,ch.candles.length-HIST_CACHE_MAX);
+    }
+    ch._lastRtUpdateTs=Date.now();
+    S.histCache[`${tf}:${sym}`]=ch.candles.slice(-HIST_CACHE_MAX);
+    if(!ch._rafPending){
+      ch._rafPending=true;
+      requestAnimationFrame(()=>{
+        ch._rafPending=false;
+        const c=ch.candles[ch.candles.length-1];
+        if(!c||!ch.cs)return;
+        try{
+          ch.cs.update({time:toChartTime(c.t),open:c.o,high:c.h,low:c.l,close:c.c});
+          ch.vs.update({time:toChartTime(c.t),value:c.qv||0,color:c.c>=c.o?'#1fa89122':'#e0404022'});
+          repaintBbSeries(ch);
+          syncLivePriceLabel(ch,c.c,c.o);
+        }catch(e){}
+        rCanvas(ch);
+        if(S.tk[sym])S.tk[sym].p=c.c;
+      });
+    }
+  }
 }
 
 function startChartWS(){
@@ -3617,7 +3801,9 @@ function startChartWS(){
   if(_wsChartsReconnectTimer){clearTimeout(_wsChartsReconnectTimer);_wsChartsReconnectTimer=null;}
   // Close old WS
   if(S.wsCharts){try{S.wsCharts.close();}catch(e){}S.wsCharts=null;}
-  const syms=S.charts.map(c=>c.sym).filter(Boolean);if(!syms.length||!S.LC)return;
+  // Only slots resolved to binance — bybit slots stream separately.
+  const syms=S.charts.map(c=>c.sym).filter(Boolean).filter(s=>symExchange(s)!=='bybit');
+  if(!syms.length||!S.LC)return;
   const gen=++_wsChartsGen; // this generation's ID
   const ws=new WebSocket(`wss://fstream.binance.com/stream?streams=${syms.map(s=>`${s.toLowerCase()}@kline_${S.tf}`).join('/')}`);
   ws.onmessage=(evt)=>{
@@ -3780,7 +3966,8 @@ function kickGridLabPricePoll(symU){
 function startChartTradesWS(){
   if(_wsChartTradesReconnectTimer){clearTimeout(_wsChartTradesReconnectTimer);_wsChartTradesReconnectTimer=null;}
   closeChartTradesSockets();
-  const syms=S.charts.map(c=>c.sym).filter(Boolean);
+  // Only slots resolved to binance — bybit price pulses come via its kline/ticker stream.
+  const syms=S.charts.map(c=>c.sym).filter(Boolean).filter(s=>symExchange(s)!=='bybit');
   if(!syms.length||!S.LC)return;
   const gen=++_wsChartTradesGen;
   const onBookTicker=(d)=>{
@@ -3881,10 +4068,10 @@ function startRealtimeWatchdog(){
       const tailAge=Math.max(0,now-ch.candles[ch.candles.length-1].t);
       const need=Math.max(3,Math.min(800,Math.ceil(Math.max(staleFor,tailAge)/tfMs(tf))+2));
       ch._fallbackFetching=true;
-      fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${need}`,6000,0).then(raw=>{
+      fetchKlinesFor(sym,tf,need).then(r=>{
         if(ch.sym!==sym||S.tf!==tf||ch._loadSeq!==loadSeq||ch.cs!==seriesAtStart||ch.candles!==candlesAtStart)return;
         if(!ch.cs||!ch.vs||!ch.lc||!ch.candles?.length)return;
-        const nc=parseKlines(raw);
+        const nc=r.candles;
         if(!nc.length)return;
         const byT=new Map(ch.candles.map(c=>[c.t,c]));
         for(const c of nc){
@@ -3910,10 +4097,10 @@ function startRealtimeWatchdog(){
         const tailAge=Math.max(0,now-fch.candles[fch.candles.length-1].t);
         const need=Math.max(3,Math.min(800,Math.ceil(Math.max(staleFor,tailAge)/tfMs(tf))+2));
         fch._fallbackFetching=true;
-        fj(`${API}/klines?symbol=${sym}&interval=${tf}&limit=${need}`,6000,0).then(raw=>{
+        fetchKlinesFor(sym,tf,need).then(r=>{
           if(!S.fsOpen||S.fsSym!==sym||fch.tf!==tf||fch._loadSeq!==loadSeq||fch.cs!==seriesAtStart||fch.candles!==candlesAtStart)return;
           if(!fch.cs||!fch.vs||!fch.lc||!fch.candles?.length)return;
-          const nc=parseKlines(raw);
+          const nc=r.candles;
           if(!nc.length)return;
           const byT=new Map(fch.candles.map(c=>[c.t,c]));
           for(const c of nc){
@@ -4066,14 +4253,28 @@ async function refreshMetricKlinesSlice(){
     if(!slice.length)return;
     const trendTf=S.tf;
     const trendLim=trendKlineFetchLimit(trendTf);
-    const [k5,k1h,k1m,kTr]=await Promise.all([
-      batchKlines(slice,'5m',300,null,null,10),
-      batchKlines(slice,'1h',170,null,null,10),
-      batchKlines(slice,'1m',70,null,null,10),
-      batchKlines(slice,trendTf,trendLim,null,null,10),
-    ]);
-    Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
-    if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
+    // Split the slice by resolved venue: binance keeps the existing
+    // batch klines path; bybit symbols go through the bybit batcher.
+    const bnSlice=slice.filter(s=>symExchange(s)!=='bybit');
+    const bySlice=slice.filter(s=>symExchange(s)==='bybit');
+    const jobs=[];
+    if(bnSlice.length){
+      jobs.push(
+        batchKlines(bnSlice,'5m',300,null,null,10).then(k=>Object.assign(S.k5m,k)),
+        batchKlines(bnSlice,'1h',170,null,null,10).then(k=>Object.assign(S.k1h,k)),
+        batchKlines(bnSlice,'1m',70,null,null,10).then(k=>Object.assign(S.k1m,k)),
+        batchKlines(bnSlice,trendTf,trendLim,null,null,10).then(k=>{if(trendTf===S.tf)Object.assign(S.kTrend,k);}),
+      );
+    }
+    if(bySlice.length){
+      jobs.push(
+        batchBybitKlines(bySlice,'5m',300,4).then(k=>Object.assign(S.k5m,k)),
+        batchBybitKlines(bySlice,'1h',170,4).then(k=>Object.assign(S.k1h,k)),
+        batchBybitKlines(bySlice,'1m',70,4).then(k=>Object.assign(S.k1m,k)),
+        batchBybitKlines(bySlice,trendTf,trendLim,4).then(k=>{if(trendTf===S.tf)Object.assign(S.kTrend,k);}),
+      );
+    }
+    await Promise.all(jobs);
     // PERF: incremental recalc — only the fetched slice, not all ~500 syms.
     calcAll(slice);
     if(!document.hidden){
@@ -4109,6 +4310,8 @@ async function refreshTicker24hrFallback(){
       if(!sym||!sym.endsWith('USDT'))continue;
       const tk=S.tk[sym];
       if(!tk)continue;
+      // Binance fallback must not overwrite symbols sourced from Bybit.
+      if(symExchange(sym)==='bybit')continue;
       tk.p=+t.lastPrice;
       tk.c24=+t.priceChangePercent;
       tk.h24=+t.highPrice;
@@ -4184,6 +4387,215 @@ function scheduleRealtimeMetricRecalc(gen){
   },METRICS_RECALC_DEBOUNCE_MS);
 }
 
+// ═══════════════════════════════════════════════════════════════
+//  MULTI-EXCHANGE CORE (Binance + Bybit)
+// ═══════════════════════════════════════════════════════════════
+// S.tk always holds ONE ticker per symbol, taken from the resolved
+// venue (priority exchange unless the user pinned a symbol). Bybit
+// tickers additionally provide funding + OI in the same payload.
+
+/** Rebuild the merged universe from S.tk (binance) + S.byTk (bybit).
+ *  Recomputes S.syms (sorted), S.symAvail, S.symEx and syncs S.tk
+ *  entries so every consumer sees the resolved venue's numbers. */
+function applyExUniverse(){
+  const binanceOnly={};
+  for(const [sym,t] of Object.entries(S.tk)){
+    if(typeof sym==='string'&&sym.endsWith('USDT')&&sym.length>4)binanceOnly[sym]=t;
+  }
+  // Bybit availability is built from S.byTk; treat as absent when venue is down.
+  const bybitAvail = S.exData.bybit ? S.byTk : {};
+  const uni = buildUniverse(binanceOnly, bybitAvail, S.exPriority);
+  S.symAvail = {};
+  S.symEx = {};
+  for(const u of uni){
+    S.symAvail[u.sym]=u.exchanges;
+    S.symEx[u.sym]=resolveSymbolExchange(u.sym,S.symAvail,S.exPriority,S.symExOverrides);
+  }
+  // Unified symbol list (universe is already sorted by qv desc, but the
+  // rest of the app expects plain alphabetical sorting like before).
+  S.syms = uni.map(u=>u.sym).sort();
+  // Ensure ticker entries exist for every universe symbol: Binance rows
+  // are already in S.tk; Bybit-only symbols get their ticker from S.byTk.
+  for(const u of uni){
+    if(u.ex==='bybit'&&!S.tk[u.sym]&&S.byTk[u.sym])S.tk[u.sym]={...S.byTk[u.sym]};
+  }
+  // Funding + OI straight from Bybit tickers (Binance fetches these via
+  // separate endpoints; here we get them for free for bybit symbols).
+  if(S.exData.bybit){
+    for(const [sym,t] of Object.entries(S.byTk)){
+      if(S.symEx[sym]==='bybit'){
+        if(t.fund&&isFinite(t.fund))_fundRates[sym]=t.fund;
+        if(t.oiUsd){
+          const mx=S.mx[sym];
+          if(mx&&mx.oi1h==null)mx.oi1h=null; // OIΔ needs history; left null until loop fills it
+        }
+      }
+    }
+  }
+}
+
+/** Which venue should this symbol's klines/chart be sourced from now? */
+function symExchange(sym){
+  if(sym==null)return S.exPriority;
+  return S.symEx[sym]||S.exPriority;
+}
+
+/** User clicked the exchange badge: switch venue for this symbol,
+ *  refresh its ticker+chart, persist the choice. */
+function setSymExchange(sym,ex){
+  if(!sym)return;
+  if(!EXCHANGES.includes(ex))return;
+  const avail=S.symAvail[sym];
+  if(Array.isArray(avail)&&avail.length&&!avail.includes(ex))return; // not listed there
+  if(S.symExOverrides[sym]===ex)return;
+  S.symExOverrides[sym]=ex;
+  try{localStorage.setItem('cs_symExOverrides',JSON.stringify(S.symExOverrides));}catch(e){}
+  applyExUniverse();
+  // Refresh this symbol's ticker from the newly selected venue.
+  refreshTickerForSymbol(sym);
+  // Reload any chart slots showing this symbol.
+  S.charts.forEach((ch,i)=>{if(ch.sym===sym)loadChart(i,sym);});
+  if(S.fsOpen&&S.fsSym===sym){
+    for(let i=0;i<S.fsChartCount;i++)loadFsChart(i);
+  }
+  scheduleRender();
+  schedulePersistUserSettings();
+}
+
+/** Render one exchange badge element from symbol availability. */
+function paintExBadge(el,sym){
+  if(!el)return;
+  if(!sym){el.textContent='';el.style.display='none';return;}
+  const ex=symExchange(sym);
+  const avail=S.symAvail[sym];
+  const onBoth=Array.isArray(avail)&&avail.length>1;
+  el.textContent=EXCHANGE_BADGE[ex]||'B';
+  el.className=`ex-badge ex-badge--${ex}${onBoth?' ex-badge--both':' ex-badge--single'}`;
+  el.title=onBoth
+    ?`${EXCHANGE_LABEL[ex]} — клик: переключить на ${EXCHANGE_LABEL[ex==='binance'?'bybit':'binance']}`
+    :`${EXCHANGE_LABEL[ex]} (только на этой бирже)`;
+  el.style.display='';
+}
+
+/** Refresh badges for every chart tile + fullscreen header. */
+function updateAllExBadges(){
+  for(let i=0;i<S.charts.length;i++)paintExBadge(document.getElementById(`exb${i}`),S.charts[i]?.sym);
+  paintExBadge(document.getElementById('fsExBadge'),S.fsOpen?S.fsSym:null);
+}
+
+function updateExBadgesForSymbol(sym){
+  if(!sym)return;
+  for(let i=0;i<S.charts.length;i++){
+    if(S.charts[i]?.sym===sym)paintExBadge(document.getElementById(`exb${i}`),sym);
+  }
+  if(S.fsOpen&&S.fsSym===sym)paintExBadge(document.getElementById('fsExBadge'),sym);
+}
+
+/** Badge click handler: cycle binance ⇄ bybit when listed on both. */
+function toggleSymExchange(sym){
+  if(!sym)return;
+  const avail=S.symAvail[sym];
+  if(!Array.isArray(avail)||avail.length<2)return;
+  const cur=symExchange(sym);
+  const next=cur==='binance'?'bybit':'binance';
+  setSymExchange(sym,next);
+}
+
+/** Global exchange priority for duplicated coins (settings). */
+function setExPriority(ex){
+  if(!EXCHANGES.includes(ex)||ex===S.exPriority)return;
+  const prevResolved={...S.symEx};
+  S.exPriority=ex;
+  try{localStorage.setItem('cs_exPriority',ex);}catch(e){}
+  applyExUniverse();
+  // Refresh tickers for symbols whose resolved venue just changed.
+  for(const sym of S.syms){
+    if(S.symEx[sym]===prevResolved[sym])continue;
+    refreshTickerForSymbol(sym);
+  }
+  // Reload charts whose symbol's venue flipped.
+  S.charts.forEach((ch,i)=>{if(ch.sym&&S.symEx[ch.sym]!==prevResolved[ch.sym])loadChart(i,ch.sym);});
+  if(S.fsOpen&&S.fsSym&&S.symEx[S.fsSym]!==prevResolved[S.fsSym]){
+    for(let i=0;i<S.fsChartCount;i++)loadFsChart(i);
+  }
+  renderTable();
+  updateAllExBadges();
+  schedulePersistUserSettings();
+}
+
+/** Pull the current ticker for one symbol from its resolved venue. */
+async function refreshTickerForSymbol(sym){
+  if(sym==null)return;
+  const ex=S.symEx[sym]||S.exPriority;
+  try{
+    if(ex==='bybit'){
+      const d=await fjBybit(`https://api.bybit.com/v5/market/tickers?category=linear&symbol=${encodeURIComponent(sym)}`,12000,1);
+      const t=d?.result?.list?.[0];
+      if(t){
+        const {bybitTickerToCommon}=await import('./exchanges.js');
+        const c=bybitTickerToCommon(t);
+        S.byTk[sym]=c;
+        S.tk[sym]={...c};
+        const mx=S.mx[sym];
+        if(mx){mx.price=c.p;mx.ch24=c.c24;mx.vol24=c.qv;}
+      }
+    }else{
+      const t=await fj(`${API}/ticker/24hr?symbol=${encodeURIComponent(sym)}`,12000,1);
+      if(t?.symbol){
+        S.tk[t.symbol]={p:+t.lastPrice,c24:+t.priceChangePercent,h24:+t.highPrice,l24:+t.lowPrice,qv:+t.quoteVolume,tr:+t.count};
+        const mx=S.mx[t.symbol];
+        if(mx){mx.price=S.tk[t.symbol].p;mx.ch24=S.tk[t.symbol].c24;mx.vol24=S.tk[t.symbol].qv;}
+      }
+    }
+    updateExBadgesForSymbol(sym);
+  }catch(e){/* best-effort */}
+}
+
+/** Periodic refresh of Bybit tickers (whole venue, one request). */
+async function refreshBybitTickers(){
+  if(document.hidden||!S.exData.bybit)return;
+  try{
+    const next=await fetchBybitTickers();
+    if(!next||!Object.keys(next).length)return;
+    const prevOI={};
+    for(const [sym,t] of Object.entries(S.byTk))prevOI[sym]=t.oiUsd;
+    S.byTk=next;
+    // Feed the merged ticker map for bybit-resolved symbols.
+    let changed=false;
+    for(const sym of S.syms){
+      if(S.symEx[sym]!=='bybit')continue;
+      const t=next[sym];
+      if(!t)continue;
+      const tk=S.tk[sym];
+      if(!tk||tk.p!==t.p||tk.c24!==t.c24||tk.qv!==t.qv){S.tk[sym]={...t};changed=true;}
+      const mx=S.mx[sym];
+      if(mx){mx.price=t.p;mx.ch24=t.c24;mx.vol24=t.qv;mx.trd24=0;}
+      // OIΔ 1h computed from successive poll snapshots (~10s apart is
+      // too noisy → only meaningful across longer gaps; the OI-history
+      // loop on Binance covers real 1h deltas. Here we only keep levels.)
+      if(t.fund&&isFinite(t.fund))_fundRates[sym]=t.fund;
+    }
+    if(changed){
+      if(S.fsOpen&&S.fsSym&&S.tk[S.fsSym])updateFsHeaderValues();
+      scheduleRender();
+    }
+  }catch(e){/* silent: venue may be temporarily down */}
+}
+let _bybitTickerInterval=null;
+function ensureBybitTickerLoop(){
+  if(_bybitTickerInterval)return;
+  _bybitTickerInterval=setInterval(refreshBybitTickers,10000);
+}
+
+// Original Binance tickers are kept separately so a venue switch can
+// restore the Binance numbers without a refetch.
+let _origBinanceTk={};
+function rememberBinanceTickers(){
+  for(const [sym,t] of Object.entries(S.tk)){
+    if(typeof sym==='string'&&sym.endsWith('USDT')&&sym.length>4&&!_origBinanceTk[sym])_origBinanceTk[sym]={...t};
+  }
+}
+
 function startScreenerWS(){
   if(_wsScreenerReconnectTimer){clearTimeout(_wsScreenerReconnectTimer);_wsScreenerReconnectTimer=null;}
   if(S.wsScreener){try{S.wsScreener.close();}catch(e){}S.wsScreener=null;}
@@ -4248,6 +4660,8 @@ function _applyTickerUpdate(arr,gen){
     const sym=t.s;
     const tk=S.tk[sym];const mx=S.mx[sym];
     if(!tk)continue;
+    // Binance WS must not overwrite symbols sourced from Bybit.
+    if(symExchange(sym)==='bybit')continue;
     const q=isFinite(+t.q)?+t.q:tk.qv;
     const n=isFinite(+t.n)?+t.n:tk.tr;
     if(tk.p!==t.c||tk.c24!==t.P){tk.p=+t.c;tk.c24=+t.P;tk.qv=q;tk.tr=n;changed=true;}
@@ -5652,6 +6066,13 @@ function renderSettingsGen(body){
     </div>
   </div>
   <div class="smodal-row">
+    <span class="smodal-lbl">Приоритетная биржа <span style="font-size:9px;color:var(--text3)">(для монет с обеих)</span></span>
+    <div class="smodal-btns">
+      ${tbtnHtml('expB','Binance',"setExPriority('binance')",S.exPriority==='binance')}
+      ${tbtnHtml('expY','Bybit',"setExPriority('bybit')",S.exPriority==='bybit')}
+    </div>
+  </div>
+  <div class="smodal-row">
     <span class="smodal-lbl">Сортировка изм. по модулю</span>
     <div class="smodal-btns">
       ${tbtnHtml('sabsOn','Вкл',"setSortAbs(true)",S.sortAbs)}
@@ -6028,13 +6449,13 @@ async function loadFsChart(idx){
     if(Array.isArray(cached)&&cached.length>=MIN_CHART_CANDLES){
       applyCandles(cached);
     }
-    let raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${HIST_INITIAL}`);
+    const r1=await fetchKlinesFor(sym,fch.tf,HIST_INITIAL);
     if(S.fsSym!==sym)return;
-    let candles=parseKlines(raw);
+    let candles=r1.candles;
     if(candles.length<MIN_CHART_CANDLES){
-      raw=await fj(`${API}/klines?symbol=${sym}&interval=${fch.tf}&limit=${Math.max(HIST_INITIAL,800)}`);
+      const r2=await fetchKlinesFor(sym,fch.tf,Math.max(HIST_INITIAL,800));
       if(S.fsSym!==sym)return;
-      candles=parseKlines(raw);
+      candles=r2.candles;
     }
     S.histCache[cacheKey]=candles.slice(-HIST_CACHE_MAX);
     if(!applyCandles(candles)){
@@ -6049,9 +6470,10 @@ async function loadMoreFsHistory(idx){
   if(!S.fsSym||fch.histLoading||!fch.candles.length||!fch.lc)return;
   fch.histLoading=true;
   try{
-    const raw=await fj(`${API}/klines?symbol=${S.fsSym}&interval=${fch.tf}&limit=${HIST_LIMIT}&endTime=${fch.candles[0].t-1}`);
-    if(!raw?.length){fch.histLoading=false;return;}
-    const nc=parseKlines(raw);if(!fch.cs||!fch.lc)return;
+    const r=await fetchKlinesFor(S.fsSym,fch.tf,HIST_LIMIT);
+    const raw={length:(r.candles||[]).length};
+    if(!raw.length){fch.histLoading=false;return;}
+    const nc=r.candles;if(!fch.cs||!fch.lc)return;
     const fts=fch.lc.timeScale();
     let logRange=null,vTime=null;
     try{logRange=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;}catch(e){}
@@ -6279,25 +6701,48 @@ async function loadKlinesBackground(){
     const PRIORITY=120;
     const priority=[...new Set([...visible,...top.slice(0,PRIORITY)])];
     const tail=top.slice(PRIORITY);
-    const [k5,k1h,k1m,kTr]=await Promise.all([
-      batchKlines(priority,'5m',300,null,null,8),
-      batchKlines(priority,'1h',170,null,null,8),
-      batchKlines(priority,'1m',70,null,null,6),
-      batchKlines(priority,trendTf,trendLim,null,null,8),
-    ]);
-    Object.assign(S.k5m,k5);Object.assign(S.k1h,k1h);Object.assign(S.k1m,k1m);
-    if(trendTf===S.tf)Object.assign(S.kTrend,kTr);
+    const bnP=priority.filter(s=>symExchange(s)!=='bybit');
+    const byP=priority.filter(s=>symExchange(s)==='bybit');
+    const jobs=[];
+    if(bnP.length){
+      jobs.push(
+        batchKlines(bnP,'5m',300,null,null,8).then(k=>Object.assign(S.k5m,k)),
+        batchKlines(bnP,'1h',170,null,null,8).then(k=>Object.assign(S.k1h,k)),
+        batchKlines(bnP,'1m',70,null,null,6).then(k=>Object.assign(S.k1m,k)),
+        batchKlines(bnP,trendTf,trendLim,null,null,8).then(k=>{if(trendTf===S.tf)Object.assign(S.kTrend,k);}),
+      );
+    }
+    if(byP.length){
+      jobs.push(
+        batchBybitKlines(byP,'5m',300,5).then(k=>Object.assign(S.k5m,k)),
+        batchBybitKlines(byP,'1h',170,5).then(k=>Object.assign(S.k1h,k)),
+        batchBybitKlines(byP,'1m',70,4).then(k=>Object.assign(S.k1m,k)),
+        batchBybitKlines(byP,trendTf,trendLim,5).then(k=>{if(trendTf===S.tf)Object.assign(S.kTrend,k);}),
+      );
+    }
+    await Promise.all(jobs);
     calcAll();renderTable();
     refreshMetricKlinesSlice();
     // Tail: lighter set (no 1m, no trend series) — fills the rest quietly.
     if(tail.length){
       (async()=>{
         try{
-          const [t5,t1h]=await Promise.all([
-            batchKlines(tail,'5m',300,null,null,6),
-            batchKlines(tail,'1h',170,null,null,6),
-          ]);
-          Object.assign(S.k5m,t5);Object.assign(S.k1h,t1h);
+          const bnT=tail.filter(s=>symExchange(s)!=='bybit');
+          const byT=tail.filter(s=>symExchange(s)==='bybit');
+          const tj=[];
+          if(bnT.length){
+            tj.push(
+              batchKlines(bnT,'5m',300,null,null,6).then(k=>Object.assign(S.k5m,k)),
+              batchKlines(bnT,'1h',170,null,null,6).then(k=>Object.assign(S.k1h,k)),
+            );
+          }
+          if(byT.length){
+            tj.push(
+              batchBybitKlines(byT,'5m',300,5).then(k=>Object.assign(S.k5m,k)),
+              batchBybitKlines(byT,'1h',170,5).then(k=>Object.assign(S.k1h,k)),
+            );
+          }
+          await Promise.all(tj);
           calcAll();
           if(!document.hidden&&!_scrolling)scheduleRender();
         }catch(e){console.warn('bg klines tail',e);}
@@ -6402,6 +6847,14 @@ function hydrateUserSession(){
     if(ps.draw.brushWidth!=null&&!isNaN(+ps.draw.brushWidth))_brushWidth=Math.max(1,Math.min(12,+ps.draw.brushWidth));
   }
   if(THEME_IDS.includes(ps.theme))applyTheme(ps.theme);
+  if(EXCHANGES.includes(ps.exPriority))S.exPriority=ps.exPriority;
+  if(ps.symExOverrides&&typeof ps.symExOverrides==='object'){
+    const ov={};
+    for(const [sym,ex] of Object.entries(ps.symExOverrides)){
+      if(typeof sym==='string'&&EXCHANGES.includes(ex))ov[sym]=ex;
+    }
+    S.symExOverrides=ov;
+  }
   if(ps.autoTrend&&typeof ps.autoTrend==='object'){
     const at=ps.autoTrend;
     if(at.pivotBars!=null)S.autoTrend.pivotBars=Math.max(2,Math.min(8,+at.pivotBars));
@@ -6478,6 +6931,7 @@ async function main() {
     loadChartHeadPrefs();
     loadLineColorPrefs();
     loadUiPrefs();
+    loadExchangePrefs();
 
     // PERF: LightweightCharts is bundled via npm (imported at top of file).
     // No CDN round-trip, no network dependency — charts library is ready
@@ -6548,15 +7002,28 @@ async function main() {
     await Promise.all([lcPromise, idbPromise]);
     if (S.LC) for (let i = 0; i < S.gridSize; i++) initLCChart(i);
 
-    // ── Exchange info + 24h ticker in parallel ─────────────────────
-    // These two endpoints are independent — fire them together so the
+    // ── Exchange info + 24h ticker in parallel (Binance + Bybit) ────
+    // These endpoints are independent — fire them together so the
     // serial round-trips become one round-trip. Both have separate
-    // try/catch fallbacks below.
+    // try/catch fallbacks below. Bybit loads fully in parallel:
+    // its tickers (one request, whole venue) also carry funding+OI.
     ldSet('Получение списка фьючерсов BinanceвЂ¦',18);
-    const [infoResult, tkResult] = await Promise.allSettled([
+    const [infoResult, tkResult, bybitTkResult] = await Promise.allSettled([
       fj(`${API}/exchangeInfo`),
       fj(`${API}/ticker/24hr`),
+      fetchBybitTickers(),
     ]);
+    // Bybit tickers: availability map + normalised ticker map.
+    // Failure (offline / blocked) → venue stays disabled, app works
+    // exactly as before on Binance-only data.
+    if (bybitTkResult.status === 'fulfilled') {
+      S.byTk = bybitTkResult.value || {};
+      S.bySyms = Object.keys(S.byTk);
+      S.exData.bybit = S.bySyms.length > 0;
+      cacheSet('bybit:tickers', S.byTk, 60 * 1000);
+    } else {
+      console.warn('Bybit tickers unavailable:', bybitTkResult.reason?.message);
+    }
 
     if (infoResult.status === 'fulfilled') {
       const info = infoResult.value;
@@ -6591,6 +7058,15 @@ async function main() {
       console.warn('ticker/24hr failed:', tkResult.reason && tkResult.reason.message);
     }
 
+    // ── Multi-exchange universe build ─────────────────────────────
+    // Merge Binance + Bybit by base symbol with the priority exchange
+    // winning for duplicates. S.tk keeps ONE entry per symbol (from the
+    // resolved venue) so every existing consumer — screener, metrics,
+    // charts, screeners — works unchanged. Availability + resolved
+    // venue per symbol live in S.symAvail / S.symEx.
+    applyExUniverse();
+    ldSet(`Вселенная: ${S.syms.length} монет (Binance+S.bySyms.length)вЂ¦`,55);
+
     ldSet('Вычисление метриквЂ¦',70);
     // Run the heavy per-symbol metric pass off the main thread when we
     // can. Fall back to the synchronous calcAll() in any failure case
@@ -6622,8 +7098,10 @@ async function main() {
       calcAll();
     }
     ldSet('Готово!',100);
-    renderTable(); updSortHdr(); updTime(); refreshEMAButtonState();
-    setTimeout(ldHide, 150);
+    renderTable(); updSortHdr(); updTime(); refreshEMAButtonState(); setTimeout(ldHide, 150);
+    rememberBinanceTickers();
+    ensureBybitTickerLoop();
+    updateAllExBadges();
 
     // Defer trivial UI-sync calls so the loader can fade out and the
     // first paint of the chart grid happens immediately. These calls
@@ -7149,6 +7627,8 @@ window.showGroupPicker    = showGroupPicker;
 window.showChartGroupPicker = showChartGroupPicker;
 window.openGroupManager   = openGroupManager;
 window.setSymGroup        = setSymGroup;
+window.toggleSymExchange  = toggleSymExchange;
+window.setExPriority      = setExPriority;
 window.S                  = S;
 window.setDensityVisible  = setDensityVisible;
 window.setAlertSetting    = setAlertSetting;

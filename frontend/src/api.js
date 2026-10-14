@@ -3,6 +3,7 @@
 // ═══════════════════════════════════════════════════════════════
 
 import { API, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES } from './state.js';
+import { BYBIT_API, parseBybitKlines, tfToBybitInterval } from './exchanges.js';
 
 let _bnBannedUntil = 0;
 const _reqQueue = [];
@@ -91,10 +92,99 @@ export async function batchKlines(syms,iv,lim,pFrom,pTo,bs=10){
   return out;
 }
 
+// ───────────────────────────────────────────────────────────────
+//  BYBIT API & NETWORK
+// ───────────────────────────────────────────────────────────────
+// Own queue + own concurrency so a Binance rate-limit ban never
+// delays Bybit traffic (and vice versa). No shared _bnBannedUntil.
+
+const _byReqQueue = [];
+let _byReqRunning = 0;
+const _byReqMax = 4;
+
+function _runBybitQueue(){
+  while(_byReqRunning < _byReqMax && _byReqQueue.length){
+    const {fn,res,rej} = _byReqQueue.shift();
+    _byReqRunning++;
+    fn().then(r=>{_byReqRunning--;res(r);_runBybitQueue();}).catch(e=>{_byReqRunning--;rej(e);_runBybitQueue();});
+  }
+}
+
+export function fjBybit(url,timeout=15000,retries=1){
+  return new Promise((res,rej)=>{
+    const doFetch=()=>new Promise((rs,rj)=>{
+      const controller=new AbortController();
+      const t=setTimeout(()=>{rj(new Error('Timeout'));controller.abort();},timeout);
+      fetch(url,{signal:controller.signal}).then(async r=>{
+        const text=await r.text();
+        let data;
+        try{data=JSON.parse(text);}catch(e){rj(new Error('JSON parse error'));return;}
+        if(!r.ok){rj(new Error('HTTP '+r.status));return;}
+        if(data && typeof data.retCode==='number' && data.retCode!==0){
+          rj(new Error('Bybit retCode '+data.retCode+(data.retMsg?': '+data.retMsg:'')));
+          return;
+        }
+        rs(data);
+      }).catch(e=>{rj(e);}).finally(()=>clearTimeout(t));
+    });
+    const attempt=(n)=>{
+      _byReqQueue.push({fn:doFetch,res:rs=>{res(rs);},rej:e=>{
+        const retriable=e&&/Timeout|HTTP 5|HTTP 429|retCode 1000[26]/.test(String(e.message||''));
+        if(retriable&&n>0){
+          setTimeout(()=>attempt(n-1), 900+Math.random()*700);
+        } else { rej(e); }
+      }});
+      _runBybitQueue();
+    };
+    attempt(retries);
+  });
+}
+
+/** All Bybit USDT-linear tickers, normalised: { SYM: commonTicker }.
+ *  Single REST call covers the whole venue (~800 symbols). */
+export async function fetchBybitTickers(){
+  const d = await fjBybit(`${BYBIT_API}/tickers?category=linear`, 15000, 1);
+  const list = d?.result?.list;
+  if(!Array.isArray(list)) return {};
+  // Local import to avoid a module cycle at load time.
+  const { bybitTickerToCommon } = await import('./exchanges.js');
+  const out = {};
+  for(const t of list){
+    const sym = t?.symbol;
+    if(typeof sym !== 'string' || !sym.endsWith('USDT')) continue;
+    out[sym] = bybitTickerToCommon(t);
+  }
+  return out;
+}
+
+/** Bybit klines for one symbol, in the internal candle format (oldest first). */
+export async function fetchBybitKlines(sym, iv, limit){
+  const ivCode = tfToBybitInterval(iv);
+  const lim = Math.max(1, Math.min(1000, limit|0));
+  const d = await fjBybit(`${BYBIT_API}/kline?category=linear&symbol=${encodeURIComponent(sym)}&interval=${ivCode}&limit=${lim}`, 15000, 1);
+  return parseBybitKlines(d?.result?.list);
+}
+
+/** Batch Bybit klines across symbols (per-symbol requests, queued, batched). */
+export async function batchBybitKlines(syms, iv, lim, bs=5){
+  const out={};
+  for(let i=0;i<syms.length;i+=bs){
+    const batch=syms.slice(i,i+bs);
+    const results=await Promise.allSettled(batch.map(s=>fetchBybitKlines(s,iv,lim).then(c=>[s,c])));
+    for(const r of results)if(r.status==='fulfilled')out[r.value[0]]=r.value[1];
+    if(i+bs<syms.length)await new Promise(r=>setTimeout(r,80+Math.random()*80));
+  }
+  return out;
+}
+
 // Expose legacy globals temporarily for interop with main.js
 if(typeof window!=='undefined'){
   window.fj = fj;
   window.parseKlines = parseKlines;
   window.mergeKlineChunks = mergeKlineChunks;
   window.batchKlines = batchKlines;
+  window.fjBybit = fjBybit;
+  window.fetchBybitTickers = fetchBybitTickers;
+  window.fetchBybitKlines = fetchBybitKlines;
+  window.batchBybitKlines = batchBybitKlines;
 }

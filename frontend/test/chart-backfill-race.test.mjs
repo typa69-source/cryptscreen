@@ -12,11 +12,12 @@ assert.ok(begin >= 0 && finish > begin, 'backfill function must be found');
   let completeFetch;
   const context = vm.createContext({
     API: 'https://example.invalid', HIST_CACHE_MAX: 2000,
-    S: { tf: '1m', fsSym: null },
+    S: { tf: '1m', fsSym: null, symEx: {} },
     Date: { now: () => 180000 },
     tfMs: () => 60000,
     fj: () => new Promise(resolve => { completeFetch = resolve; }),
     parseKlines: raw => raw,
+    symExchange: () => 'binance',
   });
   vm.runInContext(source.slice(begin, finish), context);
   const ch = { sym: 'BTCUSDT', _loadSeq: 1, candles: [{ t: 60000, c: 10 }] };
@@ -35,11 +36,12 @@ assert.ok(begin >= 0 && finish > begin, 'backfill function must be found');
 function backfillContext(now, fetchKlines) {
   const context = vm.createContext({
     API: 'https://example.invalid', HIST_CACHE_MAX: 2000,
-    S: { tf: '1m', fsSym: null, fsCharts: [] },
+    S: { tf: '1m', fsSym: null, fsCharts: [], symEx: {} },
     Date: { now: () => now },
     tfMs: () => 60000,
     fj: fetchKlines,
     parseKlines: raw => raw,
+    symExchange: () => 'binance',
   });
   vm.runInContext(source.slice(begin, finish), context);
   return context;

@@ -201,8 +201,19 @@ export function mkFsChart(tf){
 
 export const S = {
   syms:[], tk:{}, k5m:{}, k15m:{}, k1h:{}, k1m:{}, kTrend:{}, mx:{}, btcR:[],
+  // Multi-exchange foundation (Binance + Bybit):
+  //  exPriority  — which venue wins for coins listed on both
+  //  bySyms      — Bybit USDT-linear symbols (raw REST shape)
+  //  byTk        — Bybit tickers normalised to the common shape
+  //  symEx       — per-symbol resolved exchange ('binance'|'bybit')
+  //  symExOverrides — user's manual per-symbol choice (persisted)
+  //  symAvail    — SYM → ['binance','bybit'] availability map
+  //  exData      — per-exchange connectivity: {binance:ok, bybit:ok}
+  exPriority:'binance',
+  bySyms:[], byTk:{}, symEx:{}, symExOverrides:{}, symAvail:{},
+  exData:{binance:true, bybit:false},
   charts: Array.from({length:9},()=>mkChart()),
-  wsScreener:null, wsCharts:null, wsChartTrades:null,
+  wsScreener:null, wsCharts:null, wsChartTrades:null, wsBybitCharts:null, wsFs:null,
   sortId:'vol24', sortDir:'desc', sortAlpha:false,
   tf:'5m', q:'', page:0, LC:null, bgDone:false,
   fastMode:true,

@@ -106,6 +106,7 @@
     <div id="fsExtras" style="display:none;align-items:center;gap:6px;flex-shrink:0">
       <button class="hbtn" id="fsCloseBtn" onclick="closeFullscreen()">← Назад</button>
       <span id="fsCgDot" class="cg-dot chart-cg-dot" style="cursor:pointer;width:16px;height:16px" title="Цветовая группа — нажать" onclick="showChartGroupPicker(S.fsSym,this)"></span>
+      <span class="ex-badge" id="fsExBadge" title="Биржа источника — клик для смены" onclick="toggleSymExchange(S.fsSym,this)"></span>
       <img id="fsSymIcon" src="" alt="" style="display:none;width:18px;height:18px;border-radius:50%;flex-shrink:0">
       <span id="fsSym" style="font-weight:600;color:#fff;cursor:pointer" title="Нажмите чтобы скопировать BTCUSDT" onclick="copyTicker(S.fsSym)"></span>
       <span id="fsPrc" style="margin-left:6px"></span>
