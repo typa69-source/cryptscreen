@@ -97,6 +97,7 @@
       <button class="hbtn" onclick="openGridIntradayScreener()" title="Grid intraday — консолидация после импульса">⚡ Grid Intra</button>
       <button class="hbtn" onclick="openGridPickScreener()" title="Grid Pick — нейтраль / лонг / шорт под тип сетки">◎ Grid Pick</button>
       <button class="hbtn" onclick="openGridSmartScreener()" title="Grid Smart — OU-фильтр (half-life, GK vol, ADF, variance ratio)">🧠 Grid Smart</button>
+      <button class="hbtn" id="radarBtn" onclick="toggleRadarPanel()" title="Радар — детектор памп/дамп с замером точности">📡 Радар<span id="radarBadge" style="display:none;background:#e04040;color:#fff;border-radius:8px;padding:0 4px;font-size:8px;margin-left:3px"></span></button>
       <button class="hbtn" onclick="openSettings()">⚙ Настройки</button>
     </div>
   </div>
@@ -237,6 +238,26 @@
       <button class="alp-clear" id="potClearBtn" onclick="clearPotentialMatches()">Очистить</button>
       <button class="alp-x" onclick="togglePotentialPanel()">✕</button>
     </div>
+  </div>
+</div>
+
+<!-- RADAR PANEL -->
+<div id="radarPanel" style="display:none">
+  <div class="pot-hdr">
+    <span class="pot-title">📡 Радар</span>
+    <span id="radarScanStatus" class="radar-status"></span>
+    <div style="display:flex;align-items:center;gap:4px;margin-left:auto">
+      <button class="alp-clear" id="radarClearBtn" onclick="clearRadarLog()">Очистить</button>
+      <button class="alp-x" onclick="toggleRadarPanel()">✕</button>
+    </div>
+  </div>
+  <div class="radar-tabs">
+    <button class="pot-tab on" data-rt="live" onclick="radarSetTab('live')">События</button>
+    <button class="pot-tab" data-rt="stats" onclick="radarSetTab('stats')">Точность</button>
+  </div>
+  <div class="radar-body">
+    <div id="radarLive" class="pot-list"></div>
+    <div id="radarStats" style="display:none"></div>
   </div>
 </div>
 

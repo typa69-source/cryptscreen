@@ -122,6 +122,17 @@ import {
   clearPotentialMatchesUi,
   updatePotBadgeUi,
 } from './potentialPresets-ui.js'
+import { RadarScan } from './radar-scan.js'
+import {
+  initRadarUi,
+  isRadarPanelOpen,
+  toggleRadarPanelUi,
+  radarSetTabUi,
+  renderRadarLive,
+  renderRadarStats,
+  updateRadarBadge,
+  setRadarScanStatus,
+} from './radar-ui.js'
 
 // API base - in dev points to local backend, in prod to your Railway URL
 const BACKEND = import.meta.env.VITE_BACKEND_URL || 'http://localhost:3001'
@@ -1454,7 +1465,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const onVisibleRangePan=()=>{_onPanStart();rCanvas(ch,{immediate:true});};
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
     if(range&&range.from<HIST_TRIGGER){
-      if(isFs)loadMoreFsHistory(fsIdx);else loadMoreHistory(slot);
+      // exhausted history → stop the fetch cascade (each backfill used to
+      // re-trigger a fetch loop, dragging the chart left repeatedly)
+      if(!ch._histExhausted){
+        if(isFs)loadMoreFsHistory(fsIdx);else loadMoreHistory(slot);
+      }
     }
     onVisibleRangePan();
   });
@@ -1742,7 +1757,7 @@ async function loadChart(slot,sym){
   }
   const loadSeq=(ch._loadSeq||0)+1;
   ch._loadSeq=loadSeq;
-  ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;
+  ch.sym=sym;ch.candles=[];ch.histLoading=false;ch._histBootstrapDone=false;ch._histExhausted=false;
   ch._oiHist=[];ch._oiRaw=[];ch._oiLastFetchTs=0;
   ch.drawings=getSymDrawings(sym); // shared reference
   setText(`cs${slot}`,sym.replace(/USDT$/,''));
@@ -1909,6 +1924,7 @@ async function loadMoreHistory(slot){
   const ch=S.charts[slot];
   if(!ch.sym||ch.histLoading||!ch.candles.length||!ch.lc)return;
   ch.histLoading=true;
+  ch._histLoadingNote='history';
   try{
     const ex=symExchange(ch.sym);
     let nc;
@@ -1921,7 +1937,7 @@ async function loadMoreHistory(slot){
       const raw=await fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${ch.candles[0].t-1}`);
       nc=parseKlines(raw);
     }
-    if(!nc||!nc.length){ch.histLoading=false;return;}
+    if(!nc||!nc.length){ch.histLoading=false;ch._histExhausted=true;return;}
     if(!ch.cs||!ch.lc)return;
     const tsApi=ch.lc.timeScale();
     let logRange=null,vTime=null;
@@ -1937,7 +1953,14 @@ async function loadMoreHistory(slot){
       if(ps&&typeof ps.getVisibleRange==='function')pr=ps.getVisibleRange();
     }catch(e){}
     const prepended=nc.length;
+    const beforeLen=ch.candles.length;
     ch.candles=[...nc,...ch.candles].slice(-HIST_CACHE_MAX);
+    // REAL index shift of existing bars after cache trim (NOT the raw
+    // prepended count — when the cache is saturated the trim discards
+    // older bars and the true shift is merged.length - beforeLen).
+    // Restoring with the raw count drags the view to the right edge,
+    // i.e. the "chart drags itself left" magnet bug.
+    const realShift=ch.candles.length-beforeLen;
     // Keep cache bounded and avoid persisting too-short histories (causes inconsistent visible bars on next load).
     const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
     if(ch.candles.length>=wantMinCache)S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice(-HIST_CACHE_MAX);
@@ -1952,7 +1975,15 @@ async function loadMoreHistory(slot){
         const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
         try{tsScale.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
         if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
-          try{tsScale.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+          // Re-read the CURRENT range right before restoring: the user may
+          // have kept panning during the fetch+idle wait. Restoring a stale
+          // range snaps the chart back ("magnet"). Anchor the restore on
+          // where the view is NOW, shifted by the real index shift.
+          let curRange=null;
+          try{curRange=(typeof tsScale.getVisibleLogicalRange==='function')?tsScale.getVisibleLogicalRange():null;}catch(e){}
+          const baseRange=(curRange&&typeof curRange.from==='number'&&typeof curRange.to==='number'
+            &&Math.abs((curRange.to-curRange.from)-(logRange.to-logRange.from))<0.5)?curRange:logRange;
+          try{tsScale.setVisibleLogicalRange({from:baseRange.from+realShift,to:baseRange.to+realShift});}catch(e){}
         }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{tsScale.setVisibleRange(vTime);}catch(e){}}
         try{
           const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
@@ -4418,13 +4449,19 @@ function applyExUniverse(){
   S.syms=[...uniSet].sort();
   // Merged ticker map: exactly one entry per universe symbol from its
   // resolved venue. Binance rows win for binance-resolved symbols,
-  // bybit rows fill the rest.
+  // bybit rows fill the rest. The OTHER venue's ticker is kept in
+  // S.tkOther so the list can show venue-native numbers when the user
+  // filters by listing (e.g. Binance-only view while priority=bybit).
   const nextTk={};
+  S.tkOther={};
   for(const sym of S.syms){
     const ex=S.symEx[sym];
     if(ex==='bybit'&&S.byTk[sym])nextTk[sym]={...S.byTk[sym]};
     else if(S.tk[sym])nextTk[sym]={...S.tk[sym]};
     else if(S.byTk[sym])nextTk[sym]={...S.byTk[sym]};
+    // the non-resolved venue's numbers for venue-native display
+    if(ex==='bybit'&&S.tk[sym]&&_origBinanceTk[sym])S.tkOther[sym]={..._origBinanceTk[sym]};
+    else if(ex!=='bybit'&&S.byTk[sym])S.tkOther[sym]={...S.byTk[sym]};
   }
   S.tk=nextTk;
   // Funding from Bybit tickers for bybit-resolved symbols (Binance
@@ -4853,22 +4890,36 @@ function sortedRows(){
   // Liquidity filters honour the bybit coefficient: a bybit-sourced
   // volume/trade count is scaled up by S.byVolFactor before comparison,
   // so "50M" on the slider means "5M bybit" when the factor is 10.
+  // When the list is pinned to ONE venue (exListFilter), the row shows
+  // that venue's native numbers (S.tkOther) — and the filter compares
+  // THOSE, without the coefficient, so "Binance only" is honest
+  // Binance-scale volume and "Bybit only" is honest Bybit scale.
+  const listVenue=(S.exListFilter==='binance'||S.exListFilter==='bybit')?S.exListFilter:null;
   const effVol=(r)=>{
-    const v=r.vol24;
+    const v=(listVenue&&S.tkOther[r.sym])?S.tkOther[r.sym].qv:r.vol24;
     if(v==null||!isFinite(v))return v;
-    return symExchange(r.sym)==='bybit'?v*(S.byVolFactor||1):v;
+    const src=(listVenue?listVenue:symExchange(r.sym));
+    return src==='bybit'?v*(S.byVolFactor||1):v;
   };
   const effTrd=(r)=>{
-    const v=r.trd24;
+    const v=(listVenue&&S.tkOther[r.sym])?S.tkOther[r.sym].tr:r.trd24;
     if(v==null||!isFinite(v))return v;
-    return symExchange(r.sym)==='bybit'?v*(S.byVolFactor||1):v;
+    const src=(listVenue?listVenue:symExchange(r.sym));
+    return src==='bybit'?v*(S.byVolFactor||1):v;
   };
   if(S.minVol>0)rows=rows.filter(r=>{const v=effVol(r);return (v!=null&&isFinite(v)&&v>=S.minVol*1e6)||bypassGroup(r.sym);});
   if(S.minTrd>0)rows=rows.filter(r=>{const v=effTrd(r);return (v!=null&&isFinite(v)&&v>=S.minTrd)||bypassGroup(r.sym);});
-  // Venue filter for the list: all / binance only / bybit only
-  // (by resolved source of the row's data).
+  // Venue filter for the list: by LISTING (symAvail), not by data source.
+  // A coin listed on both venues but sourced from Bybit (priority/override)
+  // must still appear under "Binance only" — the user filters exchanges,
+  // not data routing. Row numbers (vol etc.) stay from the resolved venue.
   if(S.exListFilter==='binance'||S.exListFilter==='bybit'){
-    rows=rows.filter(r=>(symExchange(r.sym)||S.exPriority)===S.exListFilter);
+    rows=rows.filter(r=>{
+      const avail=S.symAvail[r.sym];
+      if(Array.isArray(avail)&&avail.length)return avail.includes(S.exListFilter);
+      // Unknown availability (very fresh symbol): fall back to source.
+      return (symExchange(r.sym)||S.exPriority)===S.exListFilter;
+    });
   }
   // Filters are exclusive: preset OR color group OR all
   if(S._potFilterPreset){
@@ -5096,7 +5147,16 @@ function updateScreenerRow(row,m,cols,inChart){
       paintSparkCell(cell,chgDisp,dLine,'spv');
       return;
     }
-    const val=m[c.id];
+    const val=(()=>{
+      // Venue-pinned list: show the pinned venue's native vol/trade
+      // numbers (the filter compares those too, see sortedRows).
+      if((c.id==='vol24'||c.id==='trd24')&&S.tkOther&&S.tkOther[sym]){
+        const other=S.tkOther[sym];
+        if(c.id==='vol24'&&other.qv!=null&&isFinite(other.qv))return other.qv;
+        if(c.id==='trd24'&&other.tr!=null&&isFinite(other.tr))return other.tr;
+      }
+      return m[c.id];
+    })();
     const newTxt=fv(val,c.id);
     const newCls='mc '+fc(val,c.id)+' '+fh(val,c.id);
     // While some derived metrics are being (re)computed, keep the previous value instead of flashing zeros/dashes.
@@ -6506,7 +6566,7 @@ function initFsChart(idx){
 async function loadFsChart(idx){
   const fch=S.fsCharts[idx];const sym=S.fsSym;
   if(!sym||!fch.cs||!fch.lc)return;
-  fch._histBootstrapDone=false;
+  fch._histBootstrapDone=false;fch._histExhausted=false;
   fch._oiHist=[];fch._oiRaw=[];fch._oiLastFetchTs=0;
   const applyCandles=(candles)=>{
     fch.candles=candles.slice(-HIST_CACHE_MAX);
@@ -6557,7 +6617,7 @@ async function loadMoreFsHistory(idx){
   try{
     const r=await fetchKlinesFor(S.fsSym,fch.tf,HIST_LIMIT);
     const raw={length:(r.candles||[]).length};
-    if(!raw.length){fch.histLoading=false;return;}
+    if(!raw.length){fch.histLoading=false;fch._histExhausted=true;return;}
     const nc=r.candles;if(!fch.cs||!fch.lc)return;
     const fts=fch.lc.timeScale();
     let logRange=null,vTime=null;
@@ -6569,8 +6629,12 @@ async function loadMoreFsHistory(idx){
       if(ps&&typeof ps.getVisibleRange==='function')pr=ps.getVisibleRange();
     }catch(e){}
     const prepended=nc.length;
+    const beforeLen=fch.candles.length;
     fch.candles=[...nc,...fch.candles];
     const merged=fch.candles;
+    // real index shift after trim (see loadMoreHistory): restoring with the
+    // raw prepended count drags the view to the right edge (magnet bug)
+    const realShift=merged.length-beforeLen;
     const doSet=()=>{
       if(!fch.cs||!fch.lc)return;
       try{
@@ -6579,7 +6643,14 @@ async function loadMoreFsHistory(idx){
         const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
         try{fts.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
         if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
-          try{fts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+          // Re-read the CURRENT range before restoring (the user may have
+          // kept panning during fetch+idle): restoring a stale range snaps
+          // the chart back — the "magnet" bug.
+          let curRange=null;
+          try{curRange=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;}catch(e){}
+          const baseRange=(curRange&&typeof curRange.from==='number'&&typeof curRange.to==='number'
+            &&Math.abs((curRange.to-curRange.from)-(logRange.to-logRange.from))<0.5)?curRange:logRange;
+          try{fts.setVisibleLogicalRange({from:baseRange.from+realShift,to:baseRange.to+realShift});}catch(e){}
         }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{fts.setVisibleRange(vTime);}catch(e){}}
         try{
           const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
@@ -7226,6 +7297,9 @@ async function main() {
     }
     renderTable();
     restartChartStreams(0); startScreenerWS();
+    initRadarUi({ openSymbol: (sym) => openFullscreenBySym(sym) });
+    radarUpdateBadge();
+    radarStartLoop();
     S.bgDone = true; // разрешить realtime-обновление метрик сразу, не ждать фоновой загрузки истории
     loadKlinesBackground();
     startRealtimeWatchdog();
@@ -7234,6 +7308,143 @@ async function main() {
   } catch (err) {
     console.error('Init error:', err); ldSet('Ошибка загрузки', 100); ldErr(err.message || String(err));
   }
+}
+
+// ───────────────────────────────────────────────────────────────
+//  RADAR • pump/dump detector with hit-rate measurement
+// ───────────────────────────────────────────────────────────────
+// Pure detection logic lives in radar.js; universe orchestration in
+// radar-scan.js (RadarScan); this block wires both to the app: the
+// panel UI, the periodic scan loop, chart markers and localStorage
+// persistence of the event log (hit-rates must accumulate across
+// sessions — a day-old log is the whole point).
+
+const RADAR_STORAGE_KEY = 'radarLog.v1';
+const RADAR_SCAN_INTERVAL_MS = 60 * 1000; // full universe pass cadence
+const RADAR_TOP_SYMS = 120; // scan the liquid top of the universe
+
+let _radar = null;
+let _radarTimer = null;
+let _radarScanning = false;
+
+function radarGet(){
+  if(_radar)return _radar;
+  let restored=null;
+  try{restored=JSON.parse(localStorage.getItem(RADAR_STORAGE_KEY)||'null');}catch(e){}
+  _radar=RadarScan.fromJSON(restored,{});
+  return _radar;
+}
+
+function radarPersist(){
+  try{localStorage.setItem(RADAR_STORAGE_KEY,JSON.stringify(_radar.toJSON()));}catch(e){}
+}
+
+/** Top-N universe symbols by resolved-venue volume, with bybit factor. */
+function radarScanUniverse(){
+  const rows=[];
+  for(const sym of (S.syms||[])){
+    const t=S.tk[sym];
+    if(!t||t.qv==null)continue;
+    const v=symExchange(sym)==='bybit'?(t.qv*(S.byVolFactor||1)):t.qv;
+    rows.push({sym,v});
+  }
+  rows.sort((a,b)=>b.v-a.v);
+  return rows.slice(0,RADAR_TOP_SYMS).map(r=>r.sym);
+}
+
+async function radarScanPass(){
+  if(_radarScanning)return;
+  _radarScanning=true;
+  try{
+    const syms=radarScanUniverse();
+    if(!syms.length){setRadarScanStatus('нет данных');return;}
+    const scan=radarGet();
+    const fetcher={fetchKlines:async(sym,tf,limit)=>{
+      const r=await fetchKlinesFor(sym,tf,limit);
+      return r&&r.candles?r.candles:[];
+    }};
+    scan.fetcher=fetcher;
+    const t0=performance.now();
+    const res=await scan.scanAll(syms);
+    radarPersist();
+    const fresh=res.newEvents.length;
+    if(fresh>0){
+      for(const e of res.newEvents)console.log(`[radar] ${e.kind} ${e.sym} z=${e.z} ret=${e.ret}%`);
+    }
+    const secs=((performance.now()-t0)/1000).toFixed(0);
+    setRadarScanStatus(`скан ${secs}с · ${syms.length} мон`);
+    if(isRadarPanelOpen())radarRenderPanel();
+    radarUpdateBadge();
+    // refresh markers on visible charts (cheap — LWC diffs markers)
+    for(const ch of [...S.charts,...(S.fsOpen?S.fsCharts:[])])radarPaintChartMarkers(ch);
+  }catch(e){
+    setRadarScanStatus('ошибка скана');
+  }finally{_radarScanning=false;}
+}
+
+function radarUpdateBadge(){
+  // fresh = detected within the last 15 minutes
+  const now=Date.now();
+  const fresh=radarGet().events.filter(e=>e.pending&&now-e.detectedAt<15*60000).length;
+  updateRadarBadge(fresh);
+}
+
+function radarRenderPanel(){
+  const scan=radarGet();
+  renderRadarLive(scan.events);
+  renderRadarStats(scan.hitRates(),scan.events.length,scan.scanned);
+}
+
+function toggleRadarPanel(){
+  const opened=toggleRadarPanelUi();
+  if(opened){
+    radarRenderPanel();
+    // scan immediately on open (if idle), then keep the cadence
+    void radarScanPass();
+  }
+}
+function radarSetTab(tab){radarSetTabUi(tab);}
+
+function clearRadarLog(){
+  const scan=radarGet();
+  scan.events=[];scan.scanned=0;scan.lastScanAt=0;
+  radarPersist();
+  radarRenderPanel();
+  radarUpdateBadge();
+}
+
+/** Chart markers: draw confirmed/pending radar events on the active charts.
+ *  Called after each scan pass and on chart data updates. */
+function radarPaintChartMarkers(ch){
+  try{
+    if(!ch||!ch.cs||!ch.sym||typeof ch.cs.setMarkers!=='function')return;
+    const evs=radarGet().events.filter(e=>e.sym===ch.sym);
+    if(!evs.length){ch.cs.setMarkers([]);return;}
+    const mk=[];
+    for(const e of evs){
+      const isPump=e.kind==='PUMP';
+      // only mark recent events: older than 24h clutters the chart
+      if(Date.now()-e.t*1000>24*3600*1000)continue;
+      mk.push({
+        time:toChartTime(e.t),
+        position:isPump?'belowBar':'aboveBar',
+        color:isPump?'#2fbf9d':'#ff6b6b',
+        shape:isPump?'arrowUp':'arrowDown',
+        text:e.pending?'R':(e.confirmed===false?'✕':`${e.ret>0?'+':''}${e.ret.toFixed(1)}%`),
+      });
+    }
+    ch.cs.setMarkers(mk);
+  }catch(e){}
+}
+
+function radarStartLoop(){
+  if(_radarTimer)return;
+  _radarTimer=setInterval(()=>{
+    if(document.hidden)return;
+    // scan only when the panel is open OR every 5th tick (background
+    // accumulation so hit-rate stats keep growing without the panel)
+    void radarScanPass();
+  },RADAR_SCAN_INTERVAL_MS);
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -7508,15 +7719,19 @@ async function prependGridLabHistory(body,sym,tf){
     }catch(e){}
     const prepended=nc.length;
     const m=ctx.merged;
+    const beforeLen=m.length;
     m.unshift(...nc);
     if(m.length>HIST_CACHE_MAX)m.splice(0,m.length-HIST_CACHE_MAX);
+    // real index shift after trim (see loadMoreHistory): restoring with the
+    // raw prepended count drags the view to the right edge (magnet bug)
+    const realShift=m.length-beforeLen;
     const lastC=+m[m.length-1]?.c||1;
     try{ctx.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastC)}});}catch(e){}
     ctx.cs.setData(m.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     const gro=Math.max(0,Math.min(36,S.chartRightOffset|0));
     try{ts.applyOptions({rightOffset:gro,fixRightEdge:false});}catch(e){}
     if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
-      try{if(typeof ts.setVisibleLogicalRange==='function')ts.setVisibleLogicalRange({from:logRange.from+prepended,to:logRange.to+prepended});}catch(e){}
+      try{if(typeof ts.setVisibleLogicalRange==='function')ts.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
     }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{ts.setVisibleRange(vTime);}catch(e){}}
     try{
       const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
@@ -7737,6 +7952,9 @@ window.copyTicker         = copyTicker;
 window.clearDrawingsSlot  = clearDrawingsSlot;
 window.doSort             = doSort;
 window.togglePotentialPanel = togglePotentialPanel;
+window.toggleRadarPanel    = toggleRadarPanel;
+window.radarSetTab         = radarSetTab;
+window.clearRadarLog       = clearRadarLog;
 window.toggleGridLab       = toggleGridLab;
 window.openPotPresetEditor  = openPotPresetEditor;
 window.togglePotPreset      = togglePotPreset;

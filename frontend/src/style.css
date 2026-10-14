@@ -651,3 +651,39 @@ body.is-splitting #cpanel,body.is-splitting #fsChartArea{transition:none!importa
 .gbs-toast--rate{border-left-color:#f59e0b}
 .gbs-toast--warn{border-left-color:#3b82f6}
 .gbs-skeleton-bar--w70{flex:1}
+
+/* ═══ RADAR PANEL ═══ */
+#radarPanel{
+  position:fixed;right:10px;top:52px;z-index:400;
+  width:380px;max-height:75vh;
+  background:var(--bg2);border:1px solid rgba(44,53,80,.95);border-radius:var(--radius-md);
+  box-shadow:var(--shadow-md);
+  display:flex;flex-direction:column;overflow:hidden;
+}
+.radar-status{font-size:9px;color:var(--text3);margin-left:6px;}
+.radar-tabs{display:flex;align-items:center;gap:2px;padding:4px 8px;border-bottom:1px solid var(--border);
+  flex-shrink:0;overflow-x:auto;flex-wrap:nowrap;}
+.radar-body{flex:1;overflow-y:auto;min-height:0;}
+.radar-ev{display:flex;align-items:center;gap:6px;padding:6px 10px;
+  cursor:pointer;border-bottom:1px solid rgba(37,37,48,.5);
+  transition:background .08s;}
+.radar-ev:hover{background:rgba(255,255,255,.03);}
+.radar-ev-sym{font-size:10px;font-weight:600;color:#fff;min-width:58px;}
+.radar-ev-kind{font-size:9px;font-weight:700;border-radius:3px;padding:1px 4px;min-width:34px;text-align:center;}
+.radar-kind-pump{background:rgba(31,168,145,.18);color:#2fbf9d;}
+.radar-kind-dump{background:rgba(224,64,64,.18);color:#ff6b6b;}
+.radar-ev-ret{font-size:10px;min-width:44px;}
+.radar-ev-z{font-size:9px;color:var(--text3);min-width:36px;}
+.radar-ev-age{font-size:9px;color:var(--text3);margin-left:auto;white-space:nowrap;}
+.radar-ev-pend{font-size:8px;color:#f59e0b;border:1px solid rgba(245,158,11,.4);border-radius:3px;padding:0 3px;}
+.radar-ev-rej{font-size:8px;color:var(--text3);border:1px solid var(--border);border-radius:3px;padding:0 3px;}
+.radar-empty{padding:16px;text-align:center;color:var(--text3);font-size:9px;}
+.radar-stats{padding:10px 12px;}
+.radar-stat-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid rgba(37,37,48,.5);}
+.radar-stat-h{font-size:10px;font-weight:600;color:#fff;min-width:38px;}
+.radar-stat-n{font-size:9px;color:var(--text3);min-width:70px;}
+.radar-stat-rate{font-size:12px;font-weight:700;min-width:52px;text-align:right;}
+.radar-bar{flex:1;height:6px;border-radius:3px;background:var(--bg4);overflow:hidden;}
+.radar-bar-fill{height:100%;border-radius:3px;transition:width .3s;}
+.radar-note{font-size:9px;color:var(--text3);padding:8px 2px 0;line-height:1.5;}
+.radar-out-c{font-size:9px;border-radius:3px;padding:1px 3px;font-weight:600;}
