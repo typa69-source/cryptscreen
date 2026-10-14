@@ -203,16 +203,14 @@ html,body{
 #cpanel{width:64%;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border);overflow:hidden;transition:width .2s}
 body.is-splitting #cpanel,body.is-splitting #fsChartArea{transition:none!important}
 #cgrid{flex:1;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);
-  overflow:hidden;background:var(--bg)}
-/* Grid separators: explicit borders on each cell. Inset box-shadow looked
-   cleaner on paper, but `isolation:isolate` on .ccell + overflow:hidden +
-   absolute-positioned chart child inside forms a stacking context where
-   the inset shadow gets covered by the chart canvas — so the right-edge
-   line between col 2 and col 3 disappeared. Borders don't have that
-   problem; the parent's overflow:hidden clips the rightmost/bottommost
-   edges so only the inner lines show. */
-.ccell{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;user-select:none;
-  border-right:1px solid var(--border);border-bottom:1px solid var(--border)}
+  overflow:hidden;background:var(--border);gap:1px}
+/* Grid separators: a 1px `gap` on the grid with the parent painted in
+   --border. Every inner column/row separator is then the SAME 1px line —
+   no reliance on per-cell borders, which dropped the col2|col3 line at
+   fractional 1fr track widths (subpixel rounding) and could be covered by
+   the cell's own stacking context. Outer edges show no line because a grid
+   gap only sits between tracks, never before the first / after the last. */
+.ccell{background:var(--bg);display:flex;flex-direction:column;overflow:hidden;user-select:none}
 .chead{height:24px;padding:0 4px 0 6px;display:flex;flex-direction:row;align-items:center;gap:5px;
   background:var(--bg3);border-bottom:1px solid var(--border);flex-shrink:0;user-select:none;overflow:hidden}
 .chead.wrap{height:28px}

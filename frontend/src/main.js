@@ -2286,7 +2286,7 @@ function drawCustomCrosshair(ctx,ch,W,H){
       const d=new Date((time-TZ_OFFSET_S)*1000);
       const pad=n=>n.toString().padStart(2,'0');
       // Use LOCAL timezone methods (getDate/getHours) • browser converts automatically
-      const tStr=`${pad(d.getDate())}.${pad(d.getMonth()+1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      const tStr=`${pad(d.getDate())}.${pad(d.getMonth()+1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
       let volStr='';
       const tMs=(time-TZ_OFFSET_S)*1000;
       const tfM=tfMs(S.fsCharts.includes(ch)?ch.tf:S.tf);
@@ -3366,6 +3366,16 @@ document.addEventListener('keydown',e=>{
     if(!blocks&&!rulerOn){
       e.preventDefault();
       if(!e.repeat)setDrawMode('hray');
+      return;
+    }
+  }
+  // SHIFT+D → trendline (diagonal). Mirrors the SHIFT+S horizontal-ray shortcut.
+  if(!qfOpen&&!editable&&!mod&&!e.altKey&&!e.isComposing&&e.shiftKey&&(code==='keyd'||key==='d'||key==='в')){
+    const blocks=document.getElementById('settingsModal')?.classList.contains('open')||!!document.getElementById('emaEditorModal')||!!document.getElementById('alertPctOverlay')||!!document.getElementById('gridLabModal');
+    const rulerOn=[...S.charts,...S.fsCharts].some(c=>c.ruler?.active);
+    if(!blocks&&!rulerOn){
+      e.preventDefault();
+      if(!e.repeat)setDrawMode('tline');
       return;
     }
   }
