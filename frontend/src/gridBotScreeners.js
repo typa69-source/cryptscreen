@@ -12,6 +12,12 @@ import {
   selectUniverse,
   passesMinVol,
 } from './grid-shared.js';
+import {
+  stepEconomics,
+  clampLevels,
+  swingPercentileComposite,
+  walkForwardGrid,
+} from './grid-economics.js';
 
 /**
  * Build a payload to pre-fill Grid Lab from a screener row.
@@ -171,15 +177,56 @@ export function calcChoppiness(kl, n = 14) {
   return (100 * Math.log10(ratio)) / Math.log10(n);
 }
 
+// Lanczos (g=7, n=9) log-gamma — accurate to ~15 significant digits.
+const _LANCZOS = [
+  0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+  771.32342877765313, -176.61502916214059, 12.507343278686905,
+  -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+];
+function logGamma(z) {
+  if (z < 0.5) {
+    // reflection formula: Γ(z)·Γ(1−z) = π / sin(πz)
+    return Math.log(Math.PI / Math.sin(Math.PI * z)) - logGamma(1 - z);
+  }
+  z -= 1;
+  let x = _LANCZOS[0];
+  for (let i = 1; i < _LANCZOS.length; i++) x += _LANCZOS[i] / (z + i);
+  const t = z + 7.5; // g + 0.5
+  return 0.5 * Math.log(2 * Math.PI) + (z + 0.5) * Math.log(t) - t + Math.log(x);
+}
+
+/** Anis–Lloyd expected R/S of iid noise for sample size n. */
+function anisLloydERS(n) {
+  if (!isFinite(n) || n < 2) return null;
+  let sum = 0;
+  for (let i = 1; i < n; i++) sum += Math.sqrt((n - i) / i);
+  const lg = logGamma((n - 1) / 2) - logGamma(n / 2) - 0.5 * Math.log(Math.PI);
+  return ((n - 0.5) / n) * Math.exp(lg) * sum;
+}
+
 export function hurstExponentRS(closes) {
-  const x = closes.filter((c) => isFinite(c) && c > 0);
-  if (x.length < 60) return null;
+  // Work on LOG-RETURNS, not price levels. R/S on levels measures the
+  // cumulative walk (always trending ⇒ H≈0.9 regardless of reversion);
+  // on returns it measures the actual persistence of the increments —
+  // which is what a grid bot cares about.
+  const px = closes.filter((c) => isFinite(c) && c > 0);
+  if (px.length < 60) return null;
+  const x = [];
+  for (let i = 1; i < px.length; i++) {
+    const r = Math.log(px[i] / px[i - 1]);
+    if (isFinite(r)) x.push(r);
+  }
+  if (x.length < 59) return null;
   const lens = [10, 12, 15, 20, 25, 30, 40].filter((L) => L * 3 <= x.length);
   const pts = [];
   for (const L of lens) {
     let acc = 0;
     let cnt = 0;
-    for (let start = 0; start + L <= x.length; start += L) {
+    // Quarter-overlapping windows (stride ⌊L/4⌋): more samples per L,
+    // less variance in the mean R/S — the walk still reads ≈0.5 and
+    // clean oscillators ≈0.9.
+    const stride = Math.max(1, Math.floor(L / 4));
+    for (let start = 0; start + L <= x.length; start += stride) {
       const seg = x.slice(start, start + L);
       const m = seg.reduce((a, b) => a + b, 0) / L;
       const y = seg.map((v) => v - m);
@@ -189,27 +236,41 @@ export function hurstExponentRS(closes) {
         return cum;
       });
       const R = Math.max(...w) - Math.min(...w);
-      const v = y.reduce((a, d) => a + d * d, 0) / L;
+      // σ with n−1 denominator — the R/S statistic Anis–Lloyd's E is
+      // derived for. Using n (as before) inflates R/S by √(n/(n−1)),
+      // which slopes the correction term and fakes H ≈ +0.36.
+      const v = y.reduce((a, d) => a + d * d, 0) / (L - 1);
       const s = Math.sqrt(v);
       if (s > 1e-12) {
         acc += R / s;
         cnt++;
       }
     }
-    if (cnt > 0) pts.push({ lx: Math.log(L), lry: Math.log(acc / cnt) });
+    if (cnt > 0) {
+      // ── Anis–Lloyd correction ──────────────────────────────────
+      // Raw R/S is upward-biased on short series (a random walk scores
+      // H≈0.6–0.7 on 100 points). Subtract the noise expectation:
+      // regress [log R/S − log E(R/S)] on log n; noise → slope 0,
+      // persistent → slope H−0.5. Final H = 0.5 + slope.
+      const obs = acc / cnt;
+      const eRS = anisLloydERS(L);
+      if (eRS != null && eRS > 0 && obs > 0) {
+        pts.push({ lx: Math.log(L), ly: Math.log(obs) - Math.log(eRS) });
+      }
+    }
   }
   if (pts.length < 2) return null;
   const nn = pts.length;
   const mx = pts.reduce((a, p) => a + p.lx, 0) / nn;
-  const my = pts.reduce((a, p) => a + p.lry, 0) / nn;
+  const my = pts.reduce((a, p) => a + p.ly, 0) / nn;
   let num = 0;
   let den = 0;
   for (const p of pts) {
-    num += (p.lx - mx) * (p.lry - my);
+    num += (p.lx - mx) * (p.ly - my);
     den += (p.lx - mx) ** 2;
   }
   if (den < 1e-12) return null;
-  return num / den;
+  return 0.5 + num / den;
 }
 
 export function countMa20Crossings30(last30) {
@@ -276,7 +337,8 @@ function scoreSwingCross(x) {
 
 function scoreSwingVm(ratio) {
   if (ratio == null || !isFinite(ratio)) return { pts: 0, label: 'N/A' };
-  if (ratio > 0.08) return { pts: 1, label: gbsFmt(ratio * 100, 2) + '%' };
+  // Three tiers (was two duplicated branches: 0.05 and >0.08 both gave 1 pt).
+  if (ratio >= 0.12) return { pts: 2, label: gbsFmt(ratio * 100, 2) + '%' };
   if (ratio >= 0.05) return { pts: 1, label: gbsFmt(ratio * 100, 2) + '%' };
   return { pts: 0, label: gbsFmt(ratio * 100, 2) + '%' };
 }
@@ -358,6 +420,8 @@ export function registerGridBotScreeners(deps) {
     const score = s1.pts + s2.pts + s3.pts + s4.pts + s5.pts + s6.pts + s7.pts;
     const stepAbs = atr14 != null ? atr14 * 0.5 : null;
     const stepPct = stepAbs != null && price > 0 ? (stepAbs / price) * 100 : null;
+    // Fee economics for the proposed step (2×maker + slippage).
+    const econ = stepPct != null ? stepEconomics(stepPct) : null;
 
     const ch24 = S.mx[sym]?.ch24 ?? S.tk[sym]?.c24 ?? null;
 
@@ -369,6 +433,24 @@ export function registerGridBotScreeners(deps) {
       if (isFinite(c0) && isFinite(c1) && c1 !== 0) h4ch = Math.abs((c0 / c1 - 1) * 100);
     }
 
+    // Walk-forward validation of the p5–p95 grid on the SAME daily bars
+    // (no extra requests): bounds from the train window, sim on the test.
+    const wf = kl.length >= 60
+      ? walkForwardGrid(kl, (train) => {
+          const cs = train.map((k) => +k.c).filter((c) => isFinite(c));
+          const a = calcATR(train, 14);
+          if (cs.length < 25 || a == null) return null;
+          const lo5 = percentileCloses(cs, 5);
+          const hi95 = percentileCloses(cs, 95);
+          if (lo5 == null || hi95 == null || !(hi95 > lo5)) return null;
+          const lower = Math.max(0.0001, lo5 - a * 0.5);
+          const upper = hi95 + a * 0.5;
+          const stp = a * 0.5;
+          if (!(stp > 0)) return null;
+          return { lower, upper, step: stp, levels: clampLevels((upper - lower) / stp) };
+        }, { folds: 3 })
+      : null;
+
     return {
       sym,
       ch24,
@@ -376,8 +458,14 @@ export function registerGridBotScreeners(deps) {
       price,
       score,
       band: bandFromScore(score),
-      gridLo: p5,
-      gridHi: p95,
+      econ,
+      wf,
+      // Displayed/Lab bounds MATCH the walk-forward-validated recipe:
+      // p5–p95 of the last-30 closes padded by 0.5×ATR each side.
+      gridLo: p5 != null && atr14 != null ? p5 - atr14 * 0.5 : p5,
+      gridHi: p95 != null && atr14 != null ? p95 + atr14 * 0.5 : p95,
+      gridLoRaw: p5,
+      gridHiRaw: p95,
       stepAbs,
       stepPct,
       breakdown: {
@@ -436,11 +524,16 @@ export function registerGridBotScreeners(deps) {
       if (ui.renderMeta) ui.renderMeta();
       const j4h = await klineCache.batchCached(syms, '4h', 14, null, null, 10);
 
-      ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length}`;
+      ui.diag = `universe ${syms.length}/${base.length || 0} · mcap ${mcapMap?.size || 0} · d1 ${Object.keys(d1 || {}).length} · 4h ${Object.keys(j4h || {}).length} · wf…`;
       const rows = [];
       for (const sym of syms) {
         const r = computeSwingRow(sym, d1, j4h, mcapMap);
         if (r) rows.push(r);
+      }
+      // Cross-sectional percentile composite (universe-relative, replaces
+      // nothing — an extra diagnostic next to the absolute score).
+      for (const r of rows) {
+        r.pc = swingPercentileComposite(r, rows);
       }
       ui.lastRows = rows;
       ui.lastRun = Date.now();
@@ -566,6 +659,7 @@ export function registerGridBotScreeners(deps) {
         if (key === 'adx') return r.raw?.adx;
         if (key === 'ch24') return r.ch24;
         if (key === 'h4ch') return r.h4ch;
+        if (key === 'wf') return r.wf?.hitRate ?? null;
         return null;
       };
       rows.sort((a, b) => {
@@ -581,7 +675,7 @@ export function registerGridBotScreeners(deps) {
       if (!tb) return;
       if (!rows.length) {
         const msg = ui.error || (ui.loading ? 'Загрузка…' : 'Нет результатов (проверь фильтры).');
-        tb.innerHTML = `<tr><td colspan="8" style="padding:10px 8px;color:var(--text3);font-size:10px">${escapeHtml(msg)}</td></tr>`;
+        tb.innerHTML = `<tr><td colspan="9" style="padding:10px 8px;color:var(--text3);font-size:10px">${escapeHtml(msg)}</td></tr>`;
         renderMeta();
         return;
       }
@@ -596,6 +690,22 @@ export function registerGridBotScreeners(deps) {
           .join(' ');
         const gl = r.gridLo != null && r.gridHi != null ? `${fmtPrice(r.gridLo)} … ${fmtPrice(r.gridHi)}` : '—';
         const st = r.stepAbs != null ? `${fmtPrice(r.stepAbs)} (${fn(r.stepPct, 2)}%)` : '—';
+        // Fee economics of the step: ✓ ratio≥3 / ~ ≥2 / ✗ below.
+        const econ = r.econ;
+        const econHtml = econ
+          ? `${econ.verdict} <span style="opacity:.6">${fn(econ.ratio, 1)}×</span>`
+          : '—';
+        const econTitle = econ
+          ? `Шаг ${fn(r.stepPct, 2)}% против комиссий ~${fn(2 * 0.02 + 0.01, 2)}% за круг: соотношение ${fn(econ.ratio, 1)}× (✓ ≥3×, ~ ≥2×)`
+          : '';
+        // Walk-forward: 3 фолда на тех же дневных барах.
+        const wf = r.wf;
+        const wfHtml = wf
+          ? `<span class="${wf.hitRate >= 0.66 ? 'p' : wf.hitRate >= 0.34 ? '' : 'n'}">${Math.round(wf.hitRate * 100)}%</span> <span style="opacity:.6">${fn(wf.medianNetPct, 1)}</span>`
+          : '—';
+        const wfTitle = wf
+          ? `Walk-forward (3 фолда): hit-rate ${Math.round(wf.hitRate * 100)}% · медиана ${fn(wf.medianNetPct, 1)}% за фолд · худший ${fn(wf.worstFold, 1)}% · ${(wf.folds || []).reduce((a, x) => a + (x.sim?.rt || 0), 0)} круг. сделок`
+          : 'Недостаточно истории';
         const ch24Class = (r.ch24 ?? 0) >= 0 ? 'p' : 'n';
         const ch24Txt = r.ch24 != null ? fn(r.ch24, 2) : '—';
         const h4Txt = r.h4ch != null ? fn(r.h4ch, 2) : '—';
@@ -604,10 +714,11 @@ export function registerGridBotScreeners(deps) {
           <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b style="cursor:pointer;color:#7dd3fc" class="gbs-open">${escapeHtml(r.sym.replace(/USDT$/, ''))}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">📊</button></div></td>
           <td class="${escapeHtml(ch24Class)}">${escapeHtml(ch24Txt)}%</td>
           <td>${escapeHtml(h4Txt)}%</td>
-          <td><span class="${escapeHtml(badgeCls)}">${escapeHtml(r.score)}</span></td>
+          <td><span class="${escapeHtml(badgeCls)}">${escapeHtml(r.score)}</span>${r.pc != null ? ` <span style="font-size:8px;opacity:.55" title="Перцентильный композит по вселенной">п${Math.round(r.pc)}</span>` : ''}</td>
           <td>${escapeHtml(adxTxt)}</td>
           <td>${escapeHtml(gl)}</td>
-          <td>${escapeHtml(st)}</td>
+          <td title="${escapeHtml(econTitle)}">${econHtml} <span style="opacity:.55">${escapeHtml(st)}</span></td>
+          <td title="${escapeHtml(wfTitle)}">${wfHtml}</td>
           <td style="font-size:9px;color:var(--text3)">${det}</td>`;
         frag.appendChild(tr);
       }
@@ -666,7 +777,8 @@ export function registerGridBotScreeners(deps) {
             <th class="gbs-th" data-k="score">Score</th>
             <th class="gbs-th" data-k="adx" title="ADX (Average Directional Index) — сила тренда. Для грида чаще лучше ниже.">ADX</th>
             <th class="gbs-th">Сетка p5–p95</th>
-            <th class="gbs-th">Шаг 0.5×ATR</th>
+            <th class="gbs-th" title="Экономика шага против комиссий (2×maker 0.02% + 0.01% слип). ✓ — шаг ≥3× комиссий, ~ — ≥2×">Шаг/ф</th>
+            <th class="gbs-th" data-k="wf" title="Walk-forward: 3 фолда, границы из train-окна, симуляция на test. Хит-рейт % и медианный нетто-доход за фолд.">WF</th>
             <th class="gbs-th" title="Наведи на теги метрик в строке — будет пояснение.">Метрики</th>
           </tr></thead>
           <tbody id="gbsSwingBody"></tbody>
@@ -1073,7 +1185,10 @@ export function registerGridBotScreeners(deps) {
   function volTrendScore(kl) {
     if (!kl || kl.length < 13) return { pts: 0, label: 'N/A', ratio: null };
     const recent = kl.slice(-4);
+    // Window −12..−8 (4 bars). The old kl.slice(-12, -8) skipped −8..−5,
+    // leaving a 3-bar hole between the compared windows.
     const old = kl.slice(-12, -8);
+    if (old.length !== 4) return { pts: 0, label: 'N/A', ratio: null };
     const a = recent.reduce((s, k) => s + k.qv, 0) / 4;
     const b = old.reduce((s, k) => s + k.qv, 0) / 4;
     if (b < 1e-9) return { pts: 0, label: '—', ratio: null };
@@ -1156,7 +1271,9 @@ export function registerGridBotScreeners(deps) {
     const stepAbs = atr15 != null ? atr15 * 0.5 : null;
     const stepPct = stepAbs != null && price > 0 ? (stepAbs / price) * 100 : null;
     let nLev = null;
-    if (gLo != null && gHi != null && stepAbs != null && stepAbs > 0) nLev = Math.round((gHi - gLo) / stepAbs);
+    if (gLo != null && gHi != null && stepAbs != null && stepAbs > 0) nLev = clampLevels((gHi - gLo) / stepAbs);
+    // Fee economics of the 0.5×ATR15 step (2×maker + slippage).
+    const econ = stepPct != null ? stepEconomics(stepPct) : null;
 
     const highs48 = kl.slice(-192).length ? kl.slice(-192) : kl;
     const hh = Math.max(...highs48.map((k) => k.h));
@@ -1205,6 +1322,7 @@ export function registerGridBotScreeners(deps) {
         spr: { ...spSc, tip: GRID_INTRADAY_TIPS.spr },
       },
       grid: { gLo, gHi, stepAbs, stepPct, nLev, price },
+      econ,
       flags,
       raw: { adx, volRatio: st1.volRatio, ch4h: st1.ch4h },
       ch24: ch24s,
@@ -1429,9 +1547,13 @@ export function registerGridBotScreeners(deps) {
               .join(' ');
             const tIn = ui.seen.has(r.sym) ? Math.round((ui.lastRun - ui.seen.get(r.sym)) / 60000) : 0;
             const g = r.grid;
+            const econ = r.econ;
+            const econTitle = econ
+              ? `Шаг ${fn(g.stepPct, 2)}% против комиссий ~0.05%: соотношение ${fn(econ.ratio, 1)}× (✓ ≥3×, ~ ≥2×)`
+              : '';
             const gridTxt =
               g.gLo != null
-                ? `${fmtPrice(g.gLo)} … ${fmtPrice(g.gHi)} · шаг ${fmtPrice(g.stepAbs)} (${fn(g.stepPct, 2)}%) · ~${g.nLev} ур.`
+                ? `${fmtPrice(g.gLo)} … ${fmtPrice(g.gHi)} · шаг ${fmtPrice(g.stepAbs)} (${fn(g.stepPct, 2)}%)${econ ? ` ${econ.verdict}` : ''} · ~${g.nLev} ур.`
                 : '—';
             return `<tr data-sym="${r.sym}">
             <td><div style="display:flex;align-items:center;justify-content:space-between;gap:6px"><b class="gbs-open" style="cursor:pointer;color:#7dd3fc">${r.sym.replace(/USDT$/, '')}</b><button class="gbs-lab-open" title="Открыть в Grid Lab с предложенными границами" style="cursor:pointer;background:transparent;border:0;color:#a78bfa;font-size:11px;padding:0 2px;line-height:1">📊</button></div></td>
@@ -1441,7 +1563,7 @@ export function registerGridBotScreeners(deps) {
             <td><span class="${badgeCls}">${r.score}</span></td>
             <td>${r.consHuman} (${r.consN}×15m)</td>
             <td style="font-size:9px">${fl || '—'}</td>
-            <td style="font-size:9px;color:var(--text3)">${gridTxt}</td>
+            <td title="${econTitle}" style="font-size:9px;color:var(--text3)">${gridTxt}</td>
             <td style="font-size:9px;color:var(--text3)">${bd}</td>
             <td style="font-size:9px;color:var(--text3)">в списке ~${tIn} мин</td>
           </tr>`;

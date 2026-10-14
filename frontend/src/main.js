@@ -69,7 +69,7 @@ import {
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, chartThemeColors, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines, fjBybit, fetchBybitTickers, fetchBybitKlines, batchBybitKlines } from './api.js'
-import { EXCHANGES, EXCHANGE_LABEL, EXCHANGE_BADGE, buildUniverse, resolveSymbolExchange, isBybitSymbol, tfToBybitInterval } from './exchanges.js'
+import { EXCHANGES, EXCHANGE_LABEL, exchangeMarkSvg, buildUniverse, buildAvailability, resolveSymbolExchange, isBybitSymbol, tfToBybitInterval } from './exchanges.js'
 import { visibleRange, ROW_HEIGHT, sortRows } from './screener-virtual.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
 import {
@@ -379,6 +379,10 @@ function loadExchangePrefs(){
   try{
     const p=localStorage.getItem('cs_exPriority');
     if(EXCHANGES.includes(p))S.exPriority=p;
+    const f=localStorage.getItem('cs_byVolFactor');
+    if(f!=null&&isFinite(+f))S.byVolFactor=Math.max(1,Math.min(20,+f|0));
+    const lf=localStorage.getItem('cs_exListFilter');
+    if(['all','binance','bybit'].includes(lf))S.exListFilter=lf;
     const raw=localStorage.getItem('cs_symExOverrides');
     if(raw){
       const ov=JSON.parse(raw);
@@ -1517,6 +1521,8 @@ function collectUserSettings(){
     theme:S.theme,
     exPriority:S.exPriority,
     symExOverrides:{...S.symExOverrides},
+    byVolFactor:S.byVolFactor,
+    exListFilter:S.exListFilter,
   };
 }
 
@@ -4394,45 +4400,44 @@ function scheduleRealtimeMetricRecalc(gen){
 // venue (priority exchange unless the user pinned a symbol). Bybit
 // tickers additionally provide funding + OI in the same payload.
 
-/** Rebuild the merged universe from S.tk (binance) + S.byTk (bybit).
- *  Recomputes S.syms (sorted), S.symAvail, S.symEx and syncs S.tk
- *  entries so every consumer sees the resolved venue's numbers. */
+/** Rebuild the merged universe.
+ *  Availability comes from RAW symbol arrays (binance symbol list kept
+ *  separately from the merged S.tk map) — never from S.tk itself, which
+ *  holds bybit tickers too and would fake binance-listing for every
+ *  bybit-only coin. */
 function applyExUniverse(){
-  const binanceOnly={};
-  for(const [sym,t] of Object.entries(S.tk)){
-    if(typeof sym==='string'&&sym.endsWith('USDT')&&sym.length>4)binanceOnly[sym]=t;
+  // Pure binance symbol list: captured when exchangeInfo / ticker loads,
+  // before bybit tickers merge into S.tk.
+  const binanceSyms=_binanceSymList.length?_binanceSymList:Object.keys(S.tk);
+  S.symAvail=buildAvailability(binanceSyms,S.exData.bybit?S.bySyms:[]);
+  S.symEx={};
+  const uniSet=new Set(Object.keys(S.symAvail));
+  for(const sym of uniSet){
+    S.symEx[sym]=resolveSymbolExchange(sym,S.symAvail,S.exPriority,S.symExOverrides);
   }
-  // Bybit availability is built from S.byTk; treat as absent when venue is down.
-  const bybitAvail = S.exData.bybit ? S.byTk : {};
-  const uni = buildUniverse(binanceOnly, bybitAvail, S.exPriority);
-  S.symAvail = {};
-  S.symEx = {};
-  for(const u of uni){
-    S.symAvail[u.sym]=u.exchanges;
-    S.symEx[u.sym]=resolveSymbolExchange(u.sym,S.symAvail,S.exPriority,S.symExOverrides);
+  S.syms=[...uniSet].sort();
+  // Merged ticker map: exactly one entry per universe symbol from its
+  // resolved venue. Binance rows win for binance-resolved symbols,
+  // bybit rows fill the rest.
+  const nextTk={};
+  for(const sym of S.syms){
+    const ex=S.symEx[sym];
+    if(ex==='bybit'&&S.byTk[sym])nextTk[sym]={...S.byTk[sym]};
+    else if(S.tk[sym])nextTk[sym]={...S.tk[sym]};
+    else if(S.byTk[sym])nextTk[sym]={...S.byTk[sym]};
   }
-  // Unified symbol list (universe is already sorted by qv desc, but the
-  // rest of the app expects plain alphabetical sorting like before).
-  S.syms = uni.map(u=>u.sym).sort();
-  // Ensure ticker entries exist for every universe symbol: Binance rows
-  // are already in S.tk; Bybit-only symbols get their ticker from S.byTk.
-  for(const u of uni){
-    if(u.ex==='bybit'&&!S.tk[u.sym]&&S.byTk[u.sym])S.tk[u.sym]={...S.byTk[u.sym]};
-  }
-  // Funding + OI straight from Bybit tickers (Binance fetches these via
-  // separate endpoints; here we get them for free for bybit symbols).
+  S.tk=nextTk;
+  // Funding from Bybit tickers for bybit-resolved symbols (Binance
+  // fetches funding separately via premiumIndex).
   if(S.exData.bybit){
     for(const [sym,t] of Object.entries(S.byTk)){
-      if(S.symEx[sym]==='bybit'){
-        if(t.fund&&isFinite(t.fund))_fundRates[sym]=t.fund;
-        if(t.oiUsd){
-          const mx=S.mx[sym];
-          if(mx&&mx.oi1h==null)mx.oi1h=null; // OIΔ needs history; left null until loop fills it
-        }
-      }
+      if(S.symEx[sym]==='bybit'&&t.fund&&isFinite(t.fund))_fundRates[sym]=t.fund;
     }
   }
 }
+
+// Raw Binance symbol list, captured before the bybit merge pollutes S.tk.
+let _binanceSymList=[];
 
 /** Which venue should this symbol's klines/chart be sourced from now? */
 function symExchange(sym){
@@ -4462,15 +4467,18 @@ function setSymExchange(sym,ex){
   schedulePersistUserSettings();
 }
 
-/** Render one exchange badge element from symbol availability. */
+/** Render one exchange badge element from symbol availability.
+ *  Brand mark: Binance = orange diamond, Bybit = dark square.
+ *  Single-listing coins get a strike-through-free dimmed mark and no
+ *  switch click (they physically exist on one venue only). */
 function paintExBadge(el,sym){
   if(!el)return;
-  if(!sym){el.textContent='';el.style.display='none';return;}
+  if(!sym){el.innerHTML='';el.style.display='none';return;}
   const ex=symExchange(sym);
   const avail=S.symAvail[sym];
   const onBoth=Array.isArray(avail)&&avail.length>1;
-  el.textContent=EXCHANGE_BADGE[ex]||'B';
-  el.className=`ex-badge ex-badge--${ex}${onBoth?' ex-badge--both':' ex-badge--single'}`;
+  el.innerHTML=exchangeMarkSvg(ex,onBoth?13:12);
+  el.className=`ex-badge${onBoth?'':' ex-badge--single'}`;
   el.title=onBoth
     ?`${EXCHANGE_LABEL[ex]} — клик: переключить на ${EXCHANGE_LABEL[ex==='binance'?'bybit':'binance']}`
     :`${EXCHANGE_LABEL[ex]} (только на этой бирже)`;
@@ -4499,6 +4507,47 @@ function toggleSymExchange(sym){
   const cur=symExchange(sym);
   const next=cur==='binance'?'bybit':'binance';
   setSymExchange(sym,next);
+}
+
+/** Bybit liquidity coefficient for the vol/trd filters (settings slider). */
+function setByVolFactor(v){
+  const f=Math.max(1,Math.min(20,(+v|0)||1));
+  if(f===S.byVolFactor)return;
+  S.byVolFactor=f;
+  try{localStorage.setItem('cs_byVolFactor',String(f));}catch(e){}
+  const val=document.getElementById('byVolFactorVal');
+  if(val)val.textContent='×'+f;
+  renderTable();
+  schedulePersistUserSettings();
+}
+
+/** Screener-list venue filter: 'all' | 'binance' | 'bybit'. */
+function setExListFilter(v){
+  if(!['all','binance','bybit'].includes(v))return;
+  if(v===S.exListFilter)return;
+  S.exListFilter=v;
+  try{localStorage.setItem('cs_exListFilter',v);}catch(e){}
+  syncExListFilterUi();
+  renderTable();
+  schedulePersistUserSettings();
+}
+
+/** Toolbar quick-toggle cycles all → binance → bybit. */
+function cycleExListFilter(){
+  const order=['all','binance','bybit'];
+  const next=order[(order.indexOf(S.exListFilter)+1)%order.length];
+  setExListFilter(next);
+}
+
+function syncExListFilterUi(){
+  const btn=document.getElementById('exFilterBtn');
+  if(!btn)return;
+  const v=S.exListFilter;
+  btn.classList.toggle('on',v!=='all');
+  btn.innerHTML=`${exchangeMarkSvg(v==='all'?S.exPriority:v,11)}<span style="margin-left:3px">${v==='all'?'Все':EXCHANGE_LABEL[v]}</span>`;
+  btn.title=v==='all'
+    ?'Показаны монеты со всех бирж — клик: только Binance'
+    :`Показаны только ${EXCHANGE_LABEL[v]} — клик: ${v==='binance'?'только Bybit':'все биржи'}`;
 }
 
 /** Global exchange priority for duplicated coins (settings). */
@@ -4721,6 +4770,7 @@ function updateFsHeaderValues(){
   const t=S.tk[S.fsSym]||{};const m=S.mx[S.fsSym]||{};
   ensureFsHeadStatsDom();
   layoutFsHeadStats();
+  paintExBadge(document.getElementById('fsExBadge'),S.fsSym);
   const fsp=document.getElementById('fsPrc');if(fsp)fsp.textContent=fmtPrice(t.p);
   const elChg=document.getElementById('fsStat-chg');
   if(elChg){
@@ -4800,8 +4850,26 @@ function sortedRows(){
   // narrow the row set, otherwise mini-charts and the FS screener would collapse to
   // a single symbol after typing in the search input.
   const bypassGroup=(sym)=>S.activeGroupFilter>0&&symbolInGroup(sym,S.activeGroupFilter);
-  if(S.minVol>0)rows=rows.filter(r=>(r.vol24!=null&&r.vol24>=S.minVol*1e6)||bypassGroup(r.sym));
-  if(S.minTrd>0)rows=rows.filter(r=>(r.trd24!=null&&r.trd24>=S.minTrd)||bypassGroup(r.sym));
+  // Liquidity filters honour the bybit coefficient: a bybit-sourced
+  // volume/trade count is scaled up by S.byVolFactor before comparison,
+  // so "50M" on the slider means "5M bybit" when the factor is 10.
+  const effVol=(r)=>{
+    const v=r.vol24;
+    if(v==null||!isFinite(v))return v;
+    return symExchange(r.sym)==='bybit'?v*(S.byVolFactor||1):v;
+  };
+  const effTrd=(r)=>{
+    const v=r.trd24;
+    if(v==null||!isFinite(v))return v;
+    return symExchange(r.sym)==='bybit'?v*(S.byVolFactor||1):v;
+  };
+  if(S.minVol>0)rows=rows.filter(r=>{const v=effVol(r);return (v!=null&&isFinite(v)&&v>=S.minVol*1e6)||bypassGroup(r.sym);});
+  if(S.minTrd>0)rows=rows.filter(r=>{const v=effTrd(r);return (v!=null&&isFinite(v)&&v>=S.minTrd)||bypassGroup(r.sym);});
+  // Venue filter for the list: all / binance only / bybit only
+  // (by resolved source of the row's data).
+  if(S.exListFilter==='binance'||S.exListFilter==='bybit'){
+    rows=rows.filter(r=>(symExchange(r.sym)||S.exPriority)===S.exListFilter);
+  }
   // Filters are exclusive: preset OR color group OR all
   if(S._potFilterPreset){
     const pr=S.potentialPresets.find(p=>p.id===S._potFilterPreset);
@@ -6073,6 +6141,23 @@ function renderSettingsGen(body){
     </div>
   </div>
   <div class="smodal-row">
+    <span class="smodal-lbl">Коэф. ликвидности Bybit <span style="font-size:9px;color:var(--text3)">× к фильтру ОБ/СДЛК</span></span>
+    <div style="display:flex;align-items:center;gap:8px;flex:1;justify-content:flex-end;max-width:280px">
+      <input type="range" id="byVolFactorSlider" min="1" max="20" step="1" value="${S.byVolFactor}"
+        oninput="setByVolFactor(this.value)" style="flex:1;max-width:180px">
+      <span id="byVolFactorVal" style="font-size:10px;color:var(--text3);min-width:22px">×${S.byVolFactor}</span>
+    </div>
+  </div>
+  <div class="smodal-row" style="flex-direction:column;align-items:stretch;gap:5px">
+    <span class="smodal-lbl">Список монет: показывать биржу</span>
+    <div class="smodal-btns" style="justify-content:flex-start">
+      ${tbtnHtml('exfAll','Все',"setExListFilter('all')",S.exListFilter==='all')}
+      ${tbtnHtml('exfB','Только Binance',"setExListFilter('binance')",S.exListFilter==='binance')}
+      ${tbtnHtml('exfY','Только Bybit',"setExListFilter('bybit')",S.exListFilter==='bybit')}
+    </div>
+    <div style="font-size:9px;color:var(--text3)">Фильтрует список по источнику данных монеты (как в бейдже). Все биржи и монеты — «Все».</div>
+  </div>
+  <div class="smodal-row">
     <span class="smodal-lbl">Сортировка изм. по модулю</span>
     <div class="smodal-btns">
       ${tbtnHtml('sabsOn','Вкл',"setSortAbs(true)",S.sortAbs)}
@@ -6848,6 +6933,8 @@ function hydrateUserSession(){
   }
   if(THEME_IDS.includes(ps.theme))applyTheme(ps.theme);
   if(EXCHANGES.includes(ps.exPriority))S.exPriority=ps.exPriority;
+  if(ps.byVolFactor!=null&&isFinite(+ps.byVolFactor))S.byVolFactor=Math.max(1,Math.min(20,+ps.byVolFactor|0));
+  if(['all','binance','bybit'].includes(ps.exListFilter))S.exListFilter=ps.exListFilter;
   if(ps.symExOverrides&&typeof ps.symExOverrides==='object'){
     const ov={};
     for(const [sym,ex] of Object.entries(ps.symExOverrides)){
@@ -6932,6 +7019,9 @@ async function main() {
     loadLineColorPrefs();
     loadUiPrefs();
     loadExchangePrefs();
+    // Toolbar venue-filter button paints early (before data lands) so it
+    // is never empty during boot.
+    syncExListFilterUi();
 
     // PERF: LightweightCharts is bundled via npm (imported at top of file).
     // No CDN round-trip, no network dependency — charts library is ready
@@ -7032,6 +7122,9 @@ async function main() {
           .filter(s => s?.contractType === 'PERPETUAL' && s?.quoteAsset === 'USDT' && s?.status === 'TRADING')
           .map(s => s.symbol)
           .sort();
+        // Capture the RAW binance symbol list BEFORE any bybit merge
+        // pollutes S.tk — availability derives from this list only.
+        _binanceSymList=[...S.syms];
         cacheSet('binance:symbols', S.syms, 24 * 60 * 60 * 1000);
       }
     } else {
@@ -7057,6 +7150,10 @@ async function main() {
     } else if (!_cacheHitTk) {
       console.warn('ticker/24hr failed:', tkResult.reason && tkResult.reason.message);
     }
+    // Fallback path (binance offline, IDB cache used): capture the cached
+    // binance symbol list as availability source too.
+    if(!_binanceSymList.length&&_cacheHitSyms&&S.syms.length)_binanceSymList=[...S.syms];
+    else if(!_binanceSymList.length&&_cacheHitTk)_binanceSymList=Object.keys(S.tk).filter(s=>s.endsWith('USDT'));
 
     // ── Multi-exchange universe build ─────────────────────────────
     // Merge Binance + Bybit by base symbol with the priority exchange
@@ -7065,7 +7162,7 @@ async function main() {
     // charts, screeners — works unchanged. Availability + resolved
     // venue per symbol live in S.symAvail / S.symEx.
     applyExUniverse();
-    ldSet(`Вселенная: ${S.syms.length} монет (Binance+S.bySyms.length)вЂ¦`,55);
+    ldSet(`Вселенная: ${S.syms.length} монет (Bybit: ${S.bySyms.length})вЂ¦`,55);
 
     ldSet('Вычисление метриквЂ¦',70);
     // Run the heavy per-symbol metric pass off the main thread when we
@@ -7102,6 +7199,7 @@ async function main() {
     rememberBinanceTickers();
     ensureBybitTickerLoop();
     updateAllExBadges();
+    syncExListFilterUi();
 
     // Defer trivial UI-sync calls so the loader can fade out and the
     // first paint of the chart grid happens immediately. These calls
@@ -7629,6 +7727,9 @@ window.openGroupManager   = openGroupManager;
 window.setSymGroup        = setSymGroup;
 window.toggleSymExchange  = toggleSymExchange;
 window.setExPriority      = setExPriority;
+window.setByVolFactor     = setByVolFactor;
+window.setExListFilter    = setExListFilter;
+window.cycleExListFilter  = cycleExListFilter;
 window.S                  = S;
 window.setDensityVisible  = setDensityVisible;
 window.setAlertSetting    = setAlertSetting;

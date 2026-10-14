@@ -576,9 +576,17 @@ test('confluenceScore: identical working+context → high agreement', () => {
 });
 
 test('confluenceScore: opposing working vs context → lower agreement', () => {
-  // Working = mean-reverting (HL fit succeeds), context = trending.
+  // Working = mean-reverting (HL fit succeeds), context = persistent
+  // (positive-ACF returns → Hurst > 0.55 under the returns-based R/S).
   const closesW = mrSeries(-0.03, 300, 100);
-  const closesC = trendSeries(300);
+  // Persistent-return context: AR(1) φ=+0.6 on returns (Hurst ≈ 0.7).
+  const closesC = [];
+  let r = 0;
+  for (let i = 0; i < 300; i++) {
+    r = r * 0.6 + (Math.random() - 0.5) * 0.01;
+    const prev = i === 0 ? 100 : closesC[closesC.length - 1];
+    closesC.push(Math.max(0.01, prev * (1 + r)));
+  }
   const klW = klinesFromCloses(closesW);
   const klC = klinesFromCloses(closesC);
   const sc = scoreSmart(klW, new Map(), 'BTCUSDT', () => 5e8);

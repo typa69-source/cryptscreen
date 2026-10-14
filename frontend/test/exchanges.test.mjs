@@ -9,8 +9,10 @@ import {
   bybitTickerToCommon,
   bybitBySymToList,
   buildUniverse,
+  buildAvailability,
   resolveSymbolExchange,
   exchangeForKlines,
+  exchangeMarkSvg,
   EXCHANGE_LABEL,
   isBybitSymbol,
 } from '../src/exchanges.js';
@@ -175,6 +177,36 @@ test('isBybitSymbol and EXCHANGE_LABEL basics', () => {
   assert.equal(EXCHANGE_LABEL.bybit, 'Bybit');
   assert.ok(EXCHANGES.includes('binance'));
   assert.ok(EXCHANGES.includes('bybit'));
+});
+
+// ─── Brand marks ────────────────────────────────────────────────
+test('exchangeMarkSvg renders distinct brand shapes per venue', () => {
+  const b = exchangeMarkSvg('binance');
+  const y = exchangeMarkSvg('bybit');
+  assert.ok(b.startsWith('<svg') && b.endsWith('</svg>'));
+  assert.ok(y.startsWith('<svg') && y.endsWith('</svg>'));
+  // Binance: rotated diamond, #f0b90b
+  assert.ok(b.includes('rotate(45'));
+  assert.ok(b.includes('#f0b90b'));
+  // Bybit: dark square with orange stroke
+  assert.ok(y.includes('#f7ab00'));
+  assert.ok(y.includes('#101114'));
+  assert.ok(!b.includes('#101114'));
+  // sizes clamp
+  assert.ok(exchangeMarkSvg('binance', 2).includes('width="8"'));
+  assert.ok(exchangeMarkSvg('binance', 99).includes('width="24"'));
+});
+
+// ─── Availability map ───────────────────────────────────────────
+test('buildAvailability derives listing purely from symbol arrays, not from the merged ticker map', () => {
+  const av = buildAvailability(['BTCUSDT', 'DOGEUSDT'], ['BTCUSDT', 'STONKUSDT']);
+  assert.deepEqual(av.BTCUSDT, ['binance', 'bybit']);
+  assert.deepEqual(av.DOGEUSDT, ['binance']);
+  assert.deepEqual(av.STONKUSDT, ['bybit']);
+  // junk filtered
+  const av2 = buildAvailability(['BTCUSDC', 'X'], ['SOLUSDA']);
+  assert.equal(Object.keys(av2).length, 0);
+  assert.deepEqual(buildAvailability(null, null), {});
 });
 
 // ─── REST path builders (pure string functions) ─────────────────

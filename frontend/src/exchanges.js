@@ -22,8 +22,16 @@ export const EXCHANGES = ['binance', 'bybit'];
 
 export const EXCHANGE_LABEL = { binance: 'Binance', bybit: 'Bybit' };
 
-/** Short badge text for headers: B / Y. */
-export const EXCHANGE_BADGE = { binance: 'B', bybit: 'Y' };
+/** Brand-mark SVG for an exchange: Binance = orange diamond,
+ *  Bybit = dark square with orange edge. Inline, theme-safe. */
+export function exchangeMarkSvg(ex, size = 13) {
+  const s = Math.max(8, Math.min(24, size | 0));
+  if (ex === 'bybit') {
+    return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2.5" fill="#101114" stroke="#f7ab00" stroke-width="2"/><rect x="8" y="12" width="8" height="3.2" rx="1" fill="#f7ab00"/></svg>`;
+  }
+  // Binance diamond (rotated square) with white gap, orange fill.
+  return `<svg width="${s}" height="${s}" viewBox="0 0 24 24" aria-hidden="true"><g transform="rotate(45 12 12)"><rect x="5.2" y="5.2" width="13.6" height="13.6" rx="1.6" fill="#f0b90b"/><rect x="8.6" y="8.6" width="6.8" height="6.8" rx="0.8" fill="#c9960a"/></g></svg>`;
+}
 
 export const BYBIT_API = 'https://api.bybit.com/v5/market';
 export const BYBIT_WS = 'wss://stream.bybit.com/v5/public/linear';
@@ -115,6 +123,26 @@ export function buildUniverse(binance, bybit, priority = 'binance') {
   }
   uni.sort((a, c) => (c.qv || 0) - (a.qv || 0));
   return uni;
+}
+
+/**
+ * Availability map from RAW symbol arrays (not the merged ticker map):
+ *   { SYM: ['binance','bybit'] }
+ * This is the single source of truth for "is this coin listed on X".
+ * It must never be derived from S.tk — that map holds merged tickers
+ * and would make every bybit coin look binance-listed too.
+ */
+export function buildAvailability(binanceSyms, bybitSyms) {
+  const clean = (arr) => {
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(s => typeof s === 'string' && s.endsWith('USDT') && s.length > 4);
+  };
+  const b = new Set(clean(binanceSyms));
+  const y = new Set(clean(bybitSyms));
+  const out = {};
+  for (const s of b) out[s] = ['binance', ...(y.has(s) ? ['bybit'] : [])];
+  for (const s of y) if (!out[s]) out[s] = ['bybit'];
+  return out;
 }
 
 /**

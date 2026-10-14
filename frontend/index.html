@@ -165,6 +165,7 @@
     <button class="tbtn" id="oiChartBtn" onclick="toggleOiChart()" title="Показать/скрыть OI линию на графиках">OI: ВЫКЛ</button>
 
     <div class="tright">
+      <button class="tbtn" id="exFilterBtn" onclick="cycleExListFilter()" title="Показать монеты только одной биржи" style="display:inline-flex;align-items:center"><svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true"><g transform="rotate(45 12 12)"><rect x="5.2" y="5.2" width="13.6" height="13.6" rx="1.6" fill="#f0b90b"/><rect x="8.6" y="8.6" width="6.8" height="6.8" rx="0.8" fill="#c9960a"/></g></svg><span style="margin-left:3px">Все</span></button>
       <div class="vol-slider-wrap filter-slider-wrap">
         <span style="font-size:9px;color:var(--text3);flex-shrink:0">ОБ≥</span>
         <input type="range" class="vol-slider" id="volSlider" min="0" max="25" step="1" value="0" oninput="onVolFilter(this.value)">

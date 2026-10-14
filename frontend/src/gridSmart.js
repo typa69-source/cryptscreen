@@ -340,15 +340,24 @@ export function scoreSmart(klines, mcapMap, sym, vol24For) {
   // ── Directional confidence (max 3) ─────────────────────────
   let dir = 0;
   const dirComponents = {};
-  const adfSign = adf ? Math.sign(adf.gamma) : 0;
+  // ADF: only a SIGNIFICANT γ counts as a vote. 5% critical t for the
+  // intercept+1-lag regression on ~100 obs ≈ −2.89; above it the
+  // unit-root null stands and ADF abstains instead of voting with noise.
+  const ADF_CRIT_5PCT = -2.89;
+  const adfSign = adf && adf.stat != null && isFinite(adf.stat)
+    ? (adf.stat <= ADF_CRIT_5PCT ? Math.sign(adf.gamma) : 0)
+    : (adf ? Math.sign(adf.gamma) : 0);
   const slopeSign = slope != null ? Math.sign(slope) : 0;
   if (adfSign !== 0 && slopeSign !== 0 && adfSign === slopeSign) {
     dir += 2;
-    dirComponents.adfSlope = { pts: 2, label: `ADF γ=${adf.gamma.toFixed(3)}, slope=${slope.toFixed(2)}` };
+    dirComponents.adfSlope = { pts: 2, label: `ADF γ=${adf.gamma.toFixed(3)} (t=${adf.stat?.toFixed(2) ?? '—'}${(adf.stat ?? 0) <= -2.89 ? ' знач.' : ''}), slope=${slope.toFixed(2)}` };
   } else {
-    dirComponents.adfSlope = { pts: 0, label: `ADF γ=${adf?.gamma?.toFixed(3) ?? 'N/A'}, slope=${slope?.toFixed(2) ?? 'N/A'}` };
+    const adfNote = adf?.stat != null && isFinite(adf.stat) && adf.stat > -2.89
+      ? `t=${adf.stat.toFixed(2)} > −2.89 (не знач.)`
+      : `ADF γ=${adf?.gamma?.toFixed(3) ?? 'N/A'}`;
+    dirComponents.adfSlope = { pts: 0, label: `${adfNote}, slope=${slope?.toFixed(2) ?? 'N/A'}` };
   }
-  dirComponents.adfSlope.tip = 'ADF (стационарность) и slope (наклон) согласны по знаку → направление подтверждено двумя независимыми тестами.';
+  dirComponents.adfSlope.tip = 'ADF (стационарность, учитывается только при t ≤ −2.89 — иначе тест не значим) и slope (наклон) согласны по знаку → направление подтверждено.';
   if (hurst != null && hurst > 0.55 && slopeSign !== 0) {
     dir += 1;
 dirComponents.hurstTrend = { pts: 1, label: `H=${hurst.toFixed(3)}>0.55, slope≠ 0` };
@@ -438,9 +447,21 @@ export function ouGridBounds(closes, klines) {
     ? 12                                // trending fallback
     : optimalLevelsForHalfLife(hlRaw, x.length);
 
-  // μ = geometric mean of closes (= exp(mean(log(closes))))
+  // μ = EWMA of log-closes (adaptive centre). The old geometric mean of the
+  // FULL history dragged the grid to ancient regimes; a decay-weighted
+  // mean tracks the current equilibrium while still smoothing noise.
+  // λ = 0.94 (≈ the RiskMetrics volatility decay) puts ~50% of the weight
+  // on the most recent ~11 bars.
+  const lambda = 0.94;
   const logPrices = x.map((v) => Math.log(v));
-  const logMu = logPrices.reduce((a, b) => a + b, 0) / logPrices.length;
+  let wSum = 1;
+  let acc = logPrices[logPrices.length - 1];
+  for (let i = logPrices.length - 2, k = 1; i >= 0; i--, k++) {
+    const w = Math.pow(lambda, k);
+    acc += logPrices[i] * w;
+    wSum += w;
+  }
+  const logMu = acc / wSum;
 
   // Span: ±1.5 σ_T (covers ~87% of expected distribution over one half-life)
   const sigmaT = gk * Math.sqrt(hlUsed);

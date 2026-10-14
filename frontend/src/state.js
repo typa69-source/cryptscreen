@@ -212,6 +212,12 @@ export const S = {
   exPriority:'binance',
   bySyms:[], byTk:{}, symEx:{}, symExOverrides:{}, symAvail:{},
   exData:{binance:true, bybit:false},
+  // Bybit liquidity coefficient: bybit vol24/trd24 are compared against
+  // the Binance-scale minVol/minTrd filters AFTER multiplying by this.
+  // 10 = bybit volume counts as 10× (i.e. 5M$ bybit ≈ 50M$ binance).
+  byVolFactor:10,
+  // Screener list venue filter: 'all' | 'binance' | 'bybit'.
+  exListFilter:'all',
   charts: Array.from({length:9},()=>mkChart()),
   wsScreener:null, wsCharts:null, wsChartTrades:null, wsBybitCharts:null, wsFs:null,
   sortId:'vol24', sortDir:'desc', sortAlpha:false,
