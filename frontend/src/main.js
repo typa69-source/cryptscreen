@@ -1,7 +1,5 @@
 import './style.css'
 import * as LightweightCharts from 'lightweight-charts'
-import { registerGridBotScreeners, buildGridLabPayload } from './gridBotScreeners.js'
-import { registerGridSmartScreener } from './gridSmart.js'
 import {
   openEmaEditorModal,
   refreshEmaButtonState as refreshEmaButtonStateUi,
@@ -374,6 +372,66 @@ if (getToken()) {
   startApp()
 } else {
   buildAuthUI()
+}
+
+// PERF: the four Grid screener modals (Swing/Intra/Pick/Smart, ~220KB of
+// source) are only needed on a button click. Load their modules on demand
+// and register window handlers as a facade now — the header buttons work
+// immediately, the heavy code arrives in parallel with the first click.
+const _gridModsLoaded = { bots: null, smart: null, botsModule: null };
+async function ensureGridBotScreeners() {
+  if (!_gridModsLoaded.bots) {
+    const mod = await import('./gridBotScreeners.js');
+    _gridModsLoaded.bots = mod.registerGridBotScreeners;
+    _gridModsLoaded.botsModule = mod;
+  }
+  return _gridModsLoaded.bots;
+}
+async function ensureGridSmartScreener() {
+  if (!_gridModsLoaded.smart) {
+    const { registerGridSmartScreener } = await import('./gridSmart.js');
+    _gridModsLoaded.smart = registerGridSmartScreener;
+  }
+  return _gridModsLoaded.smart;
+}
+
+async function registerGridBotScreenersLazy() {
+  const reg = await ensureGridBotScreeners();
+  reg({
+    S,
+    BACKEND,
+    fj,
+    parseKlines,
+    batchKlines,
+    fn,
+    fmtPrice,
+    openFullscreenBySym,
+    openGridLabFromRow,
+    bollingerOnTail,
+    calcATR,
+    GROUP_COLORS,
+    calcAll,
+    tagScreenerGroup: (sym, g) => {
+      if (sym && g > 0) setSymGroup(sym, g);
+    },
+  });
+}
+async function registerGridSmartScreenerLazy() {
+  const reg = await ensureGridSmartScreener();
+  reg({
+    S,
+    BACKEND,
+    fj,
+    batchKlines,
+    fn,
+    fmtPrice,
+    openFullscreenBySym,
+    openGridLabFromRow,
+    GROUP_COLORS,
+    tagScreenerGroup: (sym, g) => {
+      if (sym && g > 0) setSymGroup(sym, g);
+    },
+  });
 }
 
 
@@ -7322,6 +7380,9 @@ async function main() {
 const RADAR_STORAGE_KEY = 'radarLog.v1';
 const RADAR_SCAN_INTERVAL_MS = 60 * 1000; // full universe pass cadence
 const RADAR_TOP_SYMS = 120; // scan the liquid top of the universe
+// Klines are shared with the metrics pipeline (S.k5m): the radar reads
+// cached bars first and only fetches what's missing. A separate 120×400
+// fetch per minute would be ~6MB/min (363MB/h) of duplicate traffic.
 
 let _radar = null;
 let _radarTimer = null;
@@ -7359,9 +7420,24 @@ async function radarScanPass(){
     const syms=radarScanUniverse();
     if(!syms.length){setRadarScanStatus('нет данных');return;}
     const scan=radarGet();
+    // Shared-cache fetcher: S.k5m already holds 5m bars for the metric
+    // pipeline (36 syms/20s rotating); fetch only what's missing or stale.
+    // Radar needs the freshest bar, so a cache older than 1 bar (5m) is
+    // re-fetched — but only for that symbol.
+    const BAR_MS=5*60000;
     const fetcher={fetchKlines:async(sym,tf,limit)=>{
-      const r=await fetchKlinesFor(sym,tf,limit);
-      return r&&r.candles?r.candles:[];
+      if(tf!=='5m')return[];
+      const cached=S.k5m[sym];
+      const fresh=cached&&cached.length&&Date.now()-cached[cached.length-1].t<2*BAR_MS;
+      if(fresh&&cached.length>=Math.min(limit,120))return cached;
+      try{
+        const r=await fetchKlinesFor(sym,tf,limit);
+        if(r&&r.candles&&r.candles.length){
+          if(r.candles.length>(cached?cached.length:0))S.k5m[sym]=r.candles;
+          return r.candles;
+        }
+      }catch(e){}
+      return cached||[];
     }};
     scan.fetcher=fetcher;
     const t0=performance.now();
@@ -7441,11 +7517,16 @@ function radarStartLoop(){
   if(_radarTimer)return;
   _radarTimer=setInterval(()=>{
     if(document.hidden)return;
-    // scan only when the panel is open OR every 5th tick (background
-    // accumulation so hit-rate stats keep growing without the panel)
-    void radarScanPass();
+    // Background accumulation: scan when the panel is open, plus every
+    // 3rd tick (every ~3min) so hit-rate stats keep growing without the
+    // panel. Fetches are mostly served from the shared S.k5m cache.
+    const every3=(_radarTick=((_radarTick||0)+1))%3===0;
+    if(isRadarPanelOpen()||every3){
+      void radarScanPass();
+    }
   },RADAR_SCAN_INTERVAL_MS);
 }
+let _radarTick=0;
 
 // ───────────────────────────────────────────────────────────────
 //  POTENTIAL MONITOR • multi-preset tabbed system
@@ -7798,9 +7879,13 @@ function toggleGridLab(){
 /**
  * Open Grid Lab with a pre-filled payload from a screener row.
  * Does NOT close the calling screener modal • Grid Lab opens on top (z 820 vs 825).
+ * The payload builder is tiny pure logic — but its module (gridBotScreeners)
+ * is an on-demand chunk now, so the builder is imported dynamically. By the
+ * time a screener row exists, the chunk is already loaded (its modal is open).
  */
 function openGridLabFromRow(row, source, closeSelf){
-  const payload = buildGridLabPayload(row, source);
+  const { buildGridLabPayload } = _gridModsLoaded.botsModule || {};
+  const payload = buildGridLabPayload ? buildGridLabPayload(row, source) : null;
   if(!payload || !payload.sym) return;
   const prefs = loadGridLabPrefs();
   // Apply suggested lower/upper and grid levels from screener.
@@ -7863,39 +7948,14 @@ function setLineColor(col,el){
 }
 function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 
-registerGridBotScreeners({
-  S,
-  BACKEND,
-  fj,
-  parseKlines,
-  batchKlines,
-  fn,
-  fmtPrice,
-  openFullscreenBySym,
-  openGridLabFromRow,
-  bollingerOnTail,
-  calcATR,
-  GROUP_COLORS,
-  calcAll,
-  tagScreenerGroup: (sym, g) => {
-    if (sym && g > 0) setSymGroup(sym, g);
-  },
-});
-
-registerGridSmartScreener({
-  S,
-  BACKEND,
-  fj,
-  batchKlines,
-  fn,
-  fmtPrice,
-  openFullscreenBySym,
-  openGridLabFromRow,
-  GROUP_COLORS,
-  tagScreenerGroup: (sym, g) => {
-    if (sym && g > 0) setSymGroup(sym, g);
-  },
-});
+// PERF: grid screener modules are lazy now (see ensureGridBotScreeners).
+// Each facade loads the module first — the module then installs the REAL
+// window handler (gridBotScreeners.js does `window.openGridSwingScreener = ...`
+// at the end of its registration) — and forwards this first click to it.
+window.openGridSwingScreener = async () => { await registerGridBotScreenersLazy(); if (typeof window.openGridSwingScreener === 'function') window.openGridSwingScreener(); };
+window.openGridIntradayScreener = async () => { await registerGridBotScreenersLazy(); if (typeof window.openGridIntradayScreener === 'function') window.openGridIntradayScreener(); };
+window.openGridPickScreener = async () => { await registerGridBotScreenersLazy(); if (typeof window.openGridPickScreener === 'function') window.openGridPickScreener(); };
+window.openGridSmartScreener = async () => { await registerGridSmartScreenerLazy(); if (typeof window.openGridSmartScreener === 'function') window.openGridSmartScreener(); };
 
 // ───────────────────────────────────────────────────────────────
 // ───────────────────────────────────────────────────────────────
