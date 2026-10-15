@@ -68,7 +68,7 @@ import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIS
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines, fjBybit, fetchBybitTickers, fetchBybitKlines, batchBybitKlines } from './api.js'
 import { EXCHANGES, EXCHANGE_LABEL, exchangeMarkSvg, buildUniverse, buildAvailability, resolveSymbolExchange, isBybitSymbol, tfToBybitInterval } from './exchanges.js'
-import { visibleRange, ROW_HEIGHT, sortRows } from './screener-virtual.js'
+import { visibleRange, ROW_HEIGHT, sortRows, effLiquidity, liquidityPasses } from './screener-virtual.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
 import {
   DEFAULT_DENSITY_SETTINGS,
@@ -5016,30 +5016,13 @@ function sortedRows(){
   // THOSE, without the coefficient, so "Binance only" is honest
   // Binance-scale volume and "Bybit only" is honest Bybit scale.
   const listVenue=(S.exListFilter==='binance'||S.exListFilter==='bybit')?S.exListFilter:null;
-  const effVol=(r)=>{
-    // Prefer the PINNED venue's native numbers: when the pin differs from
-    // the symbol's resolved venue, that side lives in S.tkOther; when the
-    // pin MATCHES the resolved venue (or there is no pin), the row's own
-    // numbers already are that venue's. The old code always preferred
-    // tkOther, so "Binance" pin on binance-priority compared BYBIT numbers
-    // (tr=0) and the minTrd filter emptied the whole list.
-    const src=symExchange(r.sym);
-    const other=(listVenue&&listVenue!==src)?S.tkOther[r.sym]:null;
-    const v=other?other.qv:r.vol24;
-    if(v==null||!isFinite(v))return v;
-    const effSrc=other?listVenue:src;
-    return effSrc==='bybit'?v*(S.byVolFactor||1):v;
-  };
-  const effTrd=(r)=>{
-    const src=symExchange(r.sym);
-    const other=(listVenue&&listVenue!==src)?S.tkOther[r.sym]:null;
-    const v=other?other.tr:r.trd24;
-    if(v==null||!isFinite(v))return v;
-    const effSrc=other?listVenue:src;
-    return effSrc==='bybit'?v*(S.byVolFactor||1):v;
-  };
-  if(S.minVol>0)rows=rows.filter(r=>{const v=effVol(r);return (v!=null&&isFinite(v)&&v>=S.minVol*1e6)||bypassGroup(r.sym);});
-  if(S.minTrd>0)rows=rows.filter(r=>{const v=effTrd(r);return (v!=null&&isFinite(v)&&v>=S.minTrd)||bypassGroup(r.sym);});
+  // Liquidity filters use the shared, unit-tested evaluator. Key semantics:
+  // Bybit reports NO trade count (tr=0) — that is UNKNOWN, not zero, so a
+  // minTrd threshold can never hard-reject a bybit-only coin (the "Bybit
+  // pin + сделки>0 → пустой список" bug). Unknown vol/trade shows '•'.
+  const lqCtx={listVenue,symEx:S.symEx,tkOther:S.tkOther,byVolFactor:S.byVolFactor||1};
+  if(S.minVol>0)rows=rows.filter(r=>liquidityPasses(r,lqCtx,'vol',S.minVol*1e6)||bypassGroup(r.sym));
+  if(S.minTrd>0)rows=rows.filter(r=>liquidityPasses(r,lqCtx,'trd',S.minTrd)||bypassGroup(r.sym));
   // Venue filter for the list: by LISTING (symAvail), not by data source.
   // A coin listed on both venues but sourced from Bybit (priority/override)
   // must still appear under "Binance only" — the user filters exchanges,
@@ -5283,13 +5266,19 @@ function updateScreenerRow(row,m,cols,inChart){
       // numbers (the filter compares those too, see sortedRows). Only
       // when the pin differs from the RESOLVED venue — otherwise the
       // row's own numbers are already the pinned venue's.
+      // trd24: a 0 trade count is a reporting artifact (Bybit reports
+      // no trade counts) → display unknown, not a fake "0K".
       const pinnedVenue=(S.exListFilter==='binance'||S.exListFilter==='bybit')?S.exListFilter:null;
       if(pinnedVenue&&(c.id==='vol24'||c.id==='trd24')&&symExchange(sym)!==pinnedVenue){
         const other=S.tkOther&&S.tkOther[sym];
         if(other){
           if(c.id==='vol24'&&other.qv!=null&&isFinite(other.qv))return other.qv;
-          if(c.id==='trd24'&&other.tr!=null&&isFinite(other.tr))return other.tr;
+          if(c.id==='trd24'&&other.tr>0&&isFinite(other.tr))return other.tr;
         }
+      }
+      if(c.id==='trd24'){
+        const v=m[c.id];
+        return (v==null||!isFinite(v)||v===0)?null:v;
       }
       return m[c.id];
     })();

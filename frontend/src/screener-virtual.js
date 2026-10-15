@@ -153,3 +153,52 @@ export function scrollOffsetForRow(rowIndex, rowHeight = ROW_HEIGHT) {
   if (!Number.isFinite(rowIndex) || rowIndex < 0) return 0;
   return rowIndex * rowHeight;
 }
+
+/**
+ * Effective trade-count / volume for the liquidity filters, honouring the
+ * venue pin and the bybit liquidity coefficient.
+ *
+ * SEMANTICS (the bug this fixes): Bybit's API carries NO trade count
+ * (tr=0 in the common shape) and klines of some venues report 0 volume
+ * for thin symbols. A threshold slider must never treat "venue doesn't
+ * report this metric" as "value is zero" — otherwise pinning Bybit with
+ * minTrd>0 empties the whole list. Rules:
+ *   - value == null / NaN / 0-from-venue  → UNKNOWN → filter PASSES
+ *     (an unknown must not be a hard reject; the row shows '•')
+ *   - real value present → compared against the threshold with the
+ *     bybit coefficient applied when the effective source is bybit.
+ * @param {object} row   row object (sym, vol24, trd24)
+ * @param {object} ctx   {listVenue, symEx, tkOther, byVolFactor}
+ * @param {'vol'|'trd'} which
+ * @returns {number|null} effective value or null when unknown
+ */
+export function effLiquidity(row, ctx, which) {
+  if (!row || !row.sym) return null;
+  const listVenue = ctx && ctx.listVenue;
+  const symEx = ctx && ctx.symEx;
+  const tkOther = ctx && ctx.tkOther;
+  const factor = (ctx && ctx.byVolFactor) || 1;
+  const src = (symEx && symEx[row.sym]) || null;
+  const other = listVenue && listVenue !== src ? (tkOther && tkOther[row.sym]) : null;
+  let v;
+  if (which === 'trd') v = other ? other.tr : row.trd24;
+  else v = other ? other.qv : row.vol24;
+  if (v == null || !isFinite(v)) return null;
+  // 0 is a legitimate value ONLY for volume; a 0 trade count is a
+  // reporting artifact (Bybit) → treat as unknown.
+  if (which === 'trd' && v === 0) return null;
+  const effSrc = other ? listVenue : src;
+  return effSrc === 'bybit' ? v * factor : v;
+}
+
+/**
+ * Whether a liquidity threshold passes for a row. Unknown values pass
+ * (see effLiquidity): the threshold filters what we KNOW, and a venue
+ * that does not report the metric cannot hard-reject its coins.
+ */
+export function liquidityPasses(row, ctx, which, threshold) {
+  if (!(threshold > 0)) return true;
+  const v = effLiquidity(row, ctx, which);
+  if (v == null) return true; // unknown → passes
+  return v >= threshold;
+}
