@@ -2043,22 +2043,32 @@ async function loadMoreHistory(slot){
     const doSet=()=>{
       if(!ch.cs||!ch.lc)return;
       try{
+        // Read the CURRENT time window immediately before replacing the
+        // data — doSet only runs once the user's pan has ended, so this is
+        // their live position. Restoring the SAME TIME RANGE is immune to
+        // prepend/trim index math: LWC itself shifts the logical range on
+        // setData, so the old logical-range+realShift restore compensated
+        // TWICE and yanked the view toward newer bars (the "magnet" bug).
+        let vTimeNow=null;
+        try{
+          const tsNow=ch.lc.timeScale();
+          vTimeNow=(typeof tsNow.getVisibleRange==='function')?tsNow.getVisibleRange():null;
+        }catch(e){}
+        if(!vTimeNow||vTimeNow.from==null||vTimeNow.to==null)vTimeNow=(vTime&&vTime.from!=null&&vTime.to!=null)?vTime:null;
         ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
         const tsScale=ch.lc.timeScale();
         const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
         try{tsScale.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
-        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
-          // Re-read the CURRENT range right before restoring: the user may
-          // have kept panning during the fetch+idle wait. Restoring a stale
-          // range snaps the chart back ("magnet"). Anchor the restore on
-          // where the view is NOW, shifted by the real index shift.
-          let curRange=null;
-          try{curRange=(typeof tsScale.getVisibleLogicalRange==='function')?tsScale.getVisibleLogicalRange():null;}catch(e){}
-          const baseRange=(curRange&&typeof curRange.from==='number'&&typeof curRange.to==='number'
-            &&Math.abs((curRange.to-curRange.from)-(logRange.to-logRange.from))<0.5)?curRange:logRange;
-          try{tsScale.setVisibleLogicalRange({from:baseRange.from+realShift,to:baseRange.to+realShift});}catch(e){}
-        }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{tsScale.setVisibleRange(vTime);}catch(e){}}
+        if(vTimeNow){
+          // TIME-anchored restore: whatever indexes the bars now occupy,
+          // the same wall-clock window stays on screen.
+          try{tsScale.setVisibleRange(vTimeNow);}catch(e){}
+        }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
+          // Legacy fallback (time-range API unavailable): index math with
+          // the real shift after cache trim.
+          try{tsScale.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
+        }
         try{
           const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
@@ -5047,7 +5057,17 @@ function sortedRows(){
   // The old inline comparator had the same rules but was duplicated logic;
   // sp5 legacy alias maps to the volume-spark field. sortRows is stable and
   // never mutates the source array.
-  const sorted=sortRows(rows,{key:S.sortId,dir:S.sortDir,abs:!!S.sortAbs,alpha:!!S.sortAlpha});
+  // Venue pin: sort vol/trd by the SAME effective numbers the rows DISPLAY
+  // (the pinned venue's native side, tkOther for dual listings). Sorting by
+  // the resolved venue's hidden numbers while the column shows the pinned
+  // venue's made the order look random under a Bybit pin.
+  let sortKey=S.sortId;
+  if((S.sortId==='vol24'||S.sortId==='trd24')&&listVenue){
+    const which=S.sortId==='vol24'?'vol':'trd';
+    rows=rows.map(r=>({...r,_lq:effLiquidity(r,lqCtx,which)}));
+    sortKey='_lq';
+  }
+  const sorted=sortRows(rows,{key:sortKey,dir:S.sortDir,abs:!!S.sortAbs,alpha:!!S.sortAlpha});
   return sorted;
 }
 
@@ -6763,20 +6783,23 @@ async function loadMoreFsHistory(idx){
     const doSet=()=>{
       if(!fch.cs||!fch.lc)return;
       try{
+        // TIME-anchored restore (see loadMoreHistory): restore the same
+        // wall-clock window, immune to LWC's own logical-range shift on
+        // setData — the index+realShift restore double-compensated.
+        let vTimeNow=null;
+        try{
+          vTimeNow=(typeof fts.getVisibleRange==='function')?fts.getVisibleRange():null;
+        }catch(e){}
+        if(!vTimeNow||vTimeNow.from==null||vTimeNow.to==null)vTimeNow=(vTime&&vTime.from!=null&&vTime.to!=null)?vTime:null;
         fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
         const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
         try{fts.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
-        if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
-          // Re-read the CURRENT range before restoring (the user may have
-          // kept panning during fetch+idle): restoring a stale range snaps
-          // the chart back — the "magnet" bug.
-          let curRange=null;
-          try{curRange=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;}catch(e){}
-          const baseRange=(curRange&&typeof curRange.from==='number'&&typeof curRange.to==='number'
-            &&Math.abs((curRange.to-curRange.from)-(logRange.to-logRange.from))<0.5)?curRange:logRange;
-          try{fts.setVisibleLogicalRange({from:baseRange.from+realShift,to:baseRange.to+realShift});}catch(e){}
-        }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{fts.setVisibleRange(vTime);}catch(e){}}
+        if(vTimeNow){
+          try{fts.setVisibleRange(vTimeNow);}catch(e){}
+        }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
+          try{fts.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
+        }
         try{
           const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
@@ -7880,9 +7903,16 @@ async function prependGridLabHistory(body,sym,tf){
     ctx.cs.setData(m.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     const gro=Math.max(0,Math.min(36,S.chartRightOffset|0));
     try{ts.applyOptions({rightOffset:gro,fixRightEdge:false});}catch(e){}
-    if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
+    // TIME-anchored restore (see loadMoreHistory): the same wall-clock window
+    // stays on screen, immune to LWC's own logical-range shift on setData.
+    let vTimeNow=null;
+    try{vTimeNow=(typeof ts.getVisibleRange==='function')?ts.getVisibleRange():null;}catch(e){}
+    if(!vTimeNow||vTimeNow.from==null||vTimeNow.to==null)vTimeNow=(vTime&&vTime.from!=null&&vTime.to!=null)?vTime:null;
+    if(vTimeNow){
+      try{ts.setVisibleRange(vTimeNow);}catch(e){}
+    }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
       try{if(typeof ts.setVisibleLogicalRange==='function')ts.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
-    }else if(vTime&&vTime.from!=null&&vTime.to!=null){try{ts.setVisibleRange(vTime);}catch(e){}}
+    }
     try{
       const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
       if(pRange&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pRange);
