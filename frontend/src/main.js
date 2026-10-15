@@ -894,14 +894,30 @@ function calcAll(onlySyms){
   for(const sym of universe){
     const t=S.tk[sym];if(!t)continue;
     const k5=S.k5m[sym],k1h=S.k1h[sym],k1m=S.k1m[sym];
-    // cday: от первой 1ч свечи локального календарного дня
+    // cday: от первой 1ч свечи локального календарного дня (binary search —
+    // k1h is a sorted array, find() is a linear scan per symbol per pass)
     let cday=null;
     if(k1h&&k1h.length>0){
-      const todayCandle=k1h.find(c=>c.t>=dayStartMs);
-      if(todayCandle)cday=(t.p-todayCandle.o)/todayCandle.o*100;
+      let lo=0,hi=k1h.length-1,first=-1;
+      while(lo<=hi){
+        const mid=(lo+hi)>>1;
+        if(k1h[mid].t>=dayStartMs){first=mid;hi=mid-1;}else lo=mid+1;
+      }
+      if(first>=0){const tc=k1h[first];cday=(t.p-tc.o)/tc.o*100;}
     }
     const corr14=k5&&k5.length>=15&&btcR14.length?calcCorr(calcRets(k5.slice(-15)),btcR14):null;
-    const k5today=k5&&k5.length?k5.filter(c=>c.t>=dayStartMs):[];
+    // PERF: k5today — find the first bar of the local calendar day with a
+    // binary search instead of filter() over the whole 5m cache; rtd then
+    // needs only the day's tail (index math, no array copy).
+    let k5today=[];
+    if(k5&&k5.length){
+      let lo=0,hi=k5.length-1,first=-1;
+      while(lo<=hi){
+        const mid=(lo+hi)>>1;
+        if(k5[mid].t>=dayStartMs){first=mid;hi=mid-1;}else lo=mid+1;
+      }
+      if(first>=0)k5today=k5.slice(first);
+    }
     const rtd=calcRangeFromCandles(k5today);
     const kt=S.kTrend[sym];
     const sparkKl=(kt&&kt.length>=6)?kt:k5;
@@ -4322,17 +4338,30 @@ function ensureFundOiLoop(){
   },32000);
 }
 
+let _prioCache={at:0,symsLen:-1,tkLen:-1,list:null};
 function priorityMetricSyms(limit=90){
-  const pinned=[...S.charts.map(c=>c.sym).filter(Boolean),...(S.fsOpen&&S.fsSym?[S.fsSym]:[])];
-  const byVol=Object.entries(S.tk).filter(([sym])=>S.syms.includes(sym)).sort((a,b)=>(b[1]?.qv||0)-(a[1]?.qv||0)).map(([sym])=>sym);
-  const seen=new Set();
-  const out=[];
-  for(const s of[...pinned,...byVol]){
-    if(!s||seen.has(s))continue;
-    seen.add(s);out.push(s);
-    if(out.length>=limit)break;
+  // PERF: called from the 20s metrics loop AND the WS debounce path (several
+  // times/sec). The old body ran S.syms.includes() (linear scan) inside a
+  // filter over ~500 tickers (~435k comparisons) plus a full sort EVERY call.
+  // Now: Set membership O(1) + a 5s TTL cache invalidated when the universe
+  // or ticker set changes.
+  const now=Date.now();
+  const cacheOk=_prioCache.list&&now-_prioCache.at<5000
+    &&_prioCache.symsLen===S.syms.length&&_prioCache.tkLen===Object.keys(S.tk).length;
+  if(!cacheOk){
+    const symSet=new Set(S.syms);
+    const pinned=[...S.charts.map(c=>c.sym).filter(Boolean),...(S.fsOpen&&S.fsSym?[S.fsSym]:[])];
+    const byVol=Object.entries(S.tk).filter(([sym])=>symSet.has(sym)).sort((a,b)=>(b[1]?.qv||0)-(a[1]?.qv||0)).map(([sym])=>sym);
+    const seen=new Set();
+    const out=[];
+    for(const s of[...pinned,...byVol]){
+      if(!s||seen.has(s))continue;
+      seen.add(s);out.push(s);
+      if(out.length>=200)break;
+    }
+    _prioCache={at:now,symsLen:S.syms.length,tkLen:Object.keys(S.tk).length,list:out};
   }
-  return out;
+  return _prioCache.list.slice(0,limit);
 }
 
 async function refreshMetricKlinesSlice(){
@@ -4424,7 +4453,8 @@ async function refreshTicker24hrFallback(){
       if(!tk||tk.p==null||isNaN(tk.p))continue;
       applyLiveKlineUpdate(sym,tk.p,nowMs);
     }
-    calcAll();
+    // Incremental like the WS path: only the touched universe, not all ~500.
+    calcAll(universe);
     if(!document.hidden){
       if(_anyChartPanning||_scrolling)setDeferredRenderNeeded();
       else scheduleRender();
@@ -4698,6 +4728,11 @@ async function refreshTickerForSymbol(sym){
 /** Periodic refresh of Bybit tickers (whole venue, one request). */
 async function refreshBybitTickers(){
   if(document.hidden||!S.exData.bybit)return;
+  // PERF: skip the poll entirely when no symbol currently resolves to bybit
+  // (pure-binance watch): an ~800-row JSON fetch every 10s for nothing.
+  let bybitInUse=false;
+  for(const sym of S.syms){if(S.symEx[sym]==='bybit'){bybitInUse=true;break;}}
+  if(!bybitInUse)return;
   try{
     const next=await fetchBybitTickers();
     if(!next||!Object.keys(next).length)return;
@@ -6886,7 +6921,9 @@ function startFsWs(){
 async function loadKlinesBackground(){
   try{
     const visible=S.charts.map(c=>c.sym).filter(Boolean);
-    const top=Object.entries(S.tk).filter(([s])=>S.syms.includes(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
+    // PERF: Set membership instead of S.syms.includes() linear scan in filter.
+    const symSet=new Set(S.syms);
+    const top=Object.entries(S.tk).filter(([s])=>symSet.has(s)).sort((a,b)=>b[1].qv-a[1].qv).map(([s])=>s);
     const all=[...new Set([...visible,...top])];
     const trendTf=S.tf;
     const trendLim=trendKlineFetchLimit(trendTf);
