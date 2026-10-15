@@ -4541,17 +4541,36 @@ function applyExUniverse(){
   // S.tkOther so the list can show venue-native numbers when the user
   // filters by listing (e.g. Binance-only view while priority=bybit).
   const nextTk={};
-  S.tkOther={};
   for(const sym of S.syms){
     const ex=S.symEx[sym];
     if(ex==='bybit'&&S.byTk[sym])nextTk[sym]={...S.byTk[sym]};
     else if(S.tk[sym])nextTk[sym]={...S.tk[sym]};
     else if(S.byTk[sym])nextTk[sym]={...S.byTk[sym]};
-    // the non-resolved venue's numbers for venue-native display
-    if(ex==='bybit'&&S.tk[sym]&&_origBinanceTk[sym])S.tkOther[sym]={..._origBinanceTk[sym]};
-    else if(ex!=='bybit'&&S.byTk[sym])S.tkOther[sym]={...S.byTk[sym]};
   }
   S.tk=nextTk;
+  // S.tkOther: the OTHER venue's native ticker for dual-listed coins —
+  // used for venue-pinned display/filtering. The previous asymmetric
+  // build kept _origBinanceTk (a stale snapshot from one boot moment)
+  // for bybit-resolved coins and byTk for binance-resolved coins, so a
+  // Binance-pinned list read BYBIT qv/tr — and since bybit tickers
+  // carry no trade count (tr=0), the minTrd filter emptied the whole
+  // list. Now both sides come from the CURRENT snapshots: S.tk already
+  // holds the resolved venue's numbers; the other side is taken from
+  // _origBinanceTk (binance snapshot incl. trade count) or S.byTk.
+  S.tkOther={};
+  for(const sym of S.syms){
+    const ex=S.symEx[sym];
+    const avail=S.symAvail[sym];
+    const dual=Array.isArray(avail)&&avail.length>1;
+    if(!dual)continue; // single-listed: nothing to switch to
+    if(ex==='bybit'){
+      const bn=_origBinanceTk[sym]||null;
+      if(bn)S.tkOther[sym]={...bn};
+    }else{
+      const by=S.byTk[sym];
+      if(by)S.tkOther[sym]={...by};
+    }
+  }
   // Funding from Bybit tickers for bybit-resolved symbols (Binance
   // fetches funding separately via premiumIndex).
   if(S.exData.bybit){
@@ -4739,19 +4758,28 @@ async function refreshBybitTickers(){
     const prevOI={};
     for(const [sym,t] of Object.entries(S.byTk))prevOI[sym]=t.oiUsd;
     S.byTk=next;
-    // Feed the merged ticker map for bybit-resolved symbols.
+    // Feed the merged ticker map for bybit-resolved symbols and refresh
+    // S.tkOther (the "other venue" side) for dual-listed binance-resolved
+    // coins so a venue-pinned list keeps honest numbers.
     let changed=false;
     for(const sym of S.syms){
-      if(S.symEx[sym]!=='bybit')continue;
       const t=next[sym];
       if(!t)continue;
-      const tk=S.tk[sym];
-      if(!tk||tk.p!==t.p||tk.c24!==t.c24||tk.qv!==t.qv){S.tk[sym]={...t};changed=true;}
-      const mx=S.mx[sym];
-      if(mx){mx.price=t.p;mx.ch24=t.c24;mx.vol24=t.qv;mx.trd24=0;}
-      // OIΔ 1h computed from successive poll snapshots (~10s apart is
-      // too noisy → only meaningful across longer gaps; the OI-history
-      // loop on Binance covers real 1h deltas. Here we only keep levels.)
+      if(S.symEx[sym]==='bybit'){
+        const tk=S.tk[sym];
+        if(!tk||tk.p!==t.p||tk.c24!==t.c24||tk.qv!==t.qv){S.tk[sym]={...t};changed=true;}
+        const mx=S.mx[sym];
+        if(mx){mx.price=t.p;mx.ch24=t.c24;mx.vol24=t.qv;}
+        // OIΔ 1h computed from successive poll snapshots (~10s apart is
+        // too noisy → only meaningful across longer gaps; the OI-history
+        // loop on Binance covers real 1h deltas. Here we only keep levels.)
+      }else{
+        // binance-resolved dual listing: bybit side → tkOther
+        const avail=S.symAvail[sym];
+        if(Array.isArray(avail)&&avail.length>1){
+          if(!S.tkOther[sym]||S.tkOther[sym].qv!==t.qv){S.tkOther[sym]={...t};changed=true;}
+        }
+      }
       if(t.fund&&isFinite(t.fund))_fundRates[sym]=t.fund;
     }
     if(changed){
@@ -4989,16 +5017,26 @@ function sortedRows(){
   // Binance-scale volume and "Bybit only" is honest Bybit scale.
   const listVenue=(S.exListFilter==='binance'||S.exListFilter==='bybit')?S.exListFilter:null;
   const effVol=(r)=>{
-    const v=(listVenue&&S.tkOther[r.sym])?S.tkOther[r.sym].qv:r.vol24;
+    // Prefer the PINNED venue's native numbers: when the pin differs from
+    // the symbol's resolved venue, that side lives in S.tkOther; when the
+    // pin MATCHES the resolved venue (or there is no pin), the row's own
+    // numbers already are that venue's. The old code always preferred
+    // tkOther, so "Binance" pin on binance-priority compared BYBIT numbers
+    // (tr=0) and the minTrd filter emptied the whole list.
+    const src=symExchange(r.sym);
+    const other=(listVenue&&listVenue!==src)?S.tkOther[r.sym]:null;
+    const v=other?other.qv:r.vol24;
     if(v==null||!isFinite(v))return v;
-    const src=(listVenue?listVenue:symExchange(r.sym));
-    return src==='bybit'?v*(S.byVolFactor||1):v;
+    const effSrc=other?listVenue:src;
+    return effSrc==='bybit'?v*(S.byVolFactor||1):v;
   };
   const effTrd=(r)=>{
-    const v=(listVenue&&S.tkOther[r.sym])?S.tkOther[r.sym].tr:r.trd24;
+    const src=symExchange(r.sym);
+    const other=(listVenue&&listVenue!==src)?S.tkOther[r.sym]:null;
+    const v=other?other.tr:r.trd24;
     if(v==null||!isFinite(v))return v;
-    const src=(listVenue?listVenue:symExchange(r.sym));
-    return src==='bybit'?v*(S.byVolFactor||1):v;
+    const effSrc=other?listVenue:src;
+    return effSrc==='bybit'?v*(S.byVolFactor||1):v;
   };
   if(S.minVol>0)rows=rows.filter(r=>{const v=effVol(r);return (v!=null&&isFinite(v)&&v>=S.minVol*1e6)||bypassGroup(r.sym);});
   if(S.minTrd>0)rows=rows.filter(r=>{const v=effTrd(r);return (v!=null&&isFinite(v)&&v>=S.minTrd)||bypassGroup(r.sym);});
@@ -5242,11 +5280,16 @@ function updateScreenerRow(row,m,cols,inChart){
     }
     const val=(()=>{
       // Venue-pinned list: show the pinned venue's native vol/trade
-      // numbers (the filter compares those too, see sortedRows).
-      if((c.id==='vol24'||c.id==='trd24')&&S.tkOther&&S.tkOther[sym]){
-        const other=S.tkOther[sym];
-        if(c.id==='vol24'&&other.qv!=null&&isFinite(other.qv))return other.qv;
-        if(c.id==='trd24'&&other.tr!=null&&isFinite(other.tr))return other.tr;
+      // numbers (the filter compares those too, see sortedRows). Only
+      // when the pin differs from the RESOLVED venue — otherwise the
+      // row's own numbers are already the pinned venue's.
+      const pinnedVenue=(S.exListFilter==='binance'||S.exListFilter==='bybit')?S.exListFilter:null;
+      if(pinnedVenue&&(c.id==='vol24'||c.id==='trd24')&&symExchange(sym)!==pinnedVenue){
+        const other=S.tkOther&&S.tkOther[sym];
+        if(other){
+          if(c.id==='vol24'&&other.qv!=null&&isFinite(other.qv))return other.qv;
+          if(c.id==='trd24'&&other.tr!=null&&isFinite(other.tr))return other.tr;
+        }
       }
       return m[c.id];
     })();
