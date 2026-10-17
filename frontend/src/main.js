@@ -2043,32 +2043,46 @@ async function loadMoreHistory(slot){
     const doSet=()=>{
       if(!ch.cs||!ch.lc)return;
       try{
-        // Read the CURRENT time window immediately before replacing the
-        // data — doSet only runs once the user's pan has ended, so this is
-        // their live position. Restoring the SAME TIME RANGE is immune to
-        // prepend/trim index math: LWC itself shifts the logical range on
-        // setData, so the old logical-range+realShift restore compensated
-        // TWICE and yanked the view toward newer bars (the "magnet" bug).
-        let vTimeNow=null;
+        // Restore view WITHOUT losing a zoom that extends past the oldest
+        // bar (empty space on the left). A time-range restore cannot
+        // represent that space — getVisibleRange().from clamps to the
+        // oldest bar, so restoring it would snap the zoom back (the
+        // "scale resets" bug). Instead: setData, then read the CURRENT
+        // logical range (LWC shifts it by the real index delta itself),
+        // and correct ONLY the residual error vs the pre-setData logical
+        // range. This is single-compensation, not double.
+        let logicalBefore=null;
         try{
           const tsNow=ch.lc.timeScale();
-          vTimeNow=(typeof tsNow.getVisibleRange==='function')?tsNow.getVisibleRange():null;
+          logicalBefore=(typeof tsNow.getVisibleLogicalRange==='function')?tsNow.getVisibleLogicalRange():null;
         }catch(e){}
-        if(!vTimeNow||vTimeNow.from==null||vTimeNow.to==null)vTimeNow=(vTime&&vTime.from!=null&&vTime.to!=null)?vTime:null;
         ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
         const tsScale=ch.lc.timeScale();
         const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
         try{tsScale.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
-        if(vTimeNow){
-          // TIME-anchored restore: whatever indexes the bars now occupy,
-          // the same wall-clock window stays on screen.
-          try{tsScale.setVisibleRange(vTimeNow);}catch(e){}
-        }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
-          // Legacy fallback (time-range API unavailable): index math with
-          // the real shift after cache trim.
-          try{tsScale.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
-        }
+        try{
+          if(logicalBefore&&typeof logicalBefore.from==='number'&&typeof logicalBefore.to==='number'
+            &&typeof tsScale.setVisibleLogicalRange==='function'&&typeof tsScale.getVisibleLogicalRange==='function'){
+            const after=tsScale.getVisibleLogicalRange();
+            if(after&&typeof after.from==='number'){
+              // residual = how far LWC moved the view for the SAME bars,
+              // plus the real shift of prepended bars. Single compensation:
+              // target = before + realShift; error = after - target;
+              const targetFrom=logicalBefore.from+realShift;
+              const targetTo=logicalBefore.to+realShift;
+              const errFrom=after.from-targetFrom;
+              const errTo=after.to-targetTo;
+              if(Math.abs(errFrom)>0.01||Math.abs(errTo)>0.01){
+                tsScale.setVisibleLogicalRange({from:after.from-errFrom,to:after.to-errTo});
+              }
+            }
+          }else if(vTime&&vTime.from!=null&&vTime.to!=null){
+            try{tsScale.setVisibleRange(vTime);}catch(e){}
+          }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
+            try{tsScale.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
+          }
+        }catch(e){}
         try{
           const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
@@ -4171,6 +4185,35 @@ function startRealtimeWatchdog(){
         try{S.wsCharts.close();}catch(e){}
         closeChartTradesSockets();
       }
+    }
+    // SELF-HEAL: a chart slot with a loaded symbol can end up with a
+    // zero-sized container (created while hidden/collapsed) or a disposed
+    // LWC instance — the tile shows nothing and never recovers by itself.
+    // Detect and repair: resize if LWC is alive, full reload if dead.
+    if(!document.hidden){
+      S.charts.forEach((ch,i)=>{
+        if(!ch.sym||!ch.candles?.length)return;
+        const cb=document.getElementById(`cb${i}`);
+        if(!cb)return;
+        const w=cb.clientWidth,h=cb.clientHeight;
+        if(ch.lc&&ch.cs){
+          if((w>0&&h>0)&&(ch.canvas&&ch.canvas.width<=1)){
+            try{ch.lc.resize(w,h);if(ch.canvas){ch.canvas.width=w;ch.canvas.height=h;}if(ch.rulerCanvas){ch.rulerCanvas.width=w;ch.rulerCanvas.height=h;}rCanvas(ch);}catch(e){}
+          }
+        }else{
+          // LWC instance is gone (disposed) but the slot still has data →
+          // recreate the chart and repaint.
+          if(!ch._selfHealAt||now-ch._selfHealAt>5000){
+            ch._selfHealAt=now;
+            const sym=ch.sym;
+            try{
+              initLCChart(i);
+              paintSlotData(i);
+              console.warn('self-heal: recreated chart slot',i,sym);
+            }catch(e){}
+          }
+        }
+      });
     }
     updTime();
   },2000);
@@ -6783,23 +6826,35 @@ async function loadMoreFsHistory(idx){
     const doSet=()=>{
       if(!fch.cs||!fch.lc)return;
       try{
-        // TIME-anchored restore (see loadMoreHistory): restore the same
-        // wall-clock window, immune to LWC's own logical-range shift on
-        // setData — the index+realShift restore double-compensated.
-        let vTimeNow=null;
+        // Logical-range residual-correction restore (see loadMoreHistory):
+        // keeps a zoom that extends past the oldest bar, single-compensated.
+        let logicalBefore=null;
         try{
-          vTimeNow=(typeof fts.getVisibleRange==='function')?fts.getVisibleRange():null;
+          logicalBefore=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;
         }catch(e){}
-        if(!vTimeNow||vTimeNow.from==null||vTimeNow.to==null)vTimeNow=(vTime&&vTime.from!=null&&vTime.to!=null)?vTime:null;
         fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
         fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
         const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
         try{fts.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
-        if(vTimeNow){
-          try{fts.setVisibleRange(vTimeNow);}catch(e){}
-        }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
-          try{fts.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
-        }
+        try{
+          if(logicalBefore&&typeof logicalBefore.from==='number'&&typeof logicalBefore.to==='number'
+            &&typeof fts.setVisibleLogicalRange==='function'&&typeof fts.getVisibleLogicalRange==='function'){
+            const after=fts.getVisibleLogicalRange();
+            if(after&&typeof after.from==='number'){
+              const targetFrom=logicalBefore.from+realShift;
+              const targetTo=logicalBefore.to+realShift;
+              const errFrom=after.from-targetFrom;
+              const errTo=after.to-targetTo;
+              if(Math.abs(errFrom)>0.01||Math.abs(errTo)>0.01){
+                fts.setVisibleLogicalRange({from:after.from-errFrom,to:after.to-errTo});
+              }
+            }
+          }else if(vTime&&vTime.from!=null&&vTime.to!=null){
+            try{fts.setVisibleRange(vTime);}catch(e){}
+          }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
+            try{fts.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
+          }
+        }catch(e){}
         try{
           const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
           if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);

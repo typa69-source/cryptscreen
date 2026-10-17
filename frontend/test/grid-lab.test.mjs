@@ -48,12 +48,13 @@ test('gbDepositClamp: non-numeric string → fallback', () => {
 });
 
 // ── gridAdjacentStepPcts ───────────────────────────────────────
-test('gridAdjacentStepPcts: even 1% grid → all values 1', () => {
+test('gridAdjacentStepPcts: even +1 grid → ~1% each, measured of the lower level', () => {
   const grid = [100, 101, 102, 103];
   const r = gridAdjacentStepPcts(grid, 100);
-  assert.equal(r.min, 1);
-  assert.equal(r.max, 1);
-  assert.equal(r.avg, 1);
+  // Exchange semantics: 1/100=1%, 1/101≈0.990%, 1/102≈0.980%
+  assert.ok(Math.abs(r.max - 1) < 1e-9);
+  assert.ok(r.min > 0.97 && r.min < 0.99, `expected ~0.98, got ${r.min}`);
+  assert.ok(r.avg > 0.98 && r.avg < 1.0, `expected ~0.99, got ${r.avg}`);
 });
 
 test('gridAdjacentStepPcts: empty/short grid → nulls', () => {
@@ -62,11 +63,25 @@ test('gridAdjacentStepPcts: empty/short grid → nulls', () => {
   assert.deepEqual(gridAdjacentStepPcts(null, 100), { min: null, max: null, avg: null });
 });
 
-test('gridAdjacentStepPcts: refPrice=0 falls back to grid midpoint', () => {
-  const grid = [100, 102, 104]; // steps of 2, mid = 102
+test('gridAdjacentStepPcts: refPrice ignored — exchange semantics (gap % of the LOWER level)', () => {
+  const grid = [100, 102, 104]; // gaps of 2 over rising levels
   const r = gridAdjacentStepPcts(grid, 0);
-  // 2/102 ≈ 1.96%, 2/102 ≈ 1.96%
-  assert.ok(r.avg > 1.9 && r.avg < 2.0, `expected ~1.96, got ${r.avg}`);
+  // 2/100 = 2%, 2/102 ≈ 1.9608%
+  assert.ok(r.min > 1.95 && r.min < 1.97, `expected ~1.96, got ${r.min}`);
+  assert.ok(Math.abs(r.max - 2) < 1e-9, `expected 2, got ${r.max}`);
+  assert.ok(r.avg > 1.97 && r.avg < 1.99, `expected ~1.98, got ${r.avg}`);
+});
+
+test('gridAdjacentStepPcts: same grid gives same numbers regardless of where price sits', () => {
+  // THE mismatch the user saw vs the exchange: old code divided by the
+  // current price, so "spacing" changed as price moved. Exchange-style
+  // (gap % of lower level) is stable.
+  const grid = [100, 102, 104];
+  const atBottom = gridAdjacentStepPcts(grid, 100);
+  const atTop = gridAdjacentStepPcts(grid, 104);
+  assert.equal(atBottom.min, atTop.min);
+  assert.equal(atBottom.max, atTop.max);
+  assert.equal(atBottom.avg, atTop.avg);
 });
 
 // ── resolveGridLevelsForCfg ────────────────────────────────────

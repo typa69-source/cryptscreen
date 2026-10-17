@@ -18,15 +18,18 @@ export function gbDepositClamp(v, fallback = 500) {
   return Math.max(GB_DEP_MIN, x);
 }
 
-/** % between adjacent grid lines, expressed in percent of refPrice. */
+/** % between adjacent grid lines, measured the way EXCHANGES quote grid
+ *  step: each gap is percent of the LOWER level of that pair
+ *  (Bybit/XT semantics: (next/prev − 1)·100). The old version divided by
+ *  the current chart price, so the same grid showed different "spacing"
+ *  depending on where price sat — mismatching the exchange's own number. */
 export function gridAdjacentStepPcts(grid, refPrice) {
   if (!grid || grid.length < 2) return { min: null, max: null, avg: null };
-  const ref = +refPrice > 0 ? +refPrice : (+grid[0] + +grid[grid.length - 1]) / 2;
-  if (!(ref > 0)) return { min: null, max: null, avg: null };
   const pcts = [];
   for (let i = 1; i < grid.length; i++) {
-    const d = Math.abs(grid[i] - grid[i - 1]);
-    if (d > 0) pcts.push((d / ref) * 100);
+    const prev = +grid[i - 1];
+    const d = Math.abs(+grid[i] - prev);
+    if (d > 0 && prev > 0) pcts.push((d / prev) * 100);
   }
   if (!pcts.length) return { min: null, max: null, avg: null };
   const sum = pcts.reduce((a, b) => a + b, 0);
