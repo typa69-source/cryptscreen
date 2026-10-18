@@ -1538,6 +1538,11 @@ function initLCChart(slot,isFs=false,fsIdx=null){
 
   const onVisibleRangePan=()=>{_onPanStart();rCanvas(ch,{immediate:true});};
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
+    // Backfill trigger: the number of BARS between the left edge of the
+    // view and the oldest loaded bar. `range.from` counts from the oldest
+    // candle, so from<TRIGGER means "almost at the loaded edge". A zoom
+    // OUT alone (large span) also approaches the edge — that is exactly
+    // when the user needs more history, so it must trigger too.
     if(range&&range.from<HIST_TRIGGER){
       // exhausted history → stop the fetch cascade (each backfill used to
       // re-trigger a fetch loop, dragging the chart left repeatedly)
@@ -2003,9 +2008,12 @@ async function loadMoreHistory(slot){
     const ex=symExchange(ch.sym);
     let nc;
     if(ex==='bybit'&&S.exData.bybit){
-      // Bybit pagination is cursor-less from the client side: fetch the
-      // window and merge, dropping newer overlap.
-      const candles=await fetchBybitKlines(ch.sym,S.tf,Math.min(1000,HIST_LIMIT*2));
+      // Bybit PAGINATION via the `end` param (exclusive upper bound):
+      // fetch the window strictly OLDER than the cached head. The old
+      // cursor-less fetch always returned the newest 1000 bars, so with a
+      // ≥1000-bar cache the merge filter left nothing and the chart was
+      // marked exhausted at ~1200 candles forever.
+      const candles=await fetchBybitKlines(ch.sym,S.tf,Math.min(1000,HIST_LIMIT*2),ch.candles[0].t-1);
       nc=(candles||[]).filter(k=>k.t<ch.candles[0].t);
     }else{
       const raw=await fj(`${API}/klines?symbol=${ch.sym}&interval=${S.tf}&limit=${HIST_LIMIT}&endTime=${ch.candles[0].t-1}`);
@@ -6803,10 +6811,22 @@ async function loadMoreFsHistory(idx){
   if(!S.fsSym||fch.histLoading||!fch.candles.length||!fch.lc)return;
   fch.histLoading=true;
   try{
-    const r=await fetchKlinesFor(S.fsSym,fch.tf,HIST_LIMIT);
-    const raw={length:(r.candles||[]).length};
-    if(!raw.length){fch.histLoading=false;fch._histExhausted=true;return;}
-    const nc=r.candles;if(!fch.cs||!fch.lc)return;
+    // Paginated fetch: bars strictly OLDER than the cached head. For Bybit
+    // this uses the `end` param (see fetchBybitKlines) — the old unbounded
+    // fetch returned the newest window every time and froze the chart at
+    // the initial ~1200 candles.
+    const ex=symExchange(S.fsSym);
+    let r;
+    if(ex==='bybit'&&S.exData.bybit){
+      const older=await fetchBybitKlines(S.fsSym,fch.tf,HIST_LIMIT,fch.candles[0].t-1);
+      r={candles:(older||[]).filter(k=>k.t<fch.candles[0].t),ex};
+    }else{
+      const raw=await fj(`${API}/klines?symbol=${S.fsSym}&interval=${fch.tf}&limit=${HIST_LIMIT}&endTime=${fch.candles[0].t-1}`);
+      r={candles:parseKlines(raw),ex:'binance'};
+    }
+    const nc=r.candles;
+    if(!nc.length){fch.histLoading=false;fch._histExhausted=true;return;}
+    if(!fch.cs||!fch.lc)return;
     const fts=fch.lc.timeScale();
     let logRange=null,vTime=null;
     try{logRange=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;}catch(e){}

@@ -157,11 +157,16 @@ export async function fetchBybitTickers(){
   return out;
 }
 
-/** Bybit klines for one symbol, in the internal candle format (oldest first). */
-export async function fetchBybitKlines(sym, iv, limit){
+/** Bybit klines for one symbol, in the internal candle format (oldest first).
+ *  `endMs` (optional): exclusive upper time bound — Bybit v5 supports
+ *  cursor-less pagination via the `end` query param, which the caller uses
+ *  to fetch bars OLDER than the cached window. */
+export async function fetchBybitKlines(sym, iv, limit, endMs){
   const ivCode = tfToBybitInterval(iv);
   const lim = Math.max(1, Math.min(1000, limit|0));
-  const d = await fjBybit(`${BYBIT_API}/kline?category=linear&symbol=${encodeURIComponent(sym)}&interval=${ivCode}&limit=${lim}`, 15000, 1);
+  let url = `${BYBIT_API}/kline?category=linear&symbol=${encodeURIComponent(sym)}&interval=${ivCode}&limit=${lim}`;
+  if (Number.isFinite(+endMs) && +endMs > 0) url += `&end=${Math.floor(+endMs)}`;
+  const d = await fjBybit(url, 15000, 1);
   return parseBybitKlines(d?.result?.list);
 }
 
