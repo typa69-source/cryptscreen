@@ -670,13 +670,32 @@ export async function renderLevelsPicker(body, out, gbPrefs, deps) {
     const dep = gbPrefs?.global?.deposit || 500;
     const ex = typeof deps.symExchange === 'function' ? deps.symExchange(sym) : 'binance';
     const rows = deps.levelsApi.scanLevels(win, lo, hi, { ex, deposit: dep });
-    const best = deps.levelsApi.pickOptimalLevels(rows);
+    const usd = deps.levelsApi.pickOptimalLevels(rows);
+    const best = deps.levelsApi.pickOptimalByCapture
+      ? deps.levelsApi.pickOptimalByCapture(rows)
+      : usd;
+    // «Трудоёмкий» анализ: стабильность оптимума по 3 отрезкам окна.
+    const stability = deps.levelsApi.scanLevelsStability
+      ? deps.levelsApi.scanLevelsStability(win, lo, hi, { ex, deposit: dep })
+      : null;
     const cur = rLevelsCurrent(body);
     const curRow = rows.find((r) => r.levels === cur);
     if (hint) {
       if (best) {
-        const better = best.levels !== cur;
-        hint.innerHTML = `оптимум <b style="color:#34d399;cursor:pointer" id="gbLvlBest">${best.levels}</b> · циклов ${best.rt} · $${(best.netOfDeposit || 0).toFixed(2)}${curRow ? ` · сейчас ${cur}: $${(curRow.netOfDeposit || 0).toFixed(2)}` : ''}${better ? '' : ' ✓'}`;
+        const parts = [];
+        parts.push(`оптимум <b style="color:#34d399;cursor:pointer" id="gbLvlBest">${best.levels}</b>`);
+        parts.push(`сделок ${best.rt}`);
+        parts.push(`$${(best.netOfDeposit || 0).toFixed(2)}`);
+        if (usd && usd.levels !== best.levels) parts.push(`<span style="color:var(--text3)">($-макс: ${usd.levels})</span>`);
+        if (curRow && curRow.levels !== best.levels) {
+          parts.push(`<span style="color:var(--text3)">· сейчас ${cur}: ${curRow.rt} сдел / $${(curRow.netOfDeposit || 0).toFixed(2)}</span>`);
+        } else if (curRow) parts.push('✓');
+        if (stability) {
+          const okPct = Math.round((stability.agree / stability.folds) * 100);
+          const col = okPct >= 66 ? '#34d399' : okPct >= 34 ? '#fbbf24' : '#ef4444';
+          parts.push(`<span style="color:${col}" title="Окно делится на ${stability.folds} отрезка; в каждом — свой скан. Оптимумы: ${stability.perFold.join(', ')}. Совпадение в ±2 уровнях = ${okPct}%.">стаб ${okPct}%</span>`);
+        }
+        hint.innerHTML = parts.join(' · ');
         const bl = hint.querySelector('#gbLvlBest');
         if (bl) bl.onclick = () => {
           const inp = body.querySelector('#gbLevels');
@@ -890,11 +909,13 @@ export function wireDragHandlers({
     document.addEventListener('mouseup', onDocUp, true);
   }, { signal: sig, capture: true });
 
-  // «Подбор уровней» — точка старта (Step 5): Alt+ЛКМ по графику ставит/
-  // тащит вертикальную метку; хранится в gbPrefs.symbolBounds[sym].startMs.
-  // Двойной Alt+клик по метке — сброс (старт = вся доступная 1m-история).
+  // «Подбор уровней» — точка старта (Step 5): Alt+ЛКМ ИЛИ режим «⚑ Старт»
+  // (клик по кнопке → следующий клик по графику). Хранится в
+  // gbPrefs.symbolBounds[sym].startMs.
   wrap.addEventListener('mousedown', (e) => {
-    if (e.button !== 0 || !e.altKey) return;
+    if (e.button !== 0) return;
+    const pickMode = body._gbStartPick === true;
+    if (!e.altKey && !pickMode) return;
     const { x } = getCoords(wrap, e.clientX, e.clientY);
     if (x >= Math.max(1, wrap.clientWidth - PRICE_AXIS_W - 2)) return;
     const ts = lc.timeScale();
@@ -908,6 +929,12 @@ export function wireDragHandlers({
     const ms = fromChartTime(+t);
     if (!Number.isFinite(ms) || ms <= 0) return;
     e.preventDefault(); e.stopPropagation();
+    if (pickMode) {
+      body._gbStartPick = false;
+      const sb = body.querySelector('#gbStartBtn');
+      if (sb) sb.classList.remove('on');
+      wrap.style.cursor = '';
+    }
     const sym = String(body.querySelector('#gbSym')?.value || '').toUpperCase().trim();
     if (sym) {
       if (!gbPrefs.symbolBounds) gbPrefs.symbolBounds = {};
@@ -1206,6 +1233,7 @@ export function buildGridLabBacktestMarkup(gbPrefs, defSym) {
         <span style="font-size:9px;color:var(--accent,#38bdf8);font-weight:600;cursor:help" title="Скан по 1m от точки старта: для каждого числа сеток считает реальные циклы buy→sell и чистую прибыль после комиссий. Слайдер меняет «Уровни»; тёплая зона = больше прибыли.">◆ Подбор</span>
         <input id="gbLvlSlider" type="range" min="2" max="60" step="1" value="${gbPrefs.global.levels}" style="width:110px;accent-color:var(--accent,#38bdf8);vertical-align:middle" title="Количество сеток в диапазоне НИЗ..ВЕРХ">
         <span id="gbLvlHint" style="font-size:9px;color:var(--text3)">—</span>
+        <button type="button" class="tbtn" id="gbStartBtn" title="Отметить точку старта анализа на графике (то же, что Alt+клик по графику). Скан считает 1m-свечи от неё." style="font-size:9px;padding:3px 8px">⚑ Старт</button>
       </div>
       <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:4px;flex-shrink:0">Загрузка сетки...</div>
       <div id="gbLvlHeat" style="font-size:9px;color:var(--text3);margin-bottom:8px;flex-shrink:0;line-height:0"></div>
@@ -1321,6 +1349,29 @@ function bindGridLabBacktestForm(body, gbPrefs, scheduleGridLabSyncFn, applyRati
         scheduleGridLabSyncFn(body, gbPrefs, { reuseCandles: true });
       }
     });
+  }
+  // «⚑ Старт»: включить режим установки точки старта — следующий клик по
+  // графику ставит метку (тот же обработчик, что Alt+клик, но без Alt).
+  const startBtn = body.querySelector('#gbStartBtn');
+  if (startBtn) {
+    startBtn.onclick = () => {
+      const active = body._gbStartPick === true;
+      body._gbStartPick = !active;
+      startBtn.classList.toggle('on', !active);
+      startBtn.title = !active
+        ? 'Кликни по графику, чтобы поставить точку старта (Esc — отмена)'
+        : 'Отметить точку старта анализа на графике (то же, что Alt+клик по графику). Скан считает 1m-свечи от неё.';
+      const wrap = body.querySelector('#gbChartWrap');
+      if (wrap) wrap.style.cursor = !active ? 'crosshair' : '';
+    };
+    const esc = (e) => {
+      if (e.key !== 'Escape' || body._gbStartPick !== true) return;
+      body._gbStartPick = false;
+      startBtn.classList.remove('on');
+      const wrap = body.querySelector('#gbChartWrap');
+      if (wrap) wrap.style.cursor = '';
+    };
+    document.addEventListener('keydown', esc, { signal: body._gbFormSig });
   }
 }
 

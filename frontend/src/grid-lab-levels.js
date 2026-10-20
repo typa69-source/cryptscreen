@@ -240,3 +240,80 @@ export function levelsHeatFactor(rows) {
   const rng = max - min;
   return rows.map((r) => ({ levels: r.levels, heat: rng > 1e-12 ? (rowValue(r) - min) / rng : 0.5 }));
 }
+
+/**
+ * «Оптимум по сделкам» (правило владельца): НАИБОЛЬШЕЕ количество завершённых
+ * циклов при двух ограничениях:
+ *   1. прибыль ≥ (1 − profitTolerance) × лучшей прибыли скана (по умолч. 10%);
+ *   2. доля RT-комиссий в грязной прибыли ≤ feeShareCap (по умолч. 30%).
+ * Кандидаты — только с шагом ≥ 3×RT (stepOk); если таких нет, fallback на
+ * наименее плохой по $.
+ *
+ * Почему не «максимум $»: при фикс. депозите ордер = D/N, и чистый $
+ * мат. монотонно УБЫВАЕТ с N (лишние сетки размывают ордер) — $-максимум
+ * всегда вырождается в минимальное N, «упуская сделки». Оптимум по сделкам
+ * осознанно жертвует ≤10% прибыли ради максимального покрытия колебаний.
+ *
+ * @param {Array} rows вывод scanLevels
+ * @param {object} opt {profitTolerance=0.10, feeShareCap=0.30}
+ * @returns {object|null} лучший ряд или null
+ */
+export function pickOptimalByCapture(rows, opt = {}) {
+  if (!Array.isArray(rows) || !rows.length) return null;
+  // NB: +x ?? d не ловит NaN — явные Number.isFinite-проверки.
+  const tolRaw = +opt.profitTolerance;
+  const tol = Math.max(0, Number.isFinite(tolRaw) ? tolRaw : 0.10);
+  const feeRaw = +opt.feeShareCap;
+  const feeCap = Math.max(0.05, Number.isFinite(feeRaw) ? feeRaw : 0.30);
+  const ok = rows.filter((r) => r.stepOk);
+  const pool = ok.length ? ok : rows;
+  let bestVal = -Infinity;
+  for (const r of pool) bestVal = Math.max(bestVal, rowValue(r));
+  if (!isFinite(bestVal)) return pickOptimalLevels(rows);
+  // Пол прибыли: при bestVal ≤ 0 допуск всё равно расширяет вниз на tol.
+  const floorVal = bestVal - tol * Math.max(Math.abs(bestVal), 1e-9);
+  let cands = pool.filter((r) => rowValue(r) >= floorVal && (+r.feeShare || 0) <= feeCap);
+  if (!cands.length) cands = pool.filter((r) => rowValue(r) >= floorVal);
+  if (!cands.length) {
+    // Ни один N не держит пол прибыли (жадный рынок/тренд): отдаём $-оптимум,
+    // а НЕ максимум сделок — сделки без прибыли бессмысленны.
+    return pickOptimalLevels(rows);
+  }
+  let best = null;
+  for (const r of cands) {
+    if (best == null) { best = r; continue; }
+    if (r.rt > best.rt) best = r;                     // максимум сделок в поло прибыли
+    else if (r.rt === best.rt && r.levels < best.levels) best = r; // tie → меньше N
+  }
+  return best;
+}
+
+/**
+ * Стабильность оптимума («трудоёмкий» анализ): окно делится на folds
+ * последовательных отрезков, в каждом — полный скан + оптимум по сделкам.
+ * Согласие = доля отрезков, чей оптимум в ±2 уровнях от медианы.
+ *
+ * @param {Array} candles окно {t,o,h,l,c} от точки старта
+ * @returns {{perFold:number[], median:number, agree:number, folds:number}|null}
+ */
+export function scanLevelsStability(candles, lo, hi, opt = {}) {
+  // NB: +opt.folds ?? d ловит только null/undefined, НЕ NaN — поэтому явная проверка.
+  const foldsRaw = +opt.folds;
+  const folds = Math.max(2, Math.min(4, Number.isFinite(foldsRaw) ? foldsRaw : 3));
+  if (!Array.isArray(candles) || candles.length < folds * 40) return null;
+  if (!(hi > lo)) return null;
+  const per = [];
+  const seg = Math.floor(candles.length / folds);
+  for (let f = 0; f < folds; f++) {
+    const part = candles.slice(f * seg, (f + 1) * seg);
+    if (part.length < 40) continue;
+    const rows = scanLevels(part, lo, hi, opt);
+    const b = pickOptimalByCapture(rows, opt);
+    if (b) per.push(b.levels);
+  }
+  if (per.length < 2) return null;
+  const sorted = [...per].sort((a, b) => a - b);
+  const med = sorted[Math.floor(sorted.length / 2)];
+  const agree = per.filter((n) => Math.abs(n - med) <= 2).length;
+  return { perFold: per, median: med, agree, folds: per.length };
+}

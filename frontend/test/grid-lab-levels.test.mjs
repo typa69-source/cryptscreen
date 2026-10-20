@@ -13,6 +13,8 @@ import {
   levelsEconomics,
   scanLevels,
   pickOptimalLevels,
+  pickOptimalByCapture,
+  scanLevelsStability,
   levelsHeatFactor,
   stepPctFloorOk,
 } from '../src/grid-lab-levels.js';
@@ -255,4 +257,74 @@ test('scan+pick on deterministic wave: more bars → same optimum family', () =>
   // оптимум стабилен по длине окна на стационарной волне
   assert.ok(a && b);
   assert.ok(Math.abs(a.levels - b.levels) <= 2, `a=${a.levels} b=${b.levels}`);
+});
+
+// ── pickOptimalByCapture (оптимум по сделкам) ─────────────────
+
+test('pickOptimalByCapture: max rt within profit floor, not max N', () => {
+  // N=6: \$9.5 rt=40; N=10: \$9.0 rt=90 (95% прибыли, вдвое больше сделок) → выбираем 10.
+  const rows = [
+    { levels: 3, net: 10.0, rt: 10, feeShare: 0.05, stepOk: true, netOfDeposit: 10.0 },
+    { levels: 6, net: 9.5, rt: 40, feeShare: 0.10, stepOk: true, netOfDeposit: 9.5 },
+    { levels: 10, net: 9.0, rt: 90, feeShare: 0.15, stepOk: true, netOfDeposit: 9.0 },
+    { levels: 40, net: 3.0, rt: 500, feeShare: 0.60, stepOk: false, netOfDeposit: 3.0 },
+  ];
+  const b = pickOptimalByCapture(rows, { deposit: 500 });
+  assert.equal(b.levels, 10);
+});
+
+test('pickOptimalByCapture: feeShare cap excludes fee-heavy N', () => {
+  const rows = [
+    { levels: 4, net: 10.0, rt: 20, feeShare: 0.12, stepOk: true, netOfDeposit: 10.0 },
+    { levels: 8, net: 9.8, rt: 60, feeShare: 0.35, stepOk: true, netOfDeposit: 9.8 }, // комиссии 35%
+  ];
+  assert.equal(pickOptimalByCapture(rows).levels, 4);
+});
+
+test('pickOptimalByCapture: no candidate keeps profit floor → $-optimum fallback', () => {
+  // Всё, кроме минимального N, за пределами пола прибыли (тренд сжирает $).
+  const rows = [
+    { levels: 2, net: 10, rt: 4, feeShare: 0.02, stepOk: true, netOfDeposit: 10 },
+    { levels: 20, net: 1, rt: 400, feeShare: 0.5, stepOk: true, netOfDeposit: 1 },
+  ];
+  assert.equal(pickOptimalByCapture(rows).levels, 2);
+});
+
+test('pickOptimalByCapture: tie in rt → smaller N', () => {
+  const rows = [
+    { levels: 6, net: 9.9, rt: 50, feeShare: 0.1, stepOk: true, netOfDeposit: 9.9 },
+    { levels: 9, net: 9.9, rt: 50, feeShare: 0.1, stepOk: true, netOfDeposit: 9.9 },
+  ];
+  assert.equal(pickOptimalByCapture(rows).levels, 6);
+});
+
+test('pickOptimalByCapture: real-wave curve prefers more deals than $-optimum', () => {
+  // Синусоида: $-максимум в минимуме N, но capture берёт больше сделок в поло прибыли.
+  const cs = mkCandles(900, 100, 3, 7);
+  const rows = scanLevels(cs, 95, 105);
+  const usd = pickOptimalLevels(rows);
+  const cap = pickOptimalByCapture(rows);
+  assert.ok(cap.rt >= usd.rt, 'capture должен ловить не меньше сделок');
+});
+
+// ── scanLevelsStability ───────────────────────────────────────
+
+test('scanLevelsStability: stationary wave → high agreement', () => {
+  const cs = mkCandles(1200, 100, 3, 11);
+  const st = scanLevelsStability(cs, 95, 105, { deposit: 500 });
+  assert.ok(st, 'stability object');
+  assert.equal(st.folds, 3);
+  assert.ok(st.agree >= 2, `agree=${st.agree}`);
+  assert.ok(st.median >= 2 && st.median <= 12);
+});
+
+test('scanLevelsStability: short window → null', () => {
+  assert.equal(scanLevelsStability(mkCandles(60, 100, 3), 95, 105), null);
+});
+
+test('scanLevelsStability: opt NaN-safe (deposit only)', () => {
+  // регрессия: +opt.folds ?? 3 давал NaN (?? не ловит NaN) → null. Теперь работает.
+  const cs = mkCandles(1200, 100, 3, 11);
+  const st = scanLevelsStability(cs, 95, 105, { deposit: 500 });
+  assert.ok(st);
 });
