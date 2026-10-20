@@ -58,6 +58,7 @@ import {
   getGridSelectorRows as getGridSelectorRowsUi,
   renderGridRiskProfile as renderGridRiskProfileUi,
   renderManualBacktestPreviewUi,
+  renderLevelsPicker,
   scheduleGridLabSync as scheduleGridLabSyncUi,
   runGridLabSync as runGridLabSyncUi,
   collectGridLabFields,
@@ -2319,6 +2320,42 @@ function _rCanvasGridLabImmediate(ch){
     if(dg&&(dg.kind==='high'||dg.kind==='low')&&dg.previewPrice!=null&&isFinite(+dg.previewPrice)){
       dragPr=+dg.previewPrice;
       dgKind=dg.kind;
+    }
+  }catch(e){}
+  // «Подбор уровней»: точка старта (вертикальная янтарная метка).
+  // startMs живёт в gbPrefs.symbolBounds[sym] и пробрасывается в gbCh._gbStartMs.
+  try{
+    if(ch._gbStartMs&&ch.candles&&ch.candles.length){
+      const ts=ch.lc.timeScale();
+      const tct=toChartTime(ch._gbStartMs);
+      let xx=null;
+      try{xx=ts.timeToCoordinate(tct);}catch(e){}
+      if(xx==null||isNaN(xx)){
+        // экстраполяция по последним двум барам (как timeToCoordX)
+        try{
+          const n=ch.candles.length;
+          const t2=toChartTime(ch.candles[n-1].t),t1=toChartTime(ch.candles[n-2].t);
+          const x2=ts.timeToCoordinate(t2),x1=ts.timeToCoordinate(t1);
+          if(x2!=null&&x1!=null&&t2!==t1)xx=x2+((tct-t2)*(x2-x1))/(t2-t1);
+        }catch(e){}
+      }
+      if(xx!=null&&!isNaN(xx)&&xx>0&&xx<drawW){
+        ctx.save();
+        ctx.strokeStyle='rgba(56,189,248,.9)';
+        ctx.lineWidth=1.5;
+        ctx.setLineDash([6,4]);
+        ctx.beginPath();ctx.moveTo(xx,0);ctx.lineTo(xx,drawH);ctx.stroke();
+        ctx.setLineDash([]);
+        // флажок-маркер сверху
+        ctx.fillStyle='rgba(56,189,248,.95)';
+        ctx.beginPath();
+        ctx.moveTo(xx,2);ctx.lineTo(xx+9,7);ctx.lineTo(xx,12);ctx.closePath();ctx.fill();
+        // подпись
+        ctx.font='9px system-ui,sans-serif';
+        ctx.fillStyle='rgba(186,230,253,.95)';
+        ctx.fillText('СТАРТ',Math.min(xx+12,drawW-34),10);
+        ctx.restore();
+      }
     }
   }catch(e){}
   if(dragPr!=null){
@@ -7995,12 +8032,96 @@ async function prependGridLabHistory(body,sym,tf){
   }catch(e){}finally{ctx._histLoading=false;}
 }
 function renderManualBacktestPreview(body, out, gbPrefs, viewOpts) {
+  // «Подбор уровней»: пробрасываем точку старта в чарт-контекст для отрисовки
+  const symForStart = out?.symbol;
+  if (symForStart) {
+    const startMs = +gbPrefs?.symbolBounds?.[symForStart]?.startMs || 0;
+    if (body._gbChartCtx) body._gbChartCtx._gbStartMs = startMs > 0 ? startMs : 0;
+    const gctx = body._gbChartCtx;
+    if (gctx?.gbCh) { gctx.gbCh._gbStartMs = startMs > 0 ? startMs : 0; gctx.gbCh.candles = gctx.merged || []; }
+  }
   renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, {
     S, toChartTime, fmtPrice, getPriceMinMove, rCanvas,
     getCoords, pushGridLabBoundsUndo, scheduleGridLabSync,
     saveGridLabPrefs, captureGbLabViewport, applyGbViewportFreeze,
     onRulerStart, onRulerMove, onRulerEnd, isNearRuler,
     PRICE_AXIS_W, prependGridLabHistory, kickGridLabPricePoll,
+    tzOffsetS: TZ_OFFSET_S, fromChartTime, onStartPointChange,
+  });
+}
+
+/** Из chart-time (UTC+TZ_OFFSET_S, секунды) обратно в UTC-миллисекунды. */
+function fromChartTime(ct) {
+  return (+ct - TZ_OFFSET_S) * 1000;
+}
+
+let _gridLevelsApi = null;
+async function ensureGridLevelsApi() {
+  if (_gridLevelsApi) return _gridLevelsApi;
+  try {
+    _gridLevelsApi = await import('./grid-lab-levels.js');
+  } catch (e) { _gridLevelsApi = null; }
+  return _gridLevelsApi;
+}
+
+/** Точка старта изменена (Alt+клик): перезапуск подбора + перерисовка метки. */
+async function onStartPointChange(sym, ms) {
+  await ensureGridLevelsApi();
+  const modal = document.getElementById('gridLabModal');
+  const body = modal?.querySelector('#gridLabBody');
+  if (!body?._gbChartCtx) return;
+  body._gbChartCtx._gbStartMs = ms;
+  if (body._gbChartCtx.gbCh) {
+    body._gbChartCtx.gbCh._gbStartMs = ms;
+    rCanvas(body._gbChartCtx.gbCh, { immediate: true });
+  }
+  // Пересчёт «Подбора» с новой точкой старта, не трогая сетку/график.
+  const out = body._gbChartCtx.merged?.length ? { symbol: sym, lower: +body.querySelector('#gbLow')?.value || 0, upper: +body.querySelector('#gbHigh')?.value || 0 } : null;
+  if (out && (out.lower > 0) && (out.upper > out.lower)) {
+    const gbPrefs = loadGridLabPrefs();
+    runGridLabLevelsPicker(body, out, gbPrefs);
+  }
+}
+
+/** 1m-свечи для подбора: приоритет кэшу S.k1m, иначе fetch с пагинацией. */
+async function fetch1mFor(sym) {
+  const want = 1500;
+  const cached = S.k1m?.[sym];
+  if (Array.isArray(cached) && cached.length >= want) return cached;
+  const ex = symExchange(sym);
+  let candles = [];
+  if (ex === 'bybit' && S.exData.bybit) {
+    try {
+      candles = await fetchBybitKlines(sym, '1m', 1000);
+      // Вторая страница старее — только если первая короткая/полная
+      if (Array.isArray(candles) && candles.length >= 900 && candles[0]) {
+        const older = await fetchBybitKlines(sym, '1m', 1000, candles[0].t - 1);
+        if (Array.isArray(older) && older.length) candles = mergeKlineChunks(candles, older);
+      }
+    } catch (e) { /* fallthrough to binance */ }
+  }
+  if (!Array.isArray(candles) || candles.length < 5) {
+    try {
+      const raw = await fj(`${API}/klines?symbol=${encodeURIComponent(sym)}&interval=1m&limit=1500`);
+      candles = parseKlines(raw);
+    } catch (e) { candles = []; }
+  }
+  if (Array.isArray(candles) && candles.length) {
+    if (!S.k1m) S.k1m = {};
+    S.k1m[sym] = candles.slice(-HIST_CACHE_MAX);
+    return S.k1m[sym];
+  }
+  return [];
+}
+
+/** Запуск «Подбора уровней» на текущем состоянии формы (для Alt-клика). */
+function runGridLabLevelsPicker(body, out, gbPrefs) {
+  if (!_gridLevelsApi) return;
+  renderLevelsPicker(body, out, gbPrefs, {
+    fetch1mFor,
+    applyLevels: (v) => scheduleGridLabSync(body, gbPrefs, { reuseCandles: true }),
+    levelsApi: _gridLevelsApi,
+    symExchange,
   });
 }
 
@@ -8015,6 +8136,11 @@ function scheduleGridLabSync(body, gbPrefs, opt = {}) {
     readGridLabInputsFn: readGridLabInputsUi,
     renderPreviewFn: renderManualBacktestPreview,
     renderRiskFn: renderGridRiskProfile,
+    // «Подбор уровней»: 1m-скан от точки старта (lazy-модуль).
+    fetch1mFor,
+    applyLevels: (v) => scheduleGridLabSync(body, gbPrefs, { reuseCandles: true }),
+    ensureLevelsApi: () => ensureGridLevelsApi(),
+    symExchange,
   };
   scheduleGridLabSyncUi(body, gbPrefs, opt, body._gbDeps);
 }
@@ -8026,6 +8152,12 @@ function runGridLabSync(body, gbPrefs, opt = {}) {
     readGridLabInputsFn: readGridLabInputsUi,
     renderPreviewFn: renderManualBacktestPreview,
     renderRiskFn: renderGridRiskProfile,
+    // «Подбор уровней»: 1m-скан от точки старта (lazy-модуль).
+    fetch1mFor,
+    applyLevels: (v) => scheduleGridLabSync(body, gbPrefs, { reuseCandles: true }),
+    ensureLevelsApi: () => ensureGridLevelsApi(),
+    symExchange,
+    levelsApi: _gridLevelsApi,
   });
 }
 

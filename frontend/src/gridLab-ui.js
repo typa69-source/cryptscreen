@@ -545,6 +545,9 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
   if (el) {
     el.innerHTML = `<span style="color:var(--text3)">${out.symbol.replace(/USDT$/, '')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)}${pctTxt} • верх/низ: тянуть на графике · #0: тянуть в панели «Риск-профиль».</span>`;
   }
+  // «Подбор уровней»: асинхронный скан по 1m от точки старта (не блокирует
+  // отрисовку сетки); результат пишется в hint у слайдера и в панель-градиент.
+  try { renderLevelsPicker(body, out, gbPrefs, deps); } catch (e) { /* non-fatal */ }
 
   const keepVp = !!(reuse && lcRef && body._gbChartCtx?.merged?.length);
   renderPreviewFn(body, out, gbPrefs, { keepViewport: keepVp });
@@ -564,6 +567,131 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
   }
 
   renderRiskFn(body, out, gbPrefs);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  «Подбор уровней» — 1m-scan renderer (Step 4)
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Прогреть слайдер/подсказку «Подбора» без скана (до готовности данных).
+ */
+export function renderLevelsPickerIdle(body, txt) {
+  const hint = body.querySelector('#gbLvlHint');
+  if (hint) hint.textContent = txt || '—';
+  const strip = body.querySelector('#gbLvlHeat');
+  if (strip) strip.innerHTML = '';
+}
+
+/**
+ * Тепловая полоса-«теплокарта» N=2..60: одна строка мини-чанков.
+ * Каждый чанк — div с background от heat (сине-зелёный→янтарный→красный).
+ * Клик по чанку применяет N (меняет #gbLevels + слайдер, запускает sync).
+ */
+export function renderLevelsPickerStrip(body, rows, best, { onApply } = {}) {
+  const strip = body.querySelector('#gbLvlHeat');
+  if (!strip) return;
+  if (!Array.isArray(rows) || !rows.length) {
+    strip.innerHTML = '<span style="font-size:9px;color:var(--text3)">мало 1m-данных</span>';
+    return;
+  }
+  const heatByL = new Map();
+  for (const h of (typeof levelsHeatFactorModuleRef.fn === 'function' ? levelsHeatFactorModuleRef.fn(rows) : [])) heatByL.set(h.levels, h.heat);
+  const maxRt = Math.max(...rows.map((r) => r.rt || 0), 1);
+  const chunks = rows.map((r) => {
+    const heat = heatByL.get(r.levels) ?? 0.5;
+    const cur = r.levels === (best?.levels ?? -1);
+    const applied = r.levels === (rLevelsCurrent(body));
+    // цвет: 0 → глубокий синий, 0.5 → зелёный, 1 → янтарный (тёплая = больше $)
+    const hue = 220 - 180 * heat; // 220 (синий) → 40 (янтарь)
+    const bg = `hsl(${hue.toFixed(0)} 70% ${cur ? '38' : '30'}%)`;
+    const h = Math.max(3, Math.round((r.rt / maxRt) * 14)); // 3..17px — «активность»
+    return `<div data-lvl="${r.levels}" title="N=${r.levels} · шаг ${r.stepPct?.toFixed ? r.stepPct.toFixed(3) : '?'}% · циклов ${r.rt} · чистыми ≈ $${(r.netOfDeposit ?? 0).toFixed(2)}${r.stepOk ? '' : ' · шаг < 3×RT (комиссии!)'}" style="flex:1 1 0;min-width:0;height:${h}px;background:${bg};border-radius:1px;cursor:pointer;${cur || applied ? 'outline:1px solid rgba(255,255,255,.55);outline-offset:0' : ''}"></div>`;
+  }).join('');
+  strip.innerHTML = `<div style="display:flex;gap:1px;align-items:flex-end;width:100%;height:18px">${chunks}</div>`;
+  strip.querySelectorAll('[data-lvl]').forEach((el) => {
+    el.addEventListener('click', () => {
+      const v = Math.max(2, Math.min(60, +el.dataset.lvl || 2));
+      const inp = body.querySelector('#gbLevels');
+      const sl = body.querySelector('#gbLvlSlider');
+      if (inp) inp.value = String(v);
+      if (sl) sl.value = String(v);
+      if (typeof onApply === 'function') onApply(v);
+    });
+  });
+}
+
+/** Текущее значение «Уровни» в форме (для подсветки на полосе). */
+function rLevelsCurrent(body) {
+  const v = +body.querySelector('#gbLevels')?.value;
+  return Number.isFinite(v) ? v : -1;
+}
+
+/** Подключение чистого модуля scanLevels (инжектится из main.js, lazy). */
+const levelsHeatFactorModuleRef = { fn: null };
+
+/**
+ * Полный рендер «Подбора уровней»: 1m-окно от точки старта → scanLevels →
+ * hint с рекомендацией + тепловая полоса. Точка старта берётся из prefs
+ * (gbPrefs.symbolBounds[sym].startMs); если её нет — вся доступная 1m-история.
+ * Асинхронно; гонки отсеиваются по seq (каждый вызов инкрементирует счётчик).
+ *
+ * deps: { fetch1mFor(sym)->Promise<candles>, applyLevels(v), levelsApi } где
+ *   levelsApi — модуль grid-lab-levels.js (скан + выбор оптимума).
+ */
+export async function renderLevelsPicker(body, out, gbPrefs, deps) {
+  const hint = body.querySelector('#gbLvlHint');
+  const strip = body.querySelector('#gbLvlHeat');
+  if (!hint && !strip) return;
+  const sym = out?.symbol;
+  let levelsApi = deps?.levelsApi || null;
+  if (!levelsApi && typeof deps?.ensureLevelsApi === 'function') {
+    levelsApi = await deps.ensureLevelsApi();
+  }
+  if (!sym || !deps?.fetch1mFor || !levelsApi) {
+    renderLevelsPickerIdle(body);
+    return;
+  }
+  deps = { ...deps, levelsApi };
+  const seq = (body._gbLvlSeq = (body._gbLvlSeq || 0) + 1);
+  const isCurrent = () => body._gbLvlSeq === seq && !!document.getElementById('gridLabModal');
+  try {
+    if (hint) hint.textContent = 'скан…';
+    const c1m = await deps.fetch1mFor(sym);
+    if (!isCurrent()) return;
+    const startMs = +gbPrefs?.symbolBounds?.[sym]?.startMs || 0;
+    const win = deps.levelsApi.windowFromStart(c1m, startMs);
+    const lo = +out.lower, hi = +out.upper;
+    if (!(hi > lo) || win.length < 30) {
+      if (hint) hint.textContent = win.length < 30 ? `1m-баров: ${win.length} (мало)` : 'диапазон?';
+      renderLevelsPickerStrip(body, [], null, { onApply: deps.applyLevels });
+      return;
+    }
+    const dep = gbPrefs?.global?.deposit || 500;
+    const ex = typeof deps.symExchange === 'function' ? deps.symExchange(sym) : 'binance';
+    const rows = deps.levelsApi.scanLevels(win, lo, hi, { ex, deposit: dep });
+    const best = deps.levelsApi.pickOptimalLevels(rows);
+    const cur = rLevelsCurrent(body);
+    const curRow = rows.find((r) => r.levels === cur);
+    if (hint) {
+      if (best) {
+        const better = best.levels !== cur;
+        hint.innerHTML = `оптимум <b style="color:#34d399;cursor:pointer" id="gbLvlBest">${best.levels}</b> · циклов ${best.rt} · $${(best.netOfDeposit || 0).toFixed(2)}${curRow ? ` · сейчас ${cur}: $${(curRow.netOfDeposit || 0).toFixed(2)}` : ''}${better ? '' : ' ✓'}`;
+        const bl = hint.querySelector('#gbLvlBest');
+        if (bl) bl.onclick = () => {
+          const inp = body.querySelector('#gbLevels');
+          const sl = body.querySelector('#gbLvlSlider');
+          if (inp) inp.value = String(best.levels);
+          if (sl) sl.value = String(best.levels);
+          if (typeof deps.applyLevels === 'function') deps.applyLevels(best.levels);
+        };
+      } else hint.textContent = '—';
+    }
+    levelsHeatFactorModuleRef.fn = deps.levelsApi.levelsHeatFactor || null;
+    renderLevelsPickerStrip(body, rows, best, { onApply: deps.applyLevels });
+  } catch (e) {
+    if (hint) hint.textContent = 'н/д';
+  }
 }
 
 /**
@@ -760,6 +888,35 @@ export function wireDragHandlers({
       try { lc.applyOptions(gbInteractRestore); } catch (e) {}
     };
     document.addEventListener('mouseup', onDocUp, true);
+  }, { signal: sig, capture: true });
+
+  // «Подбор уровней» — точка старта (Step 5): Alt+ЛКМ по графику ставит/
+  // тащит вертикальную метку; хранится в gbPrefs.symbolBounds[sym].startMs.
+  // Двойной Alt+клик по метке — сброс (старт = вся доступная 1m-история).
+  wrap.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || !e.altKey) return;
+    const { x } = getCoords(wrap, e.clientX, e.clientY);
+    if (x >= Math.max(1, wrap.clientWidth - PRICE_AXIS_W - 2)) return;
+    const ts = lc.timeScale();
+    if (typeof ts.coordinateToTime !== 'function') return;
+    const t = ts.coordinateToTime(x);
+    if (t == null) return;
+    // toChartTime добавляет TZ_OFFSET_S — вычитаем обратно в UTC-ms
+    const fromChartTime = typeof deps.fromChartTime === 'function'
+      ? deps.fromChartTime
+      : (ct) => (ct - (typeof deps.tzOffsetS === 'number' ? deps.tzOffsetS : 0)) * 1000;
+    const ms = fromChartTime(+t);
+    if (!Number.isFinite(ms) || ms <= 0) return;
+    e.preventDefault(); e.stopPropagation();
+    const sym = String(body.querySelector('#gbSym')?.value || '').toUpperCase().trim();
+    if (sym) {
+      if (!gbPrefs.symbolBounds) gbPrefs.symbolBounds = {};
+      const prevB = gbPrefs.symbolBounds[sym] || {};
+      gbPrefs.symbolBounds[sym] = { ...prevB, startMs: ms };
+      saveGridLabPrefs(gbPrefs);
+    }
+    // пересчёт подбора без перерисовки всего чарта
+    if (typeof deps.onStartPointChange === 'function') deps.onStartPointChange(sym, ms);
   }, { signal: sig, capture: true });
 
   wrap.addEventListener('mousemove', (e) => {
@@ -1046,8 +1203,12 @@ export function buildGridLabBacktestMarkup(gbPrefs, defSym) {
           <option value="long"${opt('long', gm)}>Long</option>
           <option value="short"${opt('short', gm)}>Short</option>
         </select>
+        <span style="font-size:9px;color:var(--accent,#38bdf8);font-weight:600;cursor:help" title="Скан по 1m от точки старта: для каждого числа сеток считает реальные циклы buy→sell и чистую прибыль после комиссий. Слайдер меняет «Уровни»; тёплая зона = больше прибыли.">◆ Подбор</span>
+        <input id="gbLvlSlider" type="range" min="2" max="60" step="1" value="${gbPrefs.global.levels}" style="width:110px;accent-color:var(--accent,#38bdf8);vertical-align:middle" title="Количество сеток в диапазоне НИЗ..ВЕРХ">
+        <span id="gbLvlHint" style="font-size:9px;color:var(--text3)">—</span>
       </div>
-      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:8px;flex-shrink:0">Загрузка сетки...</div>
+      <div id="gbOut" style="font-size:10px;color:var(--text3);margin-bottom:4px;flex-shrink:0">Загрузка сетки...</div>
+      <div id="gbLvlHeat" style="font-size:9px;color:var(--text3);margin-bottom:8px;flex-shrink:0;line-height:0"></div>
       <div style="display:flex;gap:8px;flex:1;min-height:min(60vh,620px);align-items:stretch">
         <div id="gbChartWrap" style="position:relative;flex:1 1 auto;min-width:0;min-height:min(60vh,620px);height:min(60vh,620px);border:1px solid var(--border2);border-radius:6px;overflow:hidden">
           <div id="gbChart" style="position:absolute;inset:0"></div>
@@ -1147,6 +1308,19 @@ function bindGridLabBacktestForm(body, gbPrefs, scheduleGridLabSyncFn, applyRati
   const tfEl = body.querySelector('#gbTf');
   if (tfEl) {
     tfEl.addEventListener('change', () => scheduleGridLabSyncFn(body, gbPrefs, { reuseCandles: false }));
+  }
+  // «Подбор уровней»: слайдер синхронизирован с полем #gbLevels —
+  // оба значения меняются вместе, пересчёт = обычный sync.
+  const lvSlider = body.querySelector('#gbLvlSlider');
+  const lvInput = body.querySelector('#gbLevels');
+  if (lvSlider && lvInput) {
+    lvSlider.addEventListener('input', () => {
+      const v = Math.max(2, Math.min(60, +lvSlider.value || 3));
+      if (+lvInput.value !== v) {
+        lvInput.value = String(v);
+        scheduleGridLabSyncFn(body, gbPrefs, { reuseCandles: true });
+      }
+    });
   }
 }
 
