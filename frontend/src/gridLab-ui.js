@@ -535,6 +535,16 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
     if (el) el.innerHTML = `<span style="color:#ef4444">${out.msg}</span>`;
     renderPreviewFn(body, null, gbPrefs, {});
     renderRiskFn(body, null, gbPrefs);
+    // «Подбор уровней» не зависит от свечей ТФ лабы — работает по своим 1m и
+    // границам из формы. Запускаем даже при !out.ok (упавший 5m-фетч лабы
+    // не должен убивать подсказку и полосу).
+    try {
+      const loP = parseFloat(body.querySelector('#gbLow')?.value || '');
+      const hiP = parseFloat(body.querySelector('#gbHigh')?.value || '');
+      if (cfg.sym && isFinite(loP) && isFinite(hiP) && hiP > loP) {
+        renderLevelsPicker(body, { symbol: cfg.sym, lower: loP, upper: hiP }, gbPrefs, deps);
+      }
+    } catch (e) { /* non-fatal */ }
     return;
   }
 
@@ -1158,6 +1168,14 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
     canvas: rulerCanvas, _gridLabChart: true, drawings: [],
     hoveredIdx: -1, hoverX: 0, hoverY: 0,
   };
+  // «Подбор уровней»: точка старта должна переживать ПЕРЕСОЗДАНИЕ чарта при
+  // каждом sync (ползунок/уровни/границы) — иначе метка пропадает. Читаем из
+  // prefs заново и кладём в НОВЫЙ gbCh.
+  {
+    const startMs = +gbPrefs?.symbolBounds?.[out.symbol]?.startMs || 0;
+    if (startMs > 0) gbCh._gbStartMs = startMs;
+    body._gbChartCtx._gbStartMs = startMs > 0 ? startMs : 0;
+  }
   const gbLabSig = new AbortController();
   const sig = gbLabSig.signal;
 

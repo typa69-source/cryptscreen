@@ -398,7 +398,8 @@ async function ensureGridSmartScreener() {
 
 async function registerGridBotScreenersLazy() {
   const reg = await ensureGridBotScreeners();
-  reg({
+  try {
+    reg({
     S,
     BACKEND,
     fj,
@@ -415,25 +416,39 @@ async function registerGridBotScreenersLazy() {
     tagScreenerGroup: (sym, g) => {
       if (sym && g > 0) setSymGroup(sym, g);
     },
-  });
+    });
+  } catch (e) {
+    // Регистрация упала (напр. депс на момент клика) — сбрасываем, чтобы
+    // следующий клик переимпортировал и повторил, вместо вечного no-op.
+    _gridModsLoaded.bots = null;
+    _gridModsLoaded.botsModule = null;
+    console.warn('Grid screener registration failed, will retry on next click', e);
+    throw e;
+  }
 }
 async function registerGridSmartScreenerLazy() {
   const reg = await ensureGridSmartScreener();
-  reg({
+  try {
+    reg({
     S,
     BACKEND,
     fj,
     batchKlines,
-    fn,
-    fmtPrice,
-    openFullscreenBySym,
-    openGridLabFromRow,
-    GROUP_COLORS,
-    tagScreenerGroup: (sym, g) => {
-      if (sym && g > 0) setSymGroup(sym, g);
-    },
-  });
-}
+        fn,
+        fmtPrice,
+        openFullscreenBySym,
+        openGridLabFromRow,
+        GROUP_COLORS,
+        tagScreenerGroup: (sym, g) => {
+          if (sym && g > 0) setSymGroup(sym, g);
+        },
+      });
+      } catch (e) {
+        _gridModsLoaded.smart = null;
+        console.warn('Grid Smart registration failed, will retry on next click', e);
+        throw e;
+      }
+    }
 
 
 // ───────────────────────────────────────────────────────────
@@ -8258,10 +8273,34 @@ function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 // Each facade loads the module first — the module then installs the REAL
 // window handler (gridBotScreeners.js does `window.openGridSwingScreener = ...`
 // at the end of its registration) — and forwards this first click to it.
-window.openGridSwingScreener = async () => { await registerGridBotScreenersLazy(); if (typeof window.openGridSwingScreener === 'function') window.openGridSwingScreener(); };
-window.openGridIntradayScreener = async () => { await registerGridBotScreenersLazy(); if (typeof window.openGridIntradayScreener === 'function') window.openGridIntradayScreener(); };
-window.openGridPickScreener = async () => { await registerGridBotScreenersLazy(); if (typeof window.openGridPickScreener === 'function') window.openGridPickScreener(); };
-window.openGridSmartScreener = async () => { await registerGridSmartScreenerLazy(); if (typeof window.openGridSmartScreener === 'function') window.openGridSmartScreener(); };
+// Ошибки загрузки/регистрации НЕ глотаем молча: сброс + сообщение в углу,
+// иначе клик выглядит как «кнопка не реагирует» (см. фасады ниже).
+function _gridFacadeErr(where, e) {
+  console.warn(where, e);
+  try {
+    const el = document.createElement('div');
+    el.textContent = `⚠ ${where}: модуль скринера не загрузился — попробуй ещё раз`;
+    el.style.cssText = 'position:fixed;top:14px;right:14px;z-index:9999;background:#7f1d1d;color:#fff;font:12px system-ui;padding:8px 12px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.4)';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 6000);
+  } catch (e2) { /* ignore */ }
+}
+window.openGridSwingScreener = async () => {
+  try { await registerGridBotScreenersLazy(); if (typeof window.openGridSwingScreener === 'function') window.openGridSwingScreener(); }
+  catch (e) { _gridFacadeErr('Grid Swing', e); }
+};
+window.openGridIntradayScreener = async () => {
+  try { await registerGridBotScreenersLazy(); if (typeof window.openGridIntradayScreener === 'function') window.openGridIntradayScreener(); }
+  catch (e) { _gridFacadeErr('Grid Intra', e); }
+};
+window.openGridPickScreener = async () => {
+  try { await registerGridBotScreenersLazy(); if (typeof window.openGridPickScreener === 'function') window.openGridPickScreener(); }
+  catch (e) { _gridFacadeErr('Grid Pick', e); }
+};
+window.openGridSmartScreener = async () => {
+  try { await registerGridSmartScreenerLazy(); if (typeof window.openGridSmartScreener === 'function') window.openGridSmartScreener(); }
+  catch (e) { _gridFacadeErr('Grid Smart', e); }
+};
 
 // ───────────────────────────────────────────────────────────────
 // ───────────────────────────────────────────────────────────────
