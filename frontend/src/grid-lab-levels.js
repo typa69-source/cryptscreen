@@ -35,12 +35,16 @@ export const LEVELS_SCAN_MAX = 60;
  * Привести окно 1m-свечей к формату {t,o,h,l,c}: фильтр от startMs
  * (включительно) до последней свечи. Бары до старта отбрасываются —
  * точка старта задаёт левую границу «жизни бота».
+ * startMs в БУДУЩЕМ (за последней свечой — битая точка, напр. из-за
+ * конвертации TZ) приравнивается к нулю: берём всё окно.
  * @returns {Array} отфильтрованные свечи (может быть пусто)
  */
 export function windowFromStart(candles1m, startMs) {
   if (!Array.isArray(candles1m) || candles1m.length === 0) return [];
   const s = +startMs;
   if (!isFinite(s) || s <= 0) return candles1m.slice();
+  const lastT = +candles1m[candles1m.length - 1].t;
+  if (s > lastT + 60000) return candles1m.slice(); // старт в будущем = битый → всё окно
   return candles1m.filter((k) => +k.t >= s);
 }
 

@@ -854,6 +854,9 @@ export function wireDragHandlers({
     captureGbLabViewport,
     applyGbViewportFreeze,
     rCanvas,
+    fromChartTime,
+    tzOffsetS,
+    onStartPointChange,
   } = deps;
 
   const hitPrice = (clientY) => {
@@ -1047,6 +1050,7 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
     onRulerStart, onRulerMove, onRulerEnd, isNearRuler,
     PRICE_AXIS_W = PRICE_AXIS_W_DEFAULT,
     prependGridLabHistory, kickGridLabPricePoll,
+    fromChartTime, tzOffsetS, onStartPointChange,
   } = deps;
 
   const wrap = body.querySelector('#gbChartWrap');
@@ -1160,7 +1164,8 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
   wireDragHandlers({
     wrap, host, lc, cs, body, out, gbPrefs, sig,
     deps: { PRICE_AXIS_W, getCoords, pushGridLabBoundsUndo, scheduleGridLabSync,
-            saveGridLabPrefs, captureGbLabViewport, applyGbViewportFreeze, rCanvas },
+            saveGridLabPrefs, captureGbLabViewport, applyGbViewportFreeze, rCanvas,
+            fromChartTime, tzOffsetS, onStartPointChange },
   });
   try {
     lc.timeScale().subscribeVisibleLogicalRangeChange((range) => {
