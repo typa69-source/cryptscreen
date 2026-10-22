@@ -135,14 +135,17 @@ test('buildRatioGridLevels: anchor ≤ 0 → null', () => {
   assert.equal(buildRatioGridLevels(-10, 3, 1, 0.5, 12), null);
 });
 
-test('buildRatioGridLevels: levels clamped to [3, 60]', () => {
+test('buildRatioGridLevels: levels clamped to [3, 150]', () => {
   // totalLevels=1 → clamped to 3 → upSteps=round(3*1/2)=2, downSteps=2
   // grid: anchor + 2 up + 2 down = 5 points → levels = 4 (≥ 3)
   const r1 = buildRatioGridLevels(100, 1, 1, 0.5, 1);
   assert.ok(r1.levels >= 3, `expected levels ≥ 3, got ${r1.levels}`);
-  // totalLevels=100 → clamped to 60 → grid ≤ 60+1 points → levels ≤ 60
-  const r60 = buildRatioGridLevels(100, 1, 1, 0.5, 100);
-  assert.ok(r60.levels <= 60, `expected levels ≤ 60, got ${r60.levels}`);
+  // totalLevels=100 → в пределах нового потолка 150 → сетка реально плотная
+  const r150 = buildRatioGridLevels(100, 1, 1, 0.5, 100);
+  assert.ok(r150.levels <= 150, `expected levels ≤ 150, got ${r150.levels}`);
+  assert.ok(r150.levels > 60, `100 уровней больше не обрезаются до 60, got ${r150.levels}`);
+  const rBig = buildRatioGridLevels(100, 1, 1, 0.5, 999);
+  assert.ok(rBig.levels <= 150, `expected levels ≤ 150, got ${rBig.levels}`);
 });
 
 test('buildRatioGridLevels: stepPct clamped to [0.01, 50]', () => {
@@ -359,7 +362,7 @@ test('loadGridLabPrefs: levels/bars/leverage clamped', () => {
     }),
   });
   const p = loadGridLabPrefs(ls);
-  assert.ok(p.global.levels >= 3 && p.global.levels <= 60);
+  assert.ok(p.global.levels >= 3 && p.global.levels <= 150);
   assert.ok(p.global.bars >= 80 && p.global.bars <= 1200);
   assert.ok(p.global.leverage >= 1 && p.global.leverage <= 25);
   assert.ok(p.global.ratioLong >= 0.1);
@@ -433,12 +436,13 @@ test('computeRatioGridUpdate: preserves existing anchorPrice', () => {
   assert.ok(r.gbPrefs.symbolBounds.X.gridLevels);
 });
 
-test('computeRatioGridUpdate: levels clamped to [3, 60]', () => {
+test('computeRatioGridUpdate: levels clamped to [3, 150]', () => {
   const prefs = defaultGridLabPrefs();
-  // totalLevels=999 → clamp 60
+  // totalLevels=999 → clamp 150
   const r = computeRatioGridUpdate(prefs, 'X', 1, 1, 0.5, 999, 100);
   assert.equal(r.updated, true);
-  assert.ok(r.built.levels <= 60, `expected ≤ 60, got ${r.built.levels}`);
+  assert.ok(r.built.levels <= 150, `expected ≤ 150, got ${r.built.levels}`);
+  assert.ok(r.built.levels > 60, `потолок поднят: got ${r.built.levels}`);
 });
 
 // ── compileGridLabState ────────────────────────────────────────
@@ -538,7 +542,7 @@ test('runManualGridBacktest: maxDd is non-negative on oscillating series', () =>
 test('runManualGridBacktest: clamp deposit / leverage / levels', () => {
   const candles = makeCandles(80, 100, 1);
   const r = runManualGridBacktest({ sym: 'X', tf: '5m', candles, levels: 99, leverage: 99, deposit: 0 });
-  assert.equal(r.levels, 60, 'levels clamped to 60');
+  assert.equal(r.levels, 99, 'levels 99 больше не обрезаются до 60');
   assert.equal(r.leverage, 25, 'leverage clamped to 25');
   assert.ok(r.startEq >= 1, 'deposit clamped to ≥ 1');
 });

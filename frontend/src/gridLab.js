@@ -9,6 +9,8 @@
  * No behaviour changes — this is a copy-with-exports, not a refactor.
  */
 
+import { GB_LEVELS_MAX } from './grid-economics.js';
+
 export const GB_DEP_MIN = 0.1;
 
 /** Clamp a deposit value to a sane minimum. */
@@ -58,7 +60,7 @@ export function buildRatioGridLevels(anchor, longRatio, shortRatio, avgStepPct, 
   const sr = Math.max(0.1, +shortRatio || 1);
   const stepPct = Math.max(0.01, Math.min(50, +avgStepPct || 0.5));
   const stepFrac = stepPct / 100;
-  const totalLv = Math.max(3, Math.min(60, totalLevels | 0));
+  const totalLv = Math.max(3, Math.min(GB_LEVELS_MAX, totalLevels | 0));
   const sumR = lr + sr;
   const upSteps = Math.max(1, Math.round((totalLv * lr) / sumR));
   const downSteps = Math.max(1, Math.round((totalLv * sr) / sumR));
@@ -339,7 +341,7 @@ export function loadGridLabPrefs(storage) {
       global: {
         tf: ['1m', '5m', '15m', '1h'].includes(j?.global?.tf) ? j.global.tf : d.global.tf,
         bars: Math.max(80, Math.min(1200, +(j?.global?.bars || d.global.bars))),
-        levels: Math.max(3, Math.min(60, +(j?.global?.levels || d.global.levels))),
+        levels: Math.max(3, Math.min(GB_LEVELS_MAX, +(j?.global?.levels || d.global.levels))),
         leverage: Math.max(1, Math.min(25, +(j?.global?.leverage || d.global.leverage))),
         deposit: gbDepositClamp(j?.global?.deposit, d.global.deposit),
         gridMode: ['neutral', 'long', 'short'].includes(j?.global?.gridMode) ? j.global.gridMode : d.global.gridMode,
@@ -387,7 +389,7 @@ export function computeRatioGridUpdate(gbPrefs, sym, ratioLong, ratioShort, rati
   const sp = parseFloat(ratioStepPct);
   if (!isFinite(lr) || !isFinite(sr) || !isFinite(sp)) return { updated: false, gbPrefs, built: null };
 
-  const lvl = Math.max(3, Math.min(60, +totalLevels || 12));
+  const lvl = Math.max(3, Math.min(GB_LEVELS_MAX, +totalLevels || 12));
   const anchor = +anchorOverride;
   if (!(anchor > 0)) return { updated: false, gbPrefs, built: null };
 
@@ -431,7 +433,7 @@ export function compileGridLabState(cfg) {
   const lo = cfg.lower > 0 ? cfg.lower : Math.min(...lowSeries);
   const hi = cfg.upper > 0 ? cfg.upper : Math.max(...highSeries);
   if (!(hi > lo)) return { ok: false, msg: 'Неверный диапазон сетки' };
-  const levelsIn = Math.max(2, Math.min(60, cfg.levels | 0));
+  const levelsIn = Math.max(2, Math.min(GB_LEVELS_MAX, cfg.levels | 0));
   const lev = Math.max(1, Math.min(25, cfg.leverage || 1));
   const dep = gbDepositClamp(cfg.deposit, 500);
   const resolved = resolveGridLevelsForCfg(cfg, lo, hi, levelsIn);
@@ -487,7 +489,7 @@ export function runManualGridBacktest(cfg) {
   const lo = cfg.lower > 0 ? cfg.lower : Math.min(...lowSeries);
   const hi = cfg.upper > 0 ? cfg.upper : Math.max(...highSeries);
   if (!(hi > lo)) return { ok: false, msg: 'Неверный диапазон сетки' };
-  const levels = Math.max(2, Math.min(60, cfg.levels | 0));
+  const levels = Math.max(2, Math.min(GB_LEVELS_MAX, cfg.levels | 0));
   const lev = Math.max(1, Math.min(25, cfg.leverage || 1));
   const fee = Math.max(0, Math.min(0.01, cfg.fee || 0.00055));
   const dep = Math.max(1, cfg.deposit || 500);

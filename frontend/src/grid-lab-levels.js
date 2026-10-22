@@ -25,11 +25,15 @@
  * Все функции чистые и детерминированные → unit-тестируемые.
  */
 
-import { roundTripFeePct } from './grid-economics.js';
+import { roundTripFeePct, GB_LEVELS_MAX } from './grid-economics.js';
 
-/** Min/max для скана числа уровней (интервалов между уровнями). */
+/**
+ * Min/max для скана числа уровней (интервалов между уровнями).
+ * MAX общий с формой/ползунком (GB_LEVELS_MAX) — иначе UI разрешал бы N,
+ * который движок молча обрезал бы до 60.
+ */
 export const LEVELS_SCAN_MIN = 2;
-export const LEVELS_SCAN_MAX = 60;
+export const LEVELS_SCAN_MAX = GB_LEVELS_MAX;
 
 /**
  * Привести окно 1m-свечей к формату {t,o,h,l,c}: фильтр от startMs

@@ -14,6 +14,9 @@ import {
   applyBoundsToPrefs,
   readGridLabInputs,
   getGridSelectorRows,
+  canReuseGridLabChart,
+  levelsCacheKey,
+  LEVELS_CACHE_TTL_MS,
 } from '../src/gridLab-ui.js';
 
 // ── pushBoundsUndo ─────────────────────────────────────────────
@@ -138,12 +141,12 @@ test('applyBoundsToPrefs: preserves other props on existing entry', () => {
 
 test('readGridLabInputs: clamps and trims sym', () => {
   const cfg = readGridLabInputs(
-    { sym: '  btc ', tf: '1h', levels: 99, leverage: 99, deposit: 0, lower: 'abc', upper: '110', gridMode: 'long' },
+    { sym: '  btc ', tf: '1h', levels: 999, leverage: 99, deposit: 0, lower: 'abc', upper: '110', gridMode: 'long' },
     {}, 900, [],
   );
   assert.equal(cfg.sym, 'BTC');
   assert.equal(cfg.tf, '1h');
-  assert.equal(cfg.levels, 60, 'levels clamped to 60');
+  assert.equal(cfg.levels, 150, 'levels clamped to GB_LEVELS_MAX (150), а не 60');
   assert.equal(cfg.leverage, 25, 'leverage clamped to 25');
   assert.ok(cfg.deposit >= 0.1, 'deposit clamped to GB_DEP_MIN (0.1)');
   assert.equal(cfg.lower, 0, 'invalid lower → 0');
@@ -231,4 +234,79 @@ test('getGridSelectorRows: bad inputs → []', () => {
   assert.deepEqual(getGridSelectorRows(null, {}, () => 1), []);
   assert.deepEqual(getGridSelectorRows(['A'], null, () => 1), []);
   assert.deepEqual(getGridSelectorRows(['A'], {}, null), []);
+});
+
+
+// ═══════════════════════════════════════════════════════════════
+//  График не должен менять масштаб/положение при правке уровней:
+//  пересоздаём чарт ТОЛЬКО когда меняются данные, иначе — апдейт на месте.
+// ═══════════════════════════════════════════════════════════════
+
+const mkPrev = (samples, sym = 'BTCUSDT', tf = '5m') => ({
+  lc: {}, cs: {}, gbCh: {},
+  sym, tf,
+  merged: samples,
+});
+
+const mkCandlesSig = (n, t0 = 1700000000000, lastClose = 100) =>
+  Array.from({ length: n }, (_, i) => ({
+    t: t0 + i * 60000, o: 100, h: 101, l: 99, c: i === n - 1 ? lastClose : 100,
+  }));
+
+test('canReuseGridLabChart: те же свечи + те же параметры → апдейт на месте', () => {
+  const cs = mkCandlesSig(50);
+  const prev = mkPrev(cs);
+  const out = { ok: true, symbol: 'BTCUSDT', tf: '5m', candles: cs, levels: 12, lower: 95, upper: 105 };
+  assert.equal(canReuseGridLabChart(prev, out, { reuseChart: true }), true);
+  // смена только уровней/границ не должна требовать пересоздания
+  assert.equal(canReuseGridLabChart(prev, { ...out, levels: 77, lower: 90, upper: 110 }, { reuseChart: true }), true);
+});
+
+test('canReuseGridLabChart: без флага reuseChart — всегда новый чарт', () => {
+  const cs = mkCandlesSig(50);
+  const prev = mkPrev(cs);
+  const out = { ok: true, symbol: 'BTCUSDT', tf: '5m', candles: cs };
+  assert.equal(canReuseGridLabChart(prev, out, {}), false);
+  assert.equal(canReuseGridLabChart(prev, out, { keepViewport: true }), false);
+});
+
+test('canReuseGridLabChart: другой символ/ТФ/свечи/нет чарта → пересоздание', () => {
+  const cs = mkCandlesSig(50);
+  const out = { ok: true, symbol: 'BTCUSDT', tf: '5m', candles: cs };
+  assert.equal(canReuseGridLabChart(mkPrev(cs, 'ETHUSDT'), out, { reuseChart: true }), false);
+  assert.equal(canReuseGridLabChart(mkPrev(cs, 'BTCUSDT', '1h'), out, { reuseChart: true }), false);
+  assert.equal(canReuseGridLabChart(mkPrev(null), out, { reuseChart: true }), false);
+  assert.equal(canReuseGridLabChart({ lc: {}, cs: {} }, out, { reuseChart: true }), false);
+  // свечи приросли (новый бар) → нужен setData, пересоздаём
+  assert.equal(canReuseGridLabChart(mkPrev(mkCandlesSig(51)), out, { reuseChart: true }), false);
+  // тот же размер, но обновился close последнего бара → пересоздаём
+  assert.equal(canReuseGridLabChart(mkPrev(mkCandlesSig(50, 1700000000000, 777)), out, { reuseChart: true }), false);
+  // провалидированный out не ok → пересоздание
+  assert.equal(canReuseGridLabChart(mkPrev(cs), { ...out, ok: false }, { reuseChart: true }), false);
+});
+
+test('levelsCacheKey: не зависит от N, зависит от входов скана', () => {
+  const c1m = mkCandlesSig(30);
+  const base = { sym: 'BTCUSDT', lo: 95, hi: 105, startMs: 1700000000000, deposit: 500, ex: 'bybit', c1m };
+  const k1 = levelsCacheKey(base);
+  // тот же вход → тот же ключ (ползунок N не участвует в ключе вообще)
+  assert.equal(levelsCacheKey({ ...base }), k1);
+  // изменились границы / старт / депо / биржа → новый ключ → нужен пересчёт
+  assert.notEqual(levelsCacheKey({ ...base, lo: 94 }), k1);
+  assert.notEqual(levelsCacheKey({ ...base, hi: 106 }), k1);
+  assert.notEqual(levelsCacheKey({ ...base, startMs: 1700000060000 }), k1);
+  assert.notEqual(levelsCacheKey({ ...base, deposit: 1000 }), k1);
+  assert.notEqual(levelsCacheKey({ ...base, ex: 'binance' }), k1);
+  assert.notEqual(levelsCacheKey({ ...base, sym: 'ETHUSDT' }), k1);
+  // пришёл новый 1m-бар → окно другое → пересчёт
+  assert.notEqual(levelsCacheKey({ ...base, c1m: mkCandlesSig(31) }), k1);
+});
+
+test('levelsCacheKey: пустой/битый вход не бросает', () => {
+  const k = levelsCacheKey({});
+  assert.equal(typeof k, 'string');
+  assert.ok(k.includes('|'));
+  assert.equal(levelsCacheKey(null), levelsCacheKey({}));
+  assert.equal(levelsCacheKey({ c1m: null }).split('|').pop(), '0');
+  assert.ok(LEVELS_CACHE_TTL_MS > 0);
 });

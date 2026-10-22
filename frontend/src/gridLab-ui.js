@@ -18,6 +18,7 @@ import {
   gbWantBarsFromVisible,
   compileGridLabState,
 } from './gridLab.js';
+import { GB_LEVELS_MAX, GB_LEVELS_MIN } from './grid-economics.js';
 import { chartThemeColors } from './state.js';
 
 const MAX_UNDO = 50;
@@ -136,7 +137,7 @@ export function readGridLabInputs(fields, gbPrefs, wantBars, mergedCand) {
   return {
     sym,
     tf,
-    levels: Math.max(3, Math.min(60, +fields.levels || 12)),
+    levels: Math.max(3, Math.min(GB_LEVELS_MAX, +fields.levels || 12)),
     lower: isFinite(rawLo) ? rawLo : 0,
     upper: isFinite(rawHi) ? rawHi : 0,
     leverage: Math.max(1, Math.min(25, +fields.leverage || 3)),
@@ -421,7 +422,15 @@ export function renderGridRiskProfile(host, body, out, gbPrefs, deps) {
  * Honours body._gbSuppressChartSync (set during drag operations).
  */
 export function scheduleGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
-  if (body._gbSuppressChartSync) return;
+  // SELF-HEAL: флаг подавления синка живёт ровно столько, сколько РЕАЛЬНО
+  // тянется граница. Если mouseup потерялся (отпустили кнопку вне окна,
+  // переключили вкладку), флаг залипал и все последующие правки — ползунок,
+  // Низ/Верх, Уровни — молча игнорировались. Это и выглядело как «ползунок
+  // не срабатывает».
+  if (body._gbSuppressChartSync) {
+    if (body._gbChartCtx?._gbDrag) return;
+    body._gbSuppressChartSync = false;
+  }
   if (body._gridLabUiTimer) clearTimeout(body._gridLabUiTimer);
   // Invalidate an in-flight fetch/render as soon as a newer form change is
   // scheduled. This prevents an older, slower response from replacing the
@@ -559,8 +568,11 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
   // отрисовку сетки); результат пишется в hint у слайдера и в панель-градиент.
   try { renderLevelsPicker(body, out, gbPrefs, deps); } catch (e) { /* non-fatal */ }
 
+  // reuseCandles === «поменялись только параметры сетки» (Уровни/Низ/Верх/
+  // Плечо/Депо/режим). В этом случае график обновляется НА МЕСТЕ: ни setData,
+  // ни fitContent, ни setVisibleRange — масштаб и прокрутка не меняются вообще.
   const keepVp = !!(reuse && lcRef && body._gbChartCtx?.merged?.length);
-  renderPreviewFn(body, out, gbPrefs, { keepViewport: keepVp });
+  renderPreviewFn(body, out, gbPrefs, { keepViewport: keepVp, reuseChart: keepVp });
 
   if (keepVp) {
     const lcA = body._gbChartCtx?.lc;
@@ -582,6 +594,23 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
 // ═══════════════════════════════════════════════════════════════
 //  «Подбор уровней» — 1m-scan renderer (Step 4)
 // ═══════════════════════════════════════════════════════════════
+
+/** Сколько живёт результат скана (1m-окно и так меняется раз в минуту). */
+export const LEVELS_CACHE_TTL_MS = 60000;
+
+/**
+ * Ключ кэша скана. Зависит ТОЛЬКО от входов скана (символ, границы, депо,
+ * биржа, точка старта, само 1m-окно) и НЕ зависит от текущего числа сеток N.
+ * Отсюда правило: движение ползунка не требует пересчёта — только перерисовки.
+ * Pure — для юнит-тестов.
+ */
+export function levelsCacheKey(parts) {
+  const p = parts || {};
+  const c1m = p.c1m;
+  const n = Array.isArray(c1m) ? c1m.length : 0;
+  const lastT = n ? +c1m[n - 1].t : 0;
+  return [p.sym || '', +p.lo, +p.hi, +p.startMs || 0, +p.deposit || 0, p.ex || '', n, lastT].join('|');
+}
 
 /**
  * Прогреть слайдер/подсказку «Подбора» без скана (до готовности данных).
@@ -621,11 +650,13 @@ export function renderLevelsPickerStrip(body, rows, best, { onApply } = {}) {
   strip.innerHTML = `<div style="display:flex;gap:1px;align-items:flex-end;width:100%;height:18px">${chunks}</div>`;
   strip.querySelectorAll('[data-lvl]').forEach((el) => {
     el.addEventListener('click', () => {
-      const v = Math.max(2, Math.min(60, +el.dataset.lvl || 2));
+      const v = Math.max(GB_LEVELS_MIN, Math.min(GB_LEVELS_MAX, +el.dataset.lvl || 2));
       const inp = body.querySelector('#gbLevels');
       const sl = body.querySelector('#gbLvlSlider');
       if (inp) inp.value = String(v);
       if (sl) sl.value = String(v);
+      const nowBadge = body.querySelector('#gbLvlNow');
+      if (nowBadge) nowBadge.textContent = String(v);
       if (typeof onApply === 'function') onApply(v);
     });
   });
@@ -654,11 +685,35 @@ export async function renderLevelsPicker(body, out, gbPrefs, deps) {
   const strip = body.querySelector('#gbLvlHeat');
   if (!hint && !strip) return;
   const sym = out?.symbol;
+  const lo = +out?.lower, hi = +out?.upper;
+  if (!sym || !(hi > lo)) {
+    renderLevelsPickerIdle(body, 'диапазон?');
+    return;
+  }
+  const dep = +gbPrefs?.global?.deposit || 500;
+  const ex = typeof deps?.symExchange === 'function' ? deps.symExchange(sym) : 'binance';
+  const startMs = +gbPrefs?.symbolBounds?.[sym]?.startMs || 0;
+
+  // МГНОВЕННЫЙ путь: скан уже посчитан для этих же входов и того же 1m-окна.
+  // Ползунок меняет только N — строки скана и оптимум от N не зависят, так что
+  // пересчитывать нечего: перерисовываем подсказку под ТЕКУЩЕЕ N без сети и
+  // без скана. Именно из-за отсутствия этого кэша ползунок «подтормаживал» и
+  // вёл себя непредсказуемо.
+  const peek = typeof deps?.peek1mFor === 'function' ? deps.peek1mFor(sym) : null;
+  if (Array.isArray(peek) && peek.length) {
+    const key = levelsCacheKey({ sym, lo, hi, startMs, deposit: dep, ex, c1m: peek });
+    const c = body._gbLvlCache;
+    if (c && c.key === key && (Date.now() - c.at) < LEVELS_CACHE_TTL_MS) {
+      renderLevelsPickerResult(body, c, deps);
+      return;
+    }
+  }
+
   let levelsApi = deps?.levelsApi || null;
   if (!levelsApi && typeof deps?.ensureLevelsApi === 'function') {
     levelsApi = await deps.ensureLevelsApi();
   }
-  if (!sym || !deps?.fetch1mFor || !levelsApi) {
+  if (!levelsApi || typeof deps?.fetch1mFor !== 'function') {
     renderLevelsPickerIdle(body);
     return;
   }
@@ -666,19 +721,18 @@ export async function renderLevelsPicker(body, out, gbPrefs, deps) {
   const seq = (body._gbLvlSeq = (body._gbLvlSeq || 0) + 1);
   const isCurrent = () => body._gbLvlSeq === seq && !!document.getElementById('gridLabModal');
   try {
-    if (hint) hint.textContent = 'скан…';
+    // Старые числа не затираем: пока идёт пересчёт, показываем их с маркером
+    // устаревания, иначе подсказка мигает в «скан…» на каждое движение.
+    if (hint && !body._gbLvlCache) hint.textContent = 'скан…';
     const c1m = await deps.fetch1mFor(sym);
     if (!isCurrent()) return;
-    const startMs = +gbPrefs?.symbolBounds?.[sym]?.startMs || 0;
     const win = deps.levelsApi.windowFromStart(c1m, startMs);
-    const lo = +out.lower, hi = +out.upper;
-    if (!(hi > lo) || win.length < 30) {
-      if (hint) hint.textContent = win.length < 30 ? `1m-баров: ${win.length} (мало)` : 'диапазон?';
+    if (win.length < 30) {
+      if (hint) hint.textContent = `1m-баров: ${win.length} (мало)`;
       renderLevelsPickerStrip(body, [], null, { onApply: deps.applyLevels });
+      body._gbLvlCache = null;
       return;
     }
-    const dep = gbPrefs?.global?.deposit || 500;
-    const ex = typeof deps.symExchange === 'function' ? deps.symExchange(sym) : 'binance';
     const rows = deps.levelsApi.scanLevels(win, lo, hi, { ex, deposit: dep });
     const usd = deps.levelsApi.pickOptimalLevels(rows);
     const best = deps.levelsApi.pickOptimalByCapture
@@ -688,39 +742,64 @@ export async function renderLevelsPicker(body, out, gbPrefs, deps) {
     const stability = deps.levelsApi.scanLevelsStability
       ? deps.levelsApi.scanLevelsStability(win, lo, hi, { ex, deposit: dep })
       : null;
-    const cur = rLevelsCurrent(body);
-    const curRow = rows.find((r) => r.levels === cur);
-    if (hint) {
-      if (best) {
-        const parts = [];
-        parts.push(`оптимум <b style="color:#34d399;cursor:pointer" id="gbLvlBest">${best.levels}</b>`);
-        parts.push(`сделок ${best.rt}`);
-        parts.push(`$${(best.netOfDeposit || 0).toFixed(2)}`);
-        if (usd && usd.levels !== best.levels) parts.push(`<span style="color:var(--text3)">($-макс: ${usd.levels})</span>`);
-        if (curRow && curRow.levels !== best.levels) {
-          parts.push(`<span style="color:var(--text3)">· сейчас ${cur}: ${curRow.rt} сдел / $${(curRow.netOfDeposit || 0).toFixed(2)}</span>`);
-        } else if (curRow) parts.push('✓');
-        if (stability) {
-          const okPct = Math.round((stability.agree / stability.folds) * 100);
-          const col = okPct >= 66 ? '#34d399' : okPct >= 34 ? '#fbbf24' : '#ef4444';
-          parts.push(`<span style="color:${col}" title="Окно делится на ${stability.folds} отрезка; в каждом — свой скан. Оптимумы: ${stability.perFold.join(', ')}. Совпадение в ±2 уровнях = ${okPct}%.">стаб ${okPct}%</span>`);
-        }
-        hint.innerHTML = parts.join(' · ');
-        const bl = hint.querySelector('#gbLvlBest');
-        if (bl) bl.onclick = () => {
-          const inp = body.querySelector('#gbLevels');
-          const sl = body.querySelector('#gbLvlSlider');
-          if (inp) inp.value = String(best.levels);
-          if (sl) sl.value = String(best.levels);
-          if (typeof deps.applyLevels === 'function') deps.applyLevels(best.levels);
-        };
-      } else hint.textContent = '—';
-    }
     levelsHeatFactorModuleRef.fn = deps.levelsApi.levelsHeatFactor || null;
-    renderLevelsPickerStrip(body, rows, best, { onApply: deps.applyLevels });
+    const cache = {
+      key: levelsCacheKey({ sym, lo, hi, startMs, deposit: dep, ex, c1m }),
+      at: Date.now(),
+      rows, usd, best, stability,
+      winLen: win.length,
+    };
+    body._gbLvlCache = cache;
+    renderLevelsPickerResult(body, cache, deps);
   } catch (e) {
     if (hint) hint.textContent = 'н/д';
   }
+}
+
+/**
+ * Отрисовать подсказку и тепловую полосу из ГОТОВОГО результата скана.
+ * Чисто UI: ни сети, ни скана — поэтому вызывается на каждое движение ползунка.
+ */
+export function renderLevelsPickerResult(body, cache, deps) {
+  const hint = body.querySelector('#gbLvlHint');
+  if (!cache || !Array.isArray(cache.rows)) { renderLevelsPickerIdle(body); return; }
+  const { rows, best, usd, stability } = cache;
+  const cur = rLevelsCurrent(body);
+  const curRow = rows.find((r) => r.levels === cur);
+  if (hint) {
+    if (!best) {
+      hint.textContent = '—';
+    } else {
+      const parts = [];
+      parts.push(`оптимум <b style="color:#34d399;cursor:pointer" id="gbLvlBest">${best.levels}</b>`);
+      parts.push(`сделок ${best.rt}`);
+      parts.push(`$${(best.netOfDeposit || 0).toFixed(2)}`);
+      if (usd && usd.levels !== best.levels) parts.push(`<span style="color:var(--text3)">($-макс: ${usd.levels})</span>`);
+      if (curRow && curRow.levels !== best.levels) {
+        // Убыток текущего N показываем красным: иначе «$−1.02» читается как норма.
+        const curUsd = +(curRow.netOfDeposit || 0);
+        const curCol = curUsd < 0 ? '#ef4444' : 'var(--text3)';
+        parts.push(`<span style="color:${curCol}">сейчас ${cur}: ${curRow.rt} сдел / $${curUsd.toFixed(2)}</span>`);
+      } else if (curRow) parts.push('<span style="color:#34d399">✓ совпадает</span>');
+      if (stability) {
+        const okPct = Math.round((stability.agree / stability.folds) * 100);
+        const col = okPct >= 66 ? '#34d399' : okPct >= 34 ? '#fbbf24' : '#ef4444';
+        parts.push(`<span style="color:${col}" title="Окно делится на ${stability.folds} отрезка; в каждом — свой скан. Оптимумы: ${stability.perFold.join(', ')}. Совпадение в ±2 уровнях = ${okPct}%.">стаб ${okPct}%</span>`);
+      }
+      hint.innerHTML = parts.join(' · ');
+      const bl = hint.querySelector('#gbLvlBest');
+      if (bl) bl.onclick = () => {
+        const inp = body.querySelector('#gbLevels');
+        const sl = body.querySelector('#gbLvlSlider');
+        if (inp) inp.value = String(best.levels);
+        if (sl) sl.value = String(best.levels);
+        const nowBadge = body.querySelector('#gbLvlNow');
+        if (nowBadge) nowBadge.textContent = String(best.levels);
+        if (typeof deps?.applyLevels === 'function') deps.applyLevels(best.levels);
+      };
+    }
+  }
+  renderLevelsPickerStrip(body, rows, best, { onApply: deps?.applyLevels });
 }
 
 /**
@@ -824,6 +903,68 @@ export function buildPreviewPriceLines(out, lastClose) {
 }
 
 /**
+ * Можно ли НЕ пересоздавать график, а обновить его на месте?
+ *
+ * Пересоздание (remove + createChart + setData) неизбежно сбрасывает масштаб,
+ * зум и прокрутку: свежий чарт применяет fitContent / дефолтный автоскейл.
+ * Поэтому при изменении ТОЛЬКО параметров сетки (Уровни, Низ, Верх, Плечо,
+ * Депо, режим) график должен остаться тем же объектом — тогда ни масштаб, ни
+ * положение физически не могут измениться, потому что мы их не трогаем.
+ *
+ * Условия переиспользования: тот же символ, тот же ТФ, те же самые свечи
+ * (длина + первая/последняя по времени и последний close) и живой чарт.
+ * Pure — для юнит-тестов.
+ */
+export function canReuseGridLabChart(prev, out, viewOpts) {
+  if (!viewOpts || viewOpts.reuseChart !== true) return false;
+  if (!prev || !prev.lc || !prev.cs || !prev.gbCh) return false;
+  if (!out || out.ok !== true) return false;
+  const nc = out.candles;
+  const oc = prev.merged;
+  if (!Array.isArray(nc) || !Array.isArray(oc) || !nc.length || !oc.length) return false;
+  if (prev.sym !== out.symbol || prev.tf !== out.tf) return false;
+  if (nc.length !== oc.length) return false;
+  const a0 = nc[0], b0 = oc[0];
+  const aN = nc[nc.length - 1], bN = oc[oc.length - 1];
+  return +a0.t === +b0.t && +aN.t === +bN.t && +aN.c === +bN.c;
+}
+
+/**
+ * Обновление графика НА МЕСТЕ: перерисовать только уровни сетки, не трогая
+ * ни setData, ни timeScale, ни priceScale. Масштаб/зум/скролл сохраняются
+ * побайтово (это и есть требование «график не меняет масштаб и положение»).
+ */
+function updateGridLabChartInPlace(body, ctx, out, gbPrefs, deps) {
+  const { cs, gbCh } = ctx;
+  // Снять прежние линии уровней (в переиспользуемом чарте их никто не уберёт).
+  for (const ln of (ctx._gbLines || [])) {
+    try { cs.removePriceLine(ln); } catch (e) { /* already gone */ }
+  }
+  ctx._gbLines = [];
+  const lastClose = +ctx.merged[ctx.merged.length - 1]?.c;
+  for (const ln of buildPreviewPriceLines(out, lastClose)) {
+    try {
+      ctx._gbLines.push(cs.createPriceLine({
+        price: ln.price, color: ln.color, lineWidth: ln.lineWidth, lineStyle: ln.lineStyle,
+        axisLabelVisible: ln.axisLabelVisible, title: ln.title,
+      }));
+    } catch (e) { /* non-fatal */ }
+  }
+  // Drag-хендлеры держат ссылку на объект out — обновляем его поля, а не ссылку,
+  // иначе перетаскивание границы считало бы старые Низ/Верх.
+  if (ctx.out && typeof ctx.out === 'object') Object.assign(ctx.out, out);
+  const startMs = +gbPrefs?.symbolBounds?.[out.symbol]?.startMs || 0;
+  ctx._gbStartMs = startMs > 0 ? startMs : 0;
+  if (gbCh) {
+    gbCh.candles = ctx.merged;
+    if (startMs > 0) gbCh._gbStartMs = startMs;
+    try { deps.rCanvas(gbCh); } catch (e) { /* non-fatal */ }
+  }
+  // Видовой снимок больше не нужен: чарт вообще не пересоздавался.
+  body._gbPendingViewport = null;
+}
+
+/**
  * Decide whether the saved viewport from a previous render should be reused.
  * Pure — no DOM access.
  */
@@ -913,6 +1054,7 @@ export function wireDragHandlers({
     } catch (err) {}
     const onDocUp = () => {
       document.removeEventListener('mouseup', onDocUp, true);
+      window.removeEventListener('blur', onDocUp);
       body._gbSuppressChartSync = false;
       const c2 = body._gbChartCtx;
       if (c2?._gbVpLockUnsub) { try { c2._gbVpLockUnsub(); } catch (e3) {} c2._gbVpLockUnsub = null; }
@@ -920,6 +1062,9 @@ export function wireDragHandlers({
       try { lc.applyOptions(gbInteractRestore); } catch (e) {}
     };
     document.addEventListener('mouseup', onDocUp, true);
+    // Отпускание кнопки ВНЕ окна (alt-tab, панель браузера) не даёт mouseup —
+    // без blur флаг подавления синка залипал навсегда.
+    window.addEventListener('blur', onDocUp);
   }, { signal: sig, capture: true });
 
   // «Подбор уровней» — точка старта (Step 5): Alt+ЛКМ ИЛИ режим «⚑ Старт»
@@ -1067,6 +1212,12 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
   const host = body.querySelector('#gbChart');
   if (!wrap || !host) return;
   const prev = body._gbChartCtx;
+  // FAST PATH: меняются только параметры сетки — график НЕ пересоздаём.
+  // Это единственный способ гарантировать неизменный масштаб/позицию.
+  if (canReuseGridLabChart(prev, out, viewOpts)) {
+    updateGridLabChartInPlace(body, prev, out, gbPrefs, deps);
+    return;
+  }
   const plan = resolveSavedViewPlan(prev, viewOpts, body._gbPendingViewport);
   if (plan.consumePending) body._gbPendingViewport = null;
   const savedView = plan.savedView;
@@ -1079,6 +1230,9 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
     lc: null, cs: null, ro: null, gbCh: null, gbLabSig: null, merged: null,
     sym: null, tf: null, _gbManagedLines: [], _histLoading: false,
     _gbDrag: null, _gbVpLockUnsub: null,
+    // Линии уровней и текущий out держим в контексте: при обновлении НА МЕСТЕ
+    // (см. canReuseGridLabChart) их надо снять/обновить сами, чарт не пересоздаётся.
+    _gbLines: [], out: null,
   };
   host.innerHTML = '';
   let rulerCanvas = body.querySelector('#gbRulerCanvas');
@@ -1156,10 +1310,12 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
   const lastCForLines = +merged[merged.length - 1]?.c;
   const lines = buildPreviewPriceLines(out, lastCForLines);
   for (const ln of lines) {
-    cs.createPriceLine({
-      price: ln.price, color: ln.color, lineWidth: ln.lineWidth, lineStyle: ln.lineStyle,
-      axisLabelVisible: ln.axisLabelVisible, title: ln.title,
-    });
+    try {
+      body._gbChartCtx._gbLines.push(cs.createPriceLine({
+        price: ln.price, color: ln.color, lineWidth: ln.lineWidth, lineStyle: ln.lineStyle,
+        axisLabelVisible: ln.axisLabelVisible, title: ln.title,
+      }));
+    } catch (e) { /* non-fatal */ }
   }
   if (typeof cs.setMarkers === 'function') cs.setMarkers([]);
 
@@ -1179,8 +1335,11 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
   const gbLabSig = new AbortController();
   const sig = gbLabSig.signal;
 
+  // Один и тот же объект out живёт весь срок чарта: in-place-апдейт делает в
+  // него Object.assign, поэтому drag-хендлеры ниже всегда видят свежие границы.
+  body._gbChartCtx.out = out;
   wireDragHandlers({
-    wrap, host, lc, cs, body, out, gbPrefs, sig,
+    wrap, host, lc, cs, body, out: body._gbChartCtx.out, gbPrefs, sig,
     deps: { PRICE_AXIS_W, getCoords, pushGridLabBoundsUndo, scheduleGridLabSync,
             saveGridLabPrefs, captureGbLabViewport, applyGbViewportFreeze, rCanvas,
             fromChartTime, tzOffsetS, onStartPointChange },
@@ -1231,7 +1390,7 @@ export function buildGridLabBacktestMarkup(gbPrefs, defSym) {
           <option value="1h"${opt('1h', tf)}>1h</option>
         </select>
         <label style="font-size:9px;color:var(--text3)">Уровни</label>
-        <input id="gbLevels" type="number" value="${gbPrefs.global.levels}" min="3" max="60" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
+        <input id="gbLevels" type="number" value="${gbPrefs.global.levels}" min="3" max="${GB_LEVELS_MAX}" style="width:60px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Низ</label>
         <input id="gbLow" type="number" step="any" value="${sb.lower || ''}" placeholder="auto" style="width:90px;background:var(--bg3);border:1px solid var(--border2);border-radius:4px;color:var(--text);font:inherit;font-size:10px;padding:3px 6px">
         <label style="font-size:9px;color:var(--text3)">Верх</label>
@@ -1254,7 +1413,8 @@ export function buildGridLabBacktestMarkup(gbPrefs, defSym) {
           <option value="short"${opt('short', gm)}>Short</option>
         </select>
         <span style="font-size:9px;color:var(--accent,#38bdf8);font-weight:600;cursor:help" title="Скан по 1m от точки старта: для каждого числа сеток считает реальные циклы buy→sell и чистую прибыль после комиссий. Слайдер меняет «Уровни»; тёплая зона = больше прибыли.">◆ Подбор</span>
-        <input id="gbLvlSlider" type="range" min="2" max="60" step="1" value="${gbPrefs.global.levels}" style="width:110px;accent-color:var(--accent,#38bdf8);vertical-align:middle" title="Количество сеток в диапазоне НИЗ..ВЕРХ">
+        <input id="gbLvlSlider" type="range" min="${GB_LEVELS_MIN}" max="${GB_LEVELS_MAX}" step="1" value="${gbPrefs.global.levels}" style="width:240px;accent-color:var(--accent,#38bdf8);vertical-align:middle" title="Количество сеток в диапазоне НИЗ..ВЕРХ (стрелки ←/→ — по одной, Shift — по 10)">
+        <span id="gbLvlNow" style="font-size:10px;font-weight:700;color:var(--accent,#38bdf8);min-width:26px;display:inline-block;text-align:right" title="Текущее число сеток">${gbPrefs.global.levels}</span>
         <span id="gbLvlHint" style="font-size:9px;color:var(--text3)">—</span>
         <button type="button" class="tbtn" id="gbStartBtn" title="Отметить точку старта анализа на графике (то же, что Alt+клик по графику). Скан считает 1m-свечи от неё." style="font-size:9px;padding:3px 8px">⚑ Старт</button>
       </div>
@@ -1366,9 +1526,15 @@ function bindGridLabBacktestForm(body, gbPrefs, scheduleGridLabSyncFn, applyRati
   const lvInput = body.querySelector('#gbLevels');
   if (lvSlider && lvInput) {
     lvSlider.addEventListener('input', () => {
-      const v = Math.max(2, Math.min(60, +lvSlider.value || 3));
+      const v = Math.max(GB_LEVELS_MIN, Math.min(GB_LEVELS_MAX, +lvSlider.value || 3));
       if (+lvInput.value !== v) {
         lvInput.value = String(v);
+        const nowBadge = body.querySelector('#gbLvlNow');
+        if (nowBadge) nowBadge.textContent = String(v);
+        // Мгновенный отклик: «сейчас N: X сделок / $Y» и подсветка полосы
+        // перерисовываются из ГОТОВОГО кэша скана (без сети и без пересчёта).
+        // Тяжёлый скан запустится только если входы реально изменились.
+        try { if (body._gbLvlCache) renderLevelsPickerResult(body, body._gbLvlCache, body._gbDeps); } catch (e) { /* non-fatal */ }
         scheduleGridLabSyncFn(body, gbPrefs, { reuseCandles: true });
       }
     });

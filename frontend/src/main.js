@@ -59,6 +59,7 @@ import {
   renderGridRiskProfile as renderGridRiskProfileUi,
   renderManualBacktestPreviewUi,
   renderLevelsPicker,
+  renderLevelsPickerResult,
   scheduleGridLabSync as scheduleGridLabSyncUi,
   runGridLabSync as runGridLabSyncUi,
   collectGridLabFields,
@@ -68,6 +69,7 @@ import {
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, chartThemeColors, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines, fjBybit, fetchBybitTickers, fetchBybitKlines, batchBybitKlines } from './api.js'
+import { GB_LEVELS_MAX, GB_LEVELS_MIN } from './grid-economics.js'
 import { EXCHANGES, EXCHANGE_LABEL, exchangeMarkSvg, buildUniverse, buildAvailability, resolveSymbolExchange, isBybitSymbol, tfToBybitInterval } from './exchanges.js'
 import { visibleRange, ROW_HEIGHT, sortRows, effLiquidity, liquidityPasses } from './screener-virtual.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
@@ -8129,12 +8131,38 @@ async function fetch1mFor(sym) {
   return [];
 }
 
+/** Зеркало кэша 1m-свечей без сети (мгновенный путь «Подбора»). */
+function peek1mFor(sym) {
+  const c = S.k1m?.[sym];
+  return Array.isArray(c) && c.length ? c : null;
+}
+
+/**
+ * Применить N из «Подбора» (клик по оптимуму/столбику полосы).
+ * Значение пишем в ОБА контрола (поле и ползунок) + мгновенно перерисовываем
+ * подсказку из кэша скана — иначе клик ощущался как «ничего не произошло».
+ */
+function applyGblLevels(body, gbPrefs, v) {
+  const raw = Math.round(+v);
+  if (!isFinite(raw)) return;
+  const n = Math.max(GB_LEVELS_MIN, Math.min(GB_LEVELS_MAX, raw));
+  const inp = body.querySelector('#gbLevels');
+  const sl = body.querySelector('#gbLvlSlider');
+  const badge = body.querySelector('#gbLvlNow');
+  if (inp) inp.value = String(n);
+  if (sl) sl.value = String(n);
+  if (badge) badge.textContent = String(n);
+  try { if (body._gbLvlCache) renderLevelsPickerResult(body, body._gbLvlCache, body._gbDeps); } catch (e) { /* non-fatal */ }
+  scheduleGridLabSync(body, gbPrefs, { reuseCandles: true });
+}
+
 /** Запуск «Подбора уровней» на текущем состоянии формы (для Alt-клика). */
 function runGridLabLevelsPicker(body, out, gbPrefs) {
   if (!_gridLevelsApi) return;
   renderLevelsPicker(body, out, gbPrefs, {
     fetch1mFor,
-    applyLevels: (v) => scheduleGridLabSync(body, gbPrefs, { reuseCandles: true }),
+    peek1mFor,
+    applyLevels: (v) => applyGblLevels(body, gbPrefs, v),
     levelsApi: _gridLevelsApi,
     symExchange,
   });
@@ -8153,7 +8181,8 @@ function scheduleGridLabSync(body, gbPrefs, opt = {}) {
     renderRiskFn: renderGridRiskProfile,
     // «Подбор уровней»: 1m-скан от точки старта (lazy-модуль).
     fetch1mFor,
-    applyLevels: (v) => scheduleGridLabSync(body, gbPrefs, { reuseCandles: true }),
+    peek1mFor,
+    applyLevels: (v) => applyGblLevels(body, gbPrefs, v),
     ensureLevelsApi: () => ensureGridLevelsApi(),
     symExchange,
   };
@@ -8169,7 +8198,8 @@ function runGridLabSync(body, gbPrefs, opt = {}) {
     renderRiskFn: renderGridRiskProfile,
     // «Подбор уровней»: 1m-скан от точки старта (lazy-модуль).
     fetch1mFor,
-    applyLevels: (v) => scheduleGridLabSync(body, gbPrefs, { reuseCandles: true }),
+    peek1mFor,
+    applyLevels: (v) => applyGblLevels(body, gbPrefs, v),
     ensureLevelsApi: () => ensureGridLevelsApi(),
     symExchange,
     levelsApi: _gridLevelsApi,

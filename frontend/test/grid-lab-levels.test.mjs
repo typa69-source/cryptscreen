@@ -244,7 +244,22 @@ test('stepPctFloorOk: 3×RT boundary', () => {
 });
 
 test('scan constants sanity', () => {
-  assert.ok(LEVELS_SCAN_MIN === 2 && LEVELS_SCAN_MAX === 60);
+  assert.ok(LEVELS_SCAN_MIN === 2 && LEVELS_SCAN_MAX === 150);
+});
+
+test('scanLevels доходит до N=150 (верх поднят с 60)', () => {
+  const cs = mkCandles(600, 100, 3, 7);
+  const rows = scanLevels(cs, 95, 105);
+  assert.equal(rows.length, LEVELS_SCAN_MAX - LEVELS_SCAN_MIN + 1);
+  assert.equal(rows[rows.length - 1].levels, 150);
+  // плотные сетки не выбрасываются, а честно помечаются «шаг < 3×RT»
+  assert.ok(rows.some((r) => r.levels > 60 && r.stepOk === false));
+});
+
+test('levelsEconomics клампит N сверху на 150, а не на 60', () => {
+  const e = levelsEconomics(100, 110, 400, { rt: 10, buys: 5, sells: 5 }, 'bybit');
+  assert.equal(e.levels, 150);
+  assert.ok(Math.abs(e.step - 10 / 150) < 1e-9);
 });
 
 // ── integration: engine vs simulateGrid sanity ────────────────

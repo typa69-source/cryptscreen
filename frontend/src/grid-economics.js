@@ -39,6 +39,16 @@ export function stepEconomics(stepPct, ex = 'binance') {
   return { ratio, netPct, ok, verdict };
 }
 
+/**
+ * Верхняя граница числа сеток в Grid Lab (ползунок «Подбор» и поле «Уровни»).
+ * Экономика не запрещает плотные сетки — она их ПЕНАЛИЗУЕТ (доля комиссий в
+ * грязной прибыли), поэтому верх поднят до 150: юзер сам видит, где начинается
+ * мусор, вместо жёсткого обрезания на 60.
+ */
+export const GB_LEVELS_MAX = 150;
+/** Нижняя граница числа сеток (2 интервала = 3 линии). */
+export const GB_LEVELS_MIN = 2;
+
 /** Clamp a grid level count to the app-wide [6, 32] band. */
 export function clampLevels(n) {
   const v = +n;
