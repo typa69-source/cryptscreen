@@ -562,7 +562,7 @@ export async function runGridLabSync(body, gbPrefs, opt = {}, deps = {}) {
     ? ` · между сетками: <b style="color:#e2e8f0">${fn(sp.min, 2)}%</b> — <b style="color:#e2e8f0">${fn(sp.max, 2)}%</b>${sp.avg != null ? ` (ср. ${fn(sp.avg, 2)}%)` : ''}`
     : '';
   if (el) {
-    el.innerHTML = `<span style="color:var(--text3)">${out.symbol.replace(/USDT$/, '')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)}${pctTxt} • верх/низ: тянуть на графике · #0: тянуть в панели «Риск-профиль».</span>`;
+    el.innerHTML = `<span style="color:var(--text3)">${out.symbol.replace(/USDT$/, '')} · ${out.tf} · ${out.candles.length} баров · шаг ${fmtPrice(out.step)}${pctTxt}${out.levels > PREVIEW_MAX_LINES ? ` · на графике прорежено до ${PREVIEW_MAX_LINES} линий` : ''} • верх/низ: тянуть на графике · #0: тянуть в панели «Риск-профиль».</span>`;
   }
   // «Подбор уровней»: асинхронный скан по 1m от точки старта (не блокирует
   // отрисовку сетки); результат пишется в hint у слайдера и в панель-градиент.
@@ -854,6 +854,32 @@ const PREVIEW_LINE_COLORS = {
  * Build price lines for the chart overlay (one per grid level).
  * Pure: depends only on input params and imported pure helpers.
  */
+/**
+ * Сколько линий уровней максимум рисуем на графике.
+ * При 150 сетках шаг ~4px: 150 подписей на ценовой оси сливаются в кашу и
+ * ось становится нечитаемой. Поэтому рисуем равномерно прорежённый набор
+ * (крайние линии — всегда), но числа/шаг/экономика считаются по ВСЕМ N.
+ */
+export const PREVIEW_MAX_LINES = 40;
+
+/** Индексы линий для отрисовки: все, либо равномерно прореженные до max. */
+export function previewLineIdx(count, max = PREVIEW_MAX_LINES) {
+  const n = Math.max(0, count | 0);
+  const m = Math.max(2, max | 0);
+  const out = [];
+  if (n <= m) {
+    for (let i = 0; i < n; i++) out.push(i);
+    return out;
+  }
+  const stepIdx = (n - 1) / (m - 1);
+  let last = -1;
+  for (let k = 0; k < m; k++) {
+    const idx = k === m - 1 ? n - 1 : Math.round(k * stepIdx);
+    if (idx !== last) { out.push(idx); last = idx; }
+  }
+  return out;
+}
+
 export function buildPreviewPriceLines(out, lastClose) {
   const gridMode = String(out.gridRiskMode || 'neutral');
   const step = out.step || 0;
@@ -883,7 +909,10 @@ export function buildPreviewPriceLines(out, lastClose) {
     anchorPrice: out.anchorPrice,
     gridLevels: gridLv,
   });
-  return gridLv.map((p, i) => {
+  const drawIdx = previewLineIdx(gridLv.length);
+  const lastIdx = gridLv.length - 1;
+  return drawIdx.map((i) => {
+    const p = gridLv[i];
     const meta = gridRiskMetaForPrice(p, anchorPx, step, riskRows, gridMode, favRows);
     const color = PREVIEW_LINE_COLORS[meta.side] || PREVIEW_LINE_COLORS.neutral;
     // FIX(round): the price-line title is drawn on the chart — a raw float
@@ -893,7 +922,7 @@ export function buildPreviewPriceLines(out, lastClose) {
     return {
       price: p,
       color,
-      lineWidth: i === 0 || i === gridLv.length - 1 ? 2 : 1,
+      lineWidth: i === 0 || i === lastIdx ? 2 : 1,
       lineStyle: 2,
       axisLabelVisible: true,
       title,
