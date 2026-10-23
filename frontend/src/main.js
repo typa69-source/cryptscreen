@@ -70,6 +70,7 @@ import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIS
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
 import { fj, parseKlines, mergeKlineChunks, batchKlines, fjBybit, fetchBybitTickers, fetchBybitKlines, batchBybitKlines } from './api.js'
 import { GB_LEVELS_MAX, GB_LEVELS_MIN } from './grid-economics.js'
+import { isChunkLoadError, shouldHardReload } from './chunk-load.js'
 import { EXCHANGES, EXCHANGE_LABEL, exchangeMarkSvg, buildUniverse, buildAvailability, resolveSymbolExchange, isBybitSymbol, tfToBybitInterval } from './exchanges.js'
 import { visibleRange, ROW_HEIGHT, sortRows, effLiquidity, liquidityPasses } from './screener-virtual.js'
 import { calcATR, calcNATR, calcNATRFlexible, calcRange, calcRangeFlexible, calcRel, calcSma, calcStd, calcBollinger, calcCorrelation, calcSqueezePop, calcBbSignals, sparkTrendSnapshot, calcVolProfile, calcRangeFromCandles, calcRets, sparkVolSnapshot, sparkHeatBackground } from './metrics.js'
@@ -382,6 +383,38 @@ if (getToken()) {
 // and register window handlers as a facade now — the header buttons work
 // immediately, the heavy code arrives in parallel with the first click.
 const _gridModsLoaded = { bots: null, smart: null, botsModule: null };
+
+
+/**
+ * Один автоматический перезапуск страницы при сбое загрузки чанка.
+ *
+ * После деплоя старый HTML (из кэша/вкладки) ссылается на файлы, которых в
+ * новом билде уже нет → import() падает «Failed to fetch dynamically imported
+ * module», и спасти это внутри той же страницы НЕЛЬЗЯ: имена чанков
+ * зашиты в HTML. Единственное лечение — свежий документ.
+ *
+ * Защита от цикла: не чаще одного раза в 25 секунд на вкладку.
+ */
+function _gbHardReloadOnce(where) {
+  try {
+    const KEY = '__gbChunkReloadAt';
+    const last = +sessionStorage.getItem(KEY) || 0;
+    if (!shouldHardReload(last, Date.now(), 25000)) return false;
+    sessionStorage.setItem(KEY, String(Date.now()));
+  } catch (e) { /* приватный режим — перезагружаемся без защиты */ }
+  console.warn(`[${where}] чанк недоступен — перезагружаю страницу, чтобы взять свежий билд`);
+  try { location.reload(); } catch (e) { /* ignore */ }
+  return true;
+}
+
+// Vite сообщает о сбое префетча отдельным событием — обрабатываем его так же,
+// иначе пользователь видит пустой экран вместо перезагрузки.
+try {
+  window.addEventListener('vite:preloadError', (e) => {
+    try { e.preventDefault(); } catch (e2) { /* ignore */ }
+    _gbHardReloadOnce('preload');
+  });
+} catch (e) { /* ignore */ }
 async function ensureGridBotScreeners() {
   if (!_gridModsLoaded.bots) {
     const mod = await import('./gridBotScreeners.js');
@@ -398,8 +431,31 @@ async function ensureGridSmartScreener() {
   return _gridModsLoaded.smart;
 }
 
-async function registerGridBotScreenersLazy() {
-  const reg = await ensureGridBotScreeners();
+/** Импорт с ретраями: короткие сетевые сбои не должны требовать перезагрузки. */
+async function _importWithRetry(ensureFn, where, opt = {}) {
+  const allowReload = opt.allowReload !== false;
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try { return await ensureFn(); } catch (e) {
+      lastErr = e;
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 300 * attempt));
+        // сбрасываем кэш неудачи, чтобы следующая попытка реально переимпортировала
+        _gridModsLoaded.bots = null;
+        _gridModsLoaded.smart = null;
+        _gridModsLoaded.botsModule = null;
+        continue;
+      }
+      // Фоновый прогрев не имеет права перезагружать страницу: пользователь
+      // ничего не просил, а сеть могла моргнуть на старте.
+      if (allowReload && isChunkLoadError(e)) _gbHardReloadOnce(where);
+    }
+  }
+  throw lastErr;
+}
+
+async function registerGridBotScreenersLazy(opt = {}) {
+  const reg = await _importWithRetry(ensureGridBotScreeners, 'Grid screener', opt);
   try {
     reg({
     S,
@@ -428,8 +484,8 @@ async function registerGridBotScreenersLazy() {
     throw e;
   }
 }
-async function registerGridSmartScreenerLazy() {
-  const reg = await ensureGridSmartScreener();
+async function registerGridSmartScreenerLazy(opt = {}) {
+  const reg = await _importWithRetry(ensureGridSmartScreener, 'Grid Smart', opt);
   try {
     reg({
     S,
@@ -7584,6 +7640,9 @@ async function main() {
     startRealtimeWatchdog();
     ensureFundOiLoop();
     setTimeout(autoResizeScreener, 300);
+    // прогреваем чанки grid-скринеров в простое: клик по меню не должен
+    // зависеть от сети (и не должен показывать «модуль не загрузился»)
+    _warmGridChunks();
   } catch (err) {
     console.error('Init error:', err); ldSet('Ошибка загрузки', 100); ldErr(err.message || String(err));
   }
@@ -8305,32 +8364,67 @@ function setBrushWidth(w){_brushWidth=Math.max(1,Math.min(12,w||2));}
 // at the end of its registration) — and forwards this first click to it.
 // Ошибки загрузки/регистрации НЕ глотаем молча: сброс + сообщение в углу,
 // иначе клик выглядит как «кнопка не реагирует» (см. фасады ниже).
-function _gridFacadeErr(where, e) {
+function _gridFacadeErr(where, e, retryFn) {
   console.warn(where, e);
   try {
     const el = document.createElement('div');
-    el.textContent = `⚠ ${where}: модуль скринера не загрузился — попробуй ещё раз`;
-    el.style.cssText = 'position:fixed;top:14px;right:14px;z-index:9999;background:#7f1d1d;color:#fff;font:12px system-ui;padding:8px 12px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.4)';
+    el.style.cssText = 'position:fixed;top:14px;right:14px;z-index:9999;background:#7f1d1d;color:#fff;font:12px system-ui;padding:8px 12px;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.4);display:flex;align-items:center;gap:10px;max-width:340px';
+    const txt = document.createElement('span');
+    txt.textContent = `⚠ ${where}: модуль не загрузился`;
+    el.appendChild(txt);
+    if (typeof retryFn === 'function') {
+      const btn = document.createElement('button');
+      btn.textContent = 'Повторить';
+      btn.style.cssText = 'background:#fff;color:#7f1d1d;border:0;border-radius:4px;padding:3px 8px;font:600 11px system-ui;cursor:pointer;flex-shrink:0';
+      btn.onclick = () => { el.remove(); retryFn(); };
+      el.appendChild(btn);
+    }
     document.body.appendChild(el);
-    setTimeout(() => el.remove(), 6000);
+    setTimeout(() => el.remove(), 12000);
   } catch (e2) { /* ignore */ }
 }
-window.openGridSwingScreener = async () => {
-  try { await registerGridBotScreenersLazy(); if (typeof window.openGridSwingScreener === 'function') window.openGridSwingScreener(); }
-  catch (e) { _gridFacadeErr('Grid Swing', e); }
-};
-window.openGridIntradayScreener = async () => {
-  try { await registerGridBotScreenersLazy(); if (typeof window.openGridIntradayScreener === 'function') window.openGridIntradayScreener(); }
-  catch (e) { _gridFacadeErr('Grid Intra', e); }
-};
-window.openGridPickScreener = async () => {
-  try { await registerGridBotScreenersLazy(); if (typeof window.openGridPickScreener === 'function') window.openGridPickScreener(); }
-  catch (e) { _gridFacadeErr('Grid Pick', e); }
-};
-window.openGridSmartScreener = async () => {
-  try { await registerGridSmartScreenerLazy(); if (typeof window.openGridSmartScreener === 'function') window.openGridSmartScreener(); }
-  catch (e) { _gridFacadeErr('Grid Smart', e); }
-};
+
+/**
+ * Единый путь открытия скринера: до 3 попыток загрузки модуля, при сбое
+ * сети/чанка — один автоматический reload, и только если и это не помогло —
+ * тост с кнопкой «Повторить» (а не тупиковое «попробуй ещё раз»).
+ */
+async function _gridOpenWithRetry(where, ensure, handlerName, facade) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await ensure();
+      const h = window[handlerName];
+      if (typeof h === 'function' && h !== facade) { h(); return; }
+      throw new Error(`обработчик ${handlerName} не установлен после загрузки модуля`);
+    } catch (e) {
+      if (attempt < 3) { await new Promise((r) => setTimeout(r, 300 * attempt)); continue; }
+      if (isChunkLoadError(e) && _gbHardReloadOnce(where)) return;
+      _gridFacadeErr(where, e, () => _gridOpenWithRetry(where, ensure, handlerName, facade));
+      return;
+    }
+  }
+}
+const _facadeSwing    = () => _gridOpenWithRetry('Grid Swing', registerGridBotScreenersLazy, 'openGridSwingScreener', _facadeSwing);
+const _facadeIntraday = () => _gridOpenWithRetry('Grid Intra', registerGridBotScreenersLazy, 'openGridIntradayScreener', _facadeIntraday);
+const _facadePick     = () => _gridOpenWithRetry('Grid Pick', registerGridBotScreenersLazy, 'openGridPickScreener', _facadePick);
+const _facadeSmart    = () => _gridOpenWithRetry('Grid Smart', registerGridSmartScreenerLazy, 'openGridSmartScreener', _facadeSmart);
+window.openGridSwingScreener    = _facadeSwing;
+window.openGridIntradayScreener = _facadeIntraday;
+window.openGridPickScreener     = _facadePick;
+window.openGridSmartScreener    = _facadeSmart;
+
+// PREWARM: держим чанки скринеров в кэше заранее, чтобы клик по пункту меню
+// не зависел от сети в этот момент. Тихо: любая ошибка здесь безвредна.
+function _warmGridChunks() {
+  const warm = () => {
+    registerGridBotScreenersLazy({ allowReload: false }).catch((e) => console.warn('grid screeners prewarm failed', e));
+    setTimeout(() => {
+      registerGridSmartScreenerLazy({ allowReload: false }).catch((e) => console.warn('grid smart prewarm failed', e));
+    }, 400);
+  };
+  if (typeof requestIdleCallback === 'function') requestIdleCallback(warm, { timeout: 5000 });
+  else setTimeout(warm, 3000);
+}
 
 // ───────────────────────────────────────────────────────────────
 // ───────────────────────────────────────────────────────────────

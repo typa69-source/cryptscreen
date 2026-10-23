@@ -17,8 +17,8 @@ import {
   canReuseGridLabChart,
   levelsCacheKey,
   LEVELS_CACHE_TTL_MS,
-  previewLineIdx,
-  PREVIEW_MAX_LINES,
+  axisLabelIdx,
+  PREVIEW_MAX_AXIS_LABELS,
 } from '../src/gridLab-ui.js';
 
 // ── pushBoundsUndo ─────────────────────────────────────────────
@@ -313,24 +313,29 @@ test('levelsCacheKey: пустой/битый вход не бросает', () 
   assert.ok(LEVELS_CACHE_TTL_MS > 0);
 });
 
-// ── прореживание линий на графике (150 сеток не должны рисовать 151 линию) ──
+// ── сетка рисуется ЦЕЛИКОМ, разрежаются только подписи оси ──
 
-test('previewLineIdx: до лимита — все линии по порядку', () => {
-  assert.deepEqual(previewLineIdx(5, 40), [0, 1, 2, 3, 4]);
-  assert.deepEqual(previewLineIdx(40, 40).length, 40);
-  assert.deepEqual(previewLineIdx(0, 40), []);
+test('axisLabelIdx: до лимита подписаны все линии, крайние — всегда', () => {
+  const a = axisLabelIdx(5, 14);
+  assert.deepEqual([...a].sort((x, y) => x - y), [0, 1, 2, 3, 4]);
+  const b = axisLabelIdx(0, 14);
+  assert.equal(b.size, 0);
+  const c = axisLabelIdx(1, 14);
+  assert.deepEqual([...c], [0]);
 });
 
-test('previewLineIdx: 151 линия → ровно 40, крайние сохранены, без дублей', () => {
-  const idx = previewLineIdx(151, 40);
-  assert.equal(idx.length, 40);
-  assert.equal(idx[0], 0);
-  assert.equal(idx[idx.length - 1], 150);
-  assert.equal(new Set(idx).size, idx.length, 'без дублей');
-  for (let i = 1; i < idx.length; i++) assert.ok(idx[i] > idx[i - 1], 'строго возрастает');
+test('axisLabelIdx: 151 линия → подписей немного, крайние есть, шаг равномерный', () => {
+  const a = axisLabelIdx(151, 14);
+  const arr = [...a].sort((x, y) => x - y);
+  assert.ok(arr.length <= 16, `подписей ${arr.length}, ожидалось <= 16`);
+  assert.equal(arr[0], 0);
+  assert.equal(arr[arr.length - 1], 150, 'подпись верхней границы обязательна');
+  const steps = arr.slice(1).map((v, i) => v - arr[i]);
+  assert.ok(Math.max(...steps) - Math.min(...steps) <= 1, `шаг подписей не должен «прыгать»: ${steps.join(',')}`);
 });
 
-test('previewLineIdx: max меньше 2 → минимум 2 линии', () => {
-  assert.equal(previewLineIdx(10, 1).length, 2);
-  assert.equal(previewLineIdx(10, 0).length, 2);
+test('axisLabelIdx: max меньше 2 всё равно даёт обе крайние подписи', () => {
+  const a = axisLabelIdx(10, 1);
+  assert.equal(a.has(0), true);
+  assert.equal(a.has(9), true);
 });
