@@ -182,13 +182,18 @@ export function applyViewPlan(tsApi, plan) {
 }
 
 /**
- * Применить план ПОСЛЕ кадра (замерено полигоном LWC 4.1.3: сразу после setData
- * библиотека на следующем кадре делает собственный fit и гасит наш сеттер —
- * тогда восстановление окна «то срабатывает, то нет» = те самые скачки).
- * rAF в фоновой вкладке троттлится, поэтому страхуемся таймаутом: кто первый.
+ * Применить план так, чтобы НЕ было видимого скачка.
+ * Замерено по кадрам на полигоне LWC 4.1.3: синхронный вызов сразу после
+ * setData попадает в ту же очередь инвалидаций, что и данные/дефолтный вид,
+ * и побеждает — окно правильное уже на ПЕРВОМ нарисованном кадре. Отложенное
+ * применение (только rAF) даёт 2-3 кадра чужого окна, если перед ним успел
+ * примениться дефолтный вид — это и есть «дёрнулся на долю секунды».
+ * Поэтому: сначала синхронно, затем повторы на следующих кадрах как страховка
+ * (rAF в фоновой вкладке троттлится → таймаут; план идемпотентен).
  */
 export function applyViewPlanAsync(tsApi, plan, opts = {}) {
   if (!tsApi || !plan || plan.mode === 'keep' || !plan.range) return false;
+  const applied = applyViewPlan(tsApi, plan);
   const delay = isNum(opts.delayMs) ? opts.delayMs : 0;
   let done = false;
   const run = () => {
@@ -199,8 +204,8 @@ export function applyViewPlanAsync(tsApi, plan, opts = {}) {
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => requestAnimationFrame(run));
   }
-  if (typeof setTimeout === 'function') setTimeout(run, Math.max(delay, 32));
-  return true;
+  if (typeof setTimeout === 'function') setTimeout(run, Math.max(delay, 48));
+  return applied;
 }
 
 /** Ключ контекста графика: вид запоминается отдельно для каждого символа/ТФ. */

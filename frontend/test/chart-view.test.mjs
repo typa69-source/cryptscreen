@@ -222,21 +222,24 @@ test('applyViewPlanAsync: keep и пустой план не трогают вь
   assert.deepEqual(calls, []);
 });
 
-test('applyViewPlanAsync: применяет план отложенно и ровно один раз', async () => {
+test('applyViewPlanAsync: применяет сразу (первый кадр без скачка) и повторяет как страховку', async () => {
   const calls = [];
   const ts = { setVisibleLogicalRange: (r) => calls.push(['log', r]), setVisibleRange: (r) => calls.push(['time', r]) };
   assert.equal(applyViewPlanAsync(ts, { mode: 'logical', range: { from: 10, to: 20 } }), true);
-  assert.deepEqual(calls, [], 'синхронно применять нельзя — перебьёт fit');
-  await new Promise((r) => setTimeout(r, 80));
+  // главное: окно выставляется СИНХРОННО, иначе дефолтный вид успевает
+  // нарисоваться на 2-3 кадра и пользователь видит скачок
   assert.deepEqual(calls, [['log', { from: 10, to: 20 }]]);
-  await new Promise((r) => setTimeout(r, 60));
-  assert.equal(calls.length, 1, 'повторного применения быть не должно');
+  await new Promise((r) => setTimeout(r, 120));
+  // повторы допустимы (страховка от перебивания библиотекой), но не обязательны
+  for (const c of calls) assert.deepEqual(c, ['log', { from: 10, to: 20 }]);
 });
 
 test('applyViewPlanAsync: план по времени идёт через setVisibleRange', async () => {
   const calls = [];
   const ts = { setVisibleLogicalRange: (r) => calls.push(['log', r]), setVisibleRange: (r) => calls.push(['time', r]) };
   applyViewPlanAsync(ts, { mode: 'time', range: { from: 100, to: 200 } });
-  await new Promise((r) => setTimeout(r, 80));
-  assert.deepEqual(calls, [['time', { from: 100, to: 200 }]]);
+  assert.deepEqual(calls[0], ['time', { from: 100, to: 200 }], 'сразу, на первом кадре');
+  await new Promise((r) => setTimeout(r, 150));
+  assert.ok(calls.length >= 1);
+  for (const c of calls) assert.deepEqual(c, ['time', { from: 100, to: 200 }]);
 });

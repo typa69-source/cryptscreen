@@ -703,6 +703,22 @@ function installViewDebug(){
     // догрузку истории и реальную перерисовку, как это делает пан/реалтайм.
     window.__viewLoadMore=(slot=0)=>loadMoreHistory(slot);
     window.__viewRepaint=(slot=0)=>{const ch=S.charts[slot];if(!ch?.lc)return'no-chart';repaintChartSeries(ch);return'ok';};
+    // Живой прогон «подгрузки»: те же самые данные, но БЕЗ сети — кладём более
+        // старые бары слева и прогоняем РЕАЛЬНУЮ перерисовку приложения.
+    window.__viewPrepend=(slot=0,n=700)=>{
+      const ch=S.charts[slot]; if(!ch?.lc||!ch.candles?.length)return'no-chart';
+      const step=(ch.candles[1]?.t||60000)-(ch.candles[0]?.t||0)||60000;
+      const t0=ch.candles[0].t;
+      const older=Array.from({length:n},(_,i)=>{
+        const t=t0-(n-i)*step, c=100+Math.sin(i/5)*2;
+        return {t,o:c,h:c+1,l:c-1,c,qv:1};
+      });
+      ch.candles=[...older,...ch.candles];
+      repaintChartSeries(ch);
+      return 'prepended '+n+' → bars '+(ch.candles.length);
+    };
+    window.__viewApplyDefault=(slot=0)=>{const ch=S.charts[slot];if(!ch?.lc)return'no-chart';applyDefaultChartView(ch);return'ok';};
+    window.__viewRaw=(slot=0)=>S.charts[slot]||null;
     console.log('[viewdbg] window.__view() доступен');
   }catch(e){}
 }
