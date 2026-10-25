@@ -18,6 +18,12 @@ import {
   gbWantBarsFromVisible,
   compileGridLabState,
 } from './gridLab.js';
+import {
+  candleMeta,
+  classifyDataChange,
+  shiftOfFirstBar,
+  clampTimeRangeToData,
+} from './chart-view.js';
 import { GB_LEVELS_MAX, GB_LEVELS_MIN } from './grid-economics.js';
 import { chartThemeColors } from './state.js';
 
@@ -1309,33 +1315,46 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
   const lastCInit = +merged[merged.length - 1]?.c || 1;
   try { cs.applyOptions({ priceFormat: { type: 'custom', formatter: fmtPrice, minMove: getPriceMinMove(lastCInit) } }); } catch (e) {}
   cs.setData(merged.map((k) => ({ time: toChartTime(k.t), open: k.o, high: k.h, low: k.l, close: k.c })));
-  if (savedView) {
-    try {
-      if (savedView.log && typeof savedView.log.from === 'number' && typeof savedView.log.to === 'number'
-          && typeof lc.timeScale().setVisibleLogicalRange === 'function') {
-        lc.timeScale().setVisibleLogicalRange(savedView.log);
-      } else if (savedView.vt && savedView.vt.from != null && savedView.vt.to != null) {
-        lc.timeScale().setVisibleRange(savedView.vt);
+  // ── Окно после пересоздания чарта ──────────────────────────────
+  // Чарт только что создан, поэтому его вьюпорт пуст: 'keep' здесь означал
+  // бы fitContent, то есть рывок. Выбираем способ восстановления по тому,
+  // ЧТО случилось с набором баров (chart-view.js):
+  //   • бары те же / дописаны справа → индексы точны (сохраняют даже
+  //     пустоту слева от первого бара);
+  //   • дописаны слева → индексы + сдвиг на число вставленных баров;
+  //   • окно данных другое (сменился диапазон/старт/ТФ) → по ВРЕМЕНИ,
+  //     иначе те же индексы указывают на совершенно другие бары.
+  const prevMetaView = prev?.merged ? candleMeta(prev.merged) : null;
+  const viewKind = classifyDataChange(prevMetaView, candleMeta(merged));
+  const restoreView = () => {
+    const ts = lc.timeScale();
+    if (!savedView) { try { ts.fitContent(); } catch (e) {} return; }
+    const log = savedView.log;
+    if (log && typeof log.from === 'number' && typeof log.to === 'number') {
+      let shift = 0;
+      if (viewKind === 'prepend' || viewKind === 'both') {
+        shift = prevMetaView ? shiftOfFirstBar(prevMetaView.firstT, merged) : 0;
       }
-    } catch (e) {}
-    try {
-      const ps = cs.priceScale();
-      if (savedView.pr && ps && typeof ps.setVisibleRange === 'function') ps.setVisibleRange(savedView.pr);
-    } catch (e) {}
-    requestAnimationFrame(() => {
-      try {
-        if (!savedView) return;
-        if (savedView.log && typeof savedView.log.from === 'number' && typeof savedView.log.to === 'number'
-            && typeof lc.timeScale().setVisibleLogicalRange === 'function') {
-          lc.timeScale().setVisibleLogicalRange(savedView.log);
-        } else if (savedView.vt && savedView.vt.from != null && savedView.vt.to != null) {
-          lc.timeScale().setVisibleRange(savedView.vt);
-        }
-        const ps = cs.priceScale();
-        if (savedView.pr && ps && typeof ps.setVisibleRange === 'function') ps.setVisibleRange(savedView.pr);
-      } catch (e) {}
-    });
-  } else { try { lc.timeScale().fitContent(); } catch (e) {} }
+      if (viewKind === 'none' || viewKind === 'append' || viewKind === 'prepend'
+          || viewKind === 'both' || viewKind === 'unknown') {
+        try { ts.setVisibleLogicalRange({ from: log.from + shift, to: log.to + shift }); return; } catch (e) {}
+      }
+    }
+    if (savedView.vt && savedView.vt.from != null && savedView.vt.to != null) {
+      const r = clampTimeRangeToData(savedView.vt, merged);
+      if (r) { try { ts.setVisibleRange(r); return; } catch (e) {} }
+    }
+    if (log && typeof log.from === 'number' && typeof log.to === 'number') {
+      try { ts.setVisibleLogicalRange(log); return; } catch (e) {}
+    }
+    try { ts.fitContent(); } catch (e) {}
+  };
+  restoreView();
+  // LWC ставит свой fit на СЛЕДУЮЩИЙ кадр и гасит наш сеттер (замерено
+  // полигоном 4.1.3) — поэтому повторяем восстановление несколько раз.
+  // restoreView идемпотентен, лишние вызовы ничего не портят.
+  requestAnimationFrame(() => requestAnimationFrame(restoreView));
+  setTimeout(restoreView, 48);
 
   const lastCForLines = +merged[merged.length - 1]?.c;
   const lines = buildPreviewPriceLines(out, lastCForLines);

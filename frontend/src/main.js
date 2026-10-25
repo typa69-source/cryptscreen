@@ -5,6 +5,16 @@ import {
   refreshEmaButtonState as refreshEmaButtonStateUi,
   toggleEma as toggleEmaUi,
 } from './emaEditor-ui.js'
+import {
+  captureView,
+  candleMeta,
+  planViewRestore,
+  applyViewPlan,
+  applyViewPlanAsync,
+  planUserViewRestore,
+  rememberUserView,
+  viewContextKey,
+} from './chart-view.js'
 import { cacheGetFresh, cacheSet, cacheGet, cacheHasIDB } from './idb-cache.js'
 import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
 import { sessionScope, createSessionPersistence } from './sessionPersistence.js'
@@ -627,8 +637,20 @@ function lineColorForType(type){
 }
 
 /** После setData: отступ справа + «зум» по числу видимых свечей */
-function applyDefaultChartView(ch){
+function applyDefaultChartView(ch,opts){
   if(!ch?.lc||!ch.candles?.length)return;
+  // Вид, который пользователь выставил мышью, главнее дефолтного:
+  // перезагрузка данных/self-heal/догрузка не должны сбрасывать зум.
+  // Дефолт применяется только для нового контекста (символ+ТФ), по
+  // явному запросу (ползунки «видимых свечей»/«отступ») или когда
+  // пользователь ещё ничего не трогал.
+  const ctxKey=viewContextKey(getChartSym(ch),(S.fsCharts&&S.fsCharts.includes(ch))?(ch.tf||S.tf):S.tf);
+  if(!opts?.force){
+    const plan=planUserViewRestore(ch,ctxKey,ch.candles);
+    if(plan.mode!=='keep'){
+      if(applyViewPlanAsync(ch.lc.timeScale(),plan))return;
+    }
+  }
   const len=ch.candles.length;
   // Мало баров • только fit, без «логического зума» на 32+ пустых слотов
   if(len<MIN_CHART_CANDLES){
@@ -655,6 +677,33 @@ function applyDefaultChartView(ch){
     ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
     ch.lc.timeScale().setVisibleLogicalRange({from,to:len-1});
     ch.lc.timeScale().applyOptions({rightOffset:ro});
+  }catch(e){}
+}
+
+/**
+ * Диагностика вьюпорта для отладки «график скачет»: включается только
+ * по ?viewdbg=1 и ничего не делает в обычном режиме. Read-only.
+ */
+function installViewDebug(){
+  try{
+    if(new URLSearchParams(location.search).get('viewdbg')!=='1')return;
+    window.__view=()=>[...S.charts,...(S.fsCharts||[])].filter(Boolean).map(ch=>{
+      const isFs=!!(S.fsCharts&&S.fsCharts.includes(ch));
+      return{
+        sym:ch.sym||(isFs?S.fsSym:null)||null,
+        tf:isFs?(ch.tf||S.tf):S.tf,
+        bars:ch.candles?.length||0,
+        view:ch.lc?captureView(ch.lc.timeScale()):null,
+        painted:ch._paintedMeta||null,
+        userView:ch._userView||null,
+        lastApplied:ch._lastAppliedRangeFrom==null?null:{from:ch._lastAppliedRangeFrom,to:ch._lastAppliedRangeTo},
+      };
+    });
+    // Только для живой проверки «график не скачет»: дёргаем РЕАЛЬНУЮ
+    // догрузку истории и реальную перерисовку, как это делает пан/реалтайм.
+    window.__viewLoadMore=(slot=0)=>loadMoreHistory(slot);
+    window.__viewRepaint=(slot=0)=>{const ch=S.charts[slot];if(!ch?.lc)return'no-chart';repaintChartSeries(ch);return'ok';};
+    console.log('[viewdbg] window.__view() доступен');
   }catch(e){}
 }
 
@@ -1611,6 +1660,14 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   ch._ro=ro;
 
   const onVisibleRangePan=()=>{_onPanStart();rCanvas(ch,{immediate:true});};
+  // Запоминаем вид, выставленный ПОЛЬЗОВАТЕЛЕМ, чтобы перезагрузка данных
+  // и self-heal возвращали его же, а не дефолтные «последние N баров».
+  const rememberView=()=>{
+    try{
+      const ctxKey=viewContextKey(getChartSym(ch),isFs?(ch.tf||S.tf):S.tf);
+      rememberUserView(ch,captureView(lc.timeScale()),ctxKey);
+    }catch(e){}
+  };
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
     // Backfill trigger: the number of BARS between the left edge of the
     // view and the oldest loaded bar. `range.from` counts from the oldest
@@ -1625,6 +1682,7 @@ function initLCChart(slot,isFs=false,fsIdx=null){
       }
     }
     onVisibleRangePan();
+    rememberView();
   });
   try{
     if(typeof lc.timeScale().subscribeVisibleTimeRangeChange==='function'){
@@ -2011,11 +2069,17 @@ function paintSlotData(slot){
     ch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
     ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+    ch._paintedMeta=candleMeta(ch.candles);
     repaintBbSeries(ch);
     repaintOiSeries(ch);
     syncLivePriceLabel(ch,lp,ch.candles[ch.candles.length-1].o);
     // Reset range guard on fresh data so applyDefaultChartView actually applies
     ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
+    // Вид пользователя — только для того же контекста; новый символ/ТФ
+    // начинается с дефолтного вида.
+    if(ch._viewSym!==getChartSym(ch)||ch._viewTf!==S.tf){
+      ch._userView=null;ch._viewSym=getChartSym(ch);ch._viewTf=S.tf;
+    }
     applyDefaultChartView(ch);
     updateChartHeader(slot,ch.sym);
     rCanvas(ch);
@@ -2095,28 +2159,7 @@ async function loadMoreHistory(slot){
     }
     if(!nc||!nc.length){ch.histLoading=false;ch._histExhausted=true;return;}
     if(!ch.cs||!ch.lc)return;
-    const tsApi=ch.lc.timeScale();
-    let logRange=null,vTime=null;
-    try{
-      logRange=(typeof tsApi.getVisibleLogicalRange==='function')?tsApi.getVisibleLogicalRange():null;
-    }catch(e){}
-    try{
-      if(typeof tsApi.getVisibleRange==='function')vTime=tsApi.getVisibleRange();
-    }catch(e){}
-    let pr=null;
-    try{
-      const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
-      if(ps&&typeof ps.getVisibleRange==='function')pr=ps.getVisibleRange();
-    }catch(e){}
-    const prepended=nc.length;
-    const beforeLen=ch.candles.length;
     ch.candles=[...nc,...ch.candles].slice(-HIST_CACHE_MAX);
-    // REAL index shift of existing bars after cache trim (NOT the raw
-    // prepended count — when the cache is saturated the trim discards
-    // older bars and the true shift is merged.length - beforeLen).
-    // Restoring with the raw count drags the view to the right edge,
-    // i.e. the "chart drags itself left" magnet bug.
-    const realShift=ch.candles.length-beforeLen;
     // Keep cache bounded and avoid persisting too-short histories (causes inconsistent visible bars on next load).
     const wantMinCache=Math.max(MIN_CHART_CANDLES,(S.chartVisibleBars|0)+(S.chartRightOffset|0)+8);
     if(ch.candles.length>=wantMinCache)S.histCache[`${S.tf}:${ch.sym}`]=ch.candles.slice(-HIST_CACHE_MAX);
@@ -2125,50 +2168,19 @@ async function loadMoreHistory(slot){
     const doSet=()=>{
       if(!ch.cs||!ch.lc)return;
       try{
-        // Restore view WITHOUT losing a zoom that extends past the oldest
-        // bar (empty space on the left). A time-range restore cannot
-        // represent that space — getVisibleRange().from clamps to the
-        // oldest bar, so restoring it would snap the zoom back (the
-        // "scale resets" bug). Instead: setData, then read the CURRENT
-        // logical range (LWC shifts it by the real index delta itself),
-        // and correct ONLY the residual error vs the pre-setData logical
-        // range. This is single-compensation, not double.
-        let logicalBefore=null;
-        try{
-          const tsNow=ch.lc.timeScale();
-          logicalBefore=(typeof tsNow.getVisibleLogicalRange==='function')?tsNow.getVisibleLogicalRange():null;
-        }catch(e){}
-        ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-        ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+        // Окно сохраняем по правилам из chart-view.js: LWC 4.1.3 сам
+        // держит видимое время при prepend, а «докомпенсация» сдвига по
+        // разнице длин ломалась, когда между fetch и setData прилетал
+        // реалтайм-бар (длина менялась → target уезжал → рывок).
         const tsScale=ch.lc.timeScale();
         const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
         try{tsScale.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
-        try{
-          if(logicalBefore&&typeof logicalBefore.from==='number'&&typeof logicalBefore.to==='number'
-            &&typeof tsScale.setVisibleLogicalRange==='function'&&typeof tsScale.getVisibleLogicalRange==='function'){
-            const after=tsScale.getVisibleLogicalRange();
-            if(after&&typeof after.from==='number'){
-              // residual = how far LWC moved the view for the SAME bars,
-              // plus the real shift of prepended bars. Single compensation:
-              // target = before + realShift; error = after - target;
-              const targetFrom=logicalBefore.from+realShift;
-              const targetTo=logicalBefore.to+realShift;
-              const errFrom=after.from-targetFrom;
-              const errTo=after.to-targetTo;
-              if(Math.abs(errFrom)>0.01||Math.abs(errTo)>0.01){
-                tsScale.setVisibleLogicalRange({from:after.from-errFrom,to:after.to-errTo});
-              }
-            }
-          }else if(vTime&&vTime.from!=null&&vTime.to!=null){
-            try{tsScale.setVisibleRange(vTime);}catch(e){}
-          }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof tsScale.setVisibleLogicalRange==='function'){
-            try{tsScale.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
-          }
-        }catch(e){}
-        try{
-          const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
-          if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
-        }catch(e){}
+        const view=captureView(tsScale);
+        const prevMeta=ch._paintedMeta||null;
+        ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
+        ch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+        applyViewPlanAsync(tsScale,planViewRestore({view,prevMeta,nextMeta:candleMeta(merged),candles:merged}));
+        ch._paintedMeta=candleMeta(merged);
         // Reset range guard so applyDefaultChartView can run again when new data settles
         ch._lastAppliedRangeFrom=null;ch._lastAppliedRangeTo=null;ch._lastAppliedRo=null;
         repaintBbSeries(ch);
@@ -3850,31 +3862,39 @@ async function handleResumeRecovery(reason='resume'){
     if(!document.hidden)renderTable();
   },idleMs>60000?200:450);
 }
-function repaintChartSeries(ch,cacheKey=''){
+function repaintChartSeries(ch,cacheKey='',opts={}){
   if(!ch?.cs||!ch?.vs||!ch?.candles?.length)return;
-  ch._histBootstrapDone=ch.candles.length>=MIN_CHART_CANDLES;
-  let logRange=null,vTime=null,pRange=null;
-  if(ch._histBootstrapDone&&ch.lc){
-    try{logRange=(typeof ch.lc.timeScale().getVisibleLogicalRange==='function')?ch.lc.timeScale().getVisibleLogicalRange():null;}catch(e){}
-    try{if(typeof ch.lc.timeScale().getVisibleRange==='function')vTime=ch.lc.timeScale().getVisibleRange();}catch(e){}
-    try{
-      const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
-      if(ps&&typeof ps.getVisibleRange==='function')pRange=ps.getVisibleRange();
-    }catch(e){}
+  // Не подменяем данные, пока пользователь тянет/зумит график: setData
+  // посреди жеста = рывок под курсором. Откладываем до конца жеста.
+  if(_anyChartPanning&&!opts?.force){
+    ch._paintPendingKey=cacheKey;
+    if(!ch._paintFlushTimer){
+      ch._paintFlushTimer=setTimeout(()=>{
+        ch._paintFlushTimer=null;
+        const key=ch._paintPendingKey;ch._paintPendingKey=null;
+        if(key!==null&&ch.cs&&ch.lc)repaintChartSeries(ch,key,{force:true});
+      },240);
+    }
+    return;
   }
+  ch._histBootstrapDone=ch.candles.length>=MIN_CHART_CANDLES;
+  // LWC 4.1.3 сам сохраняет видимое ВРЕМЯ при замене данных (замерено):
+  // append/prepend не двигают окно, поэтому трогаем вьюпорт только когда
+  // окно данных реально сменилось. Раньше здесь стоял безусловный
+  // setVisibleRange(getVisibleRange()) — он «схлопывал» зум, у которого
+  // слева пустота (getVisibleRange().from обрезается к первому бару).
+  const tsApi=ch.lc?ch.lc.timeScale():null;
+  // rightOffset меняет окно сам, поэтому применяем его ДО снимка вьюпорта:
+  // иначе сдвиг от rightOffset попал бы в «скачок» после setData.
+  const roR=Math.max(0,Math.min(36,S.chartRightOffset|0));
+  try{tsApi&&tsApi.applyOptions({rightOffset:roR,fixRightEdge:false});}catch(e){}
+  const view=captureView(tsApi);
+  const prevMeta=ch._paintedMeta||null;
   ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
-  const roR=Math.max(0,Math.min(36,S.chartRightOffset|0));
-  try{ch.lc.timeScale().applyOptions({rightOffset:roR,fixRightEdge:false});}catch(e){}
-  if(vTime&&vTime.from!=null&&vTime.to!=null){
-    try{ch.lc.timeScale().setVisibleRange(vTime);}catch(e){}
-  }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
-    try{if(typeof ch.lc.timeScale().setVisibleLogicalRange==='function')ch.lc.timeScale().setVisibleLogicalRange(logRange);}catch(e){}
-  }
-  try{
-    const ps=typeof ch.cs.priceScale==='function'?ch.cs.priceScale():null;
-    if(pRange&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pRange);
-  }catch(e){}
+  const plan=planViewRestore({view,prevMeta,nextMeta:candleMeta(ch.candles),candles:ch.candles});
+  applyViewPlanAsync(tsApi,plan);
+  ch._paintedMeta=candleMeta(ch.candles);
   repaintBbSeries(ch);
   ch._oiHist=alignOiToCandles(ch.candles,ch._oiRaw||[]);
   repaintOiSeries(ch);
@@ -6794,7 +6814,8 @@ function setSortAbs(on){
 function setChartRightOffset(v){
   S.chartRightOffset=Math.max(0,Math.min(36,+v));
   saveChartViewPrefs();
-  applyDefaultChartViewAll();
+  S.charts.forEach(ch=>{if(ch.lc&&ch.candles?.length){ch._userView=null;applyDefaultChartView(ch,{force:true});}});
+  if(S.fsOpen)S.fsCharts.forEach(ch=>{if(ch.lc&&ch.candles?.length){ch._userView=null;applyDefaultChartView(ch,{force:true});}});
   const el=document.getElementById('chartRoVal');if(el)el.textContent=String(S.chartRightOffset);
   const sl=document.getElementById('chartRoSlider');if(sl)sl.value=String(S.chartRightOffset);
   schedulePersistUserSettings();
@@ -6802,7 +6823,8 @@ function setChartRightOffset(v){
 function setChartVisibleBars(v){
   S.chartVisibleBars=Math.max(40,Math.min(220,+v));
   saveChartViewPrefs();
-  applyDefaultChartViewAll();
+  S.charts.forEach(ch=>{if(ch.lc&&ch.candles?.length){ch._userView=null;applyDefaultChartView(ch,{force:true});}});
+  if(S.fsOpen)S.fsCharts.forEach(ch=>{if(ch.lc&&ch.candles?.length){ch._userView=null;applyDefaultChartView(ch,{force:true});}});
   const el=document.getElementById('chartVisVal');if(el)el.textContent=String(S.chartVisibleBars);
   const sl=document.getElementById('chartVisSlider');if(sl)sl.value=String(S.chartVisibleBars);
   schedulePersistUserSettings();
@@ -6885,11 +6907,15 @@ async function loadFsChart(idx){
     fch.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lp)}});
     fch.cs.setData(fch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
     fch.vs.setData(fch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+    fch._paintedMeta=candleMeta(fch.candles);
     repaintBbSeries(fch);
     repaintOiSeries(fch);
     refreshChartOiSeries(fch,fch.tf,sym);
     const lastFsCandle=fch.candles[fch.candles.length-1];
     if(lastFsCandle)syncLivePriceLabel(fch,lastFsCandle.c,lastFsCandle.o);
+    if(fch._viewSym!==sym||fch._viewTf!==fch.tf){
+      fch._userView=null;fch._viewSym=sym;fch._viewTf=fch.tf;
+    }
     applyDefaultChartView(fch);
     rCanvas(fch);
     return true;
@@ -6938,57 +6964,20 @@ async function loadMoreFsHistory(idx){
     if(!nc.length){fch.histLoading=false;fch._histExhausted=true;return;}
     if(!fch.cs||!fch.lc)return;
     const fts=fch.lc.timeScale();
-    let logRange=null,vTime=null;
-    try{logRange=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;}catch(e){}
-    try{if(typeof fts.getVisibleRange==='function')vTime=fts.getVisibleRange();}catch(e){}
-    let pr=null;
-    try{
-      const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
-      if(ps&&typeof ps.getVisibleRange==='function')pr=ps.getVisibleRange();
-    }catch(e){}
-    const prepended=nc.length;
-    const beforeLen=fch.candles.length;
     fch.candles=[...nc,...fch.candles];
     const merged=fch.candles;
-    // real index shift after trim (see loadMoreHistory): restoring with the
-    // raw prepended count drags the view to the right edge (magnet bug)
-    const realShift=merged.length-beforeLen;
     const doSet=()=>{
       if(!fch.cs||!fch.lc)return;
       try{
-        // Logical-range residual-correction restore (see loadMoreHistory):
-        // keeps a zoom that extends past the oldest bar, single-compensated.
-        let logicalBefore=null;
-        try{
-          logicalBefore=(typeof fts.getVisibleLogicalRange==='function')?fts.getVisibleLogicalRange():null;
-        }catch(e){}
-        fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-        fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+        // Окно сохраняем по правилам chart-view.js (см. loadMoreHistory).
         const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
         try{fts.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
-        try{
-          if(logicalBefore&&typeof logicalBefore.from==='number'&&typeof logicalBefore.to==='number'
-            &&typeof fts.setVisibleLogicalRange==='function'&&typeof fts.getVisibleLogicalRange==='function'){
-            const after=fts.getVisibleLogicalRange();
-            if(after&&typeof after.from==='number'){
-              const targetFrom=logicalBefore.from+realShift;
-              const targetTo=logicalBefore.to+realShift;
-              const errFrom=after.from-targetFrom;
-              const errTo=after.to-targetTo;
-              if(Math.abs(errFrom)>0.01||Math.abs(errTo)>0.01){
-                fts.setVisibleLogicalRange({from:after.from-errFrom,to:after.to-errTo});
-              }
-            }
-          }else if(vTime&&vTime.from!=null&&vTime.to!=null){
-            try{fts.setVisibleRange(vTime);}catch(e){}
-          }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'&&typeof fts.setVisibleLogicalRange==='function'){
-            try{fts.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
-          }
-        }catch(e){}
-        try{
-          const ps=typeof fch.cs.priceScale==='function'?fch.cs.priceScale():null;
-          if(pr&&ps&&typeof ps.setVisibleRange==='function')ps.setVisibleRange(pr);
-        }catch(e){}
+        const view=captureView(fts);
+        const prevMeta=fch._paintedMeta||null;
+        fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
+        fch.vs.setData(merged.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
+        applyViewPlanAsync(fts,planViewRestore({view,prevMeta,nextMeta:candleMeta(merged),candles:merged}));
+        fch._paintedMeta=candleMeta(merged);
         repaintBbSeries(fch);
         if(S.showOiOnChart&&S.fsSym)void refreshChartOiSeries(fch,fch.tf,S.fsSym);
         else{fch._oiHist=alignOiToCandles(merged,fch._oiRaw||[]);repaintOiSeries(fch);}
@@ -7643,6 +7632,7 @@ async function main() {
     // прогреваем чанки grid-скринеров в простое: клик по меню не должен
     // зависеть от сети (и не должен показывать «модуль не загрузился»)
     _warmGridChunks();
+    installViewDebug();
   } catch (err) {
     console.error('Init error:', err); ldSet('Ошибка загрузки', 100); ldErr(err.message || String(err));
   }
