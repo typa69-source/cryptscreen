@@ -25,6 +25,118 @@
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
+/**
+ * Минимум свечей в окне. Меньше — это не «вид», а артефакт: такой диапазон
+ * рождается в гонке при инициализации (контейнер ещё нулевой ширины) или от
+ * случайного оверзума колесом/трекпадом. Пользователь видит «2 огромные
+ * свечи на весь график», причём состояние запоминается и возвращается после
+ * каждой перезагрузки данных.
+ */
+export const MIN_VISIBLE_BARS = 6;
+
+/**
+ * Шаг баров в СЕКУНДАХ. Внимание на единицы: LWC отдаёт время в секундах
+ * (UTCTimestamp), а бары в приложении — в миллисекундах. Без приведения
+ * «23 свечи» считаются одной, и защита бьёт по нормальному зуму.
+ */
+function barStepSec(candles) {
+  if (!Array.isArray(candles) || candles.length < 2) return 0;
+  const a = toSec(tOf(candles[0]));
+  const b = toSec(tOf(candles[candles.length - 1]));
+  if (!isNum(a) || !isNum(b) || b <= a) return 0;
+  return (b - a) / (candles.length - 1);
+}
+
+/** Минимальная ШИРИНА окна по времени (в секундах LWC) для min баров. */
+export function minTimeSpanSec(candles, min = MIN_VISIBLE_BARS) {
+  const step = barStepSec(candles);
+  return step > 0 ? step * (min - 1) : 0;
+}
+
+/** Миллисекунды → секунды, если значение явно в миллисекундах. */
+function toSec(t) {
+  if (!isNum(t)) return null;
+  return t > 1e11 ? t / 1000 : t;
+}
+
+/**
+ * Сколько СВЕЧЕЙ реально видно. Считаем по времени, а не по логическому
+ * диапазону: логический включает пустоту справа (rightOffset), из-за чего
+ * окно с одной свечой выглядит «широким».
+ */
+export function viewBarCount(view, candles) {
+  if (!view) return 0;
+  const step = barStepSec(candles);
+  const from = view.time ? toSec(view.time.from) : null;
+  const to = view.time ? toSec(view.time.to) : null;
+  if (step > 0 && isNum(from) && isNum(to) && to >= from) {
+    return Math.round((to - from) / step) + 1;
+  }
+  if (view.log) return Math.max(0, Math.round(view.log.to - view.log.from));
+  return 0;
+}
+
+/** Диапазон вырожден: свечей меньше минимума (или свечей вообще нет в окне). */
+export function isDegenerateView(view, candles, min = MIN_VISIBLE_BARS) {
+  if (!view) return true;
+  if (Array.isArray(candles) && candles.length > 0 && candles.length < min) return false;
+  return viewBarCount(view, candles) < min;
+}
+
+/** Расширить логический диапазон до min баров, оставив правый край на месте. */
+export function widenLogicalRange(range, min = MIN_VISIBLE_BARS) {
+  if (!range || !isNum(range.from) || !isNum(range.to)) return null;
+  const span = range.to - range.from;
+  if (span >= min) return { from: range.from, to: range.to };
+  return { from: range.to - min, to: range.to };
+}
+
+/**
+ * Сколько ЛОГИЧЕСКИХ слотов нужно, чтобы в окне было min СВЕЧЕЙ.
+ * Справа окно всегда содержит пустоту rightOffset, поэтому слотов нужно
+ * больше: иначе окно из 6 слотов при отступе 5 показывает 1–2 свечи —
+ * те самые «2 огромные свечи на весь график».
+ */
+export function slotsForBars(tsApi, min = MIN_VISIBLE_BARS) {
+  let ro = 0;
+  try {
+    if (tsApi && typeof tsApi.options === 'function') {
+      const o = tsApi.options();
+      if (o && isNum(o.rightOffset)) ro = Math.max(0, Math.min(36, o.rightOffset));
+    }
+  } catch (e) {}
+  return Math.round(min + ro);
+}
+
+/**
+ * Поставить нижнюю границу зума на живом графике: если видно меньше min
+ * свечей — расширяем окно влево, оставляя правый край. Возвращает true,
+ * если пришлось поправить. Считаем именно СВЕЧИ (по времени), а не слоты.
+ */
+export function enforceMinVisibleBars(tsApi, candles, min = MIN_VISIBLE_BARS) {
+  if (!tsApi || (Array.isArray(candles) && candles.length > 0 && candles.length < min)) return false;
+  const view = captureView(tsApi);
+  if (!view.log) return false;
+  const bars = viewBarCount(view, candles);
+  if (bars >= min) return false;
+  // Каждый добавленный слева слот даёт примерно одну свечу, поэтому дефицит
+  // свечей = столько же добавленных слотов (+1 на округление). Так работает и
+  // когда справа пустота отступа: она не «съедает» поправку.
+  const span = view.log.to - view.log.from;
+  const deficit = Math.max(0, min - bars);
+  const need = Math.max(span + deficit + 1, Math.min(min, slotsForBars(tsApi, min)));
+  const widened = widenLogicalRange(view.log, need);
+  if (!widened) return false;
+  if (typeof window !== 'undefined') window.__vtag = 'floor';
+  try {
+    if (typeof tsApi.setVisibleLogicalRange !== 'function') return false;
+    tsApi.setVisibleLogicalRange(widened);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 function tOf(k) {
   if (!k) return null;
   const v = isNum(k.t) ? k.t : k.time;
@@ -59,8 +171,12 @@ export function captureView(tsApi) {
 /** Метаданные набора баров: длина + границы по времени. */
 export function candleMeta(candles) {
   if (!Array.isArray(candles) || !candles.length) return { len: 0, firstT: null, lastT: null };
-  const firstT = tOf(candles[0]);
-  const lastT = tOf(candles[candles.length - 1]);
+  // ВАЖНО: время отдаём в СЕКУНДАХ — в тех же единицах, что и LWC
+  // (getVisibleRange/setVisibleRange). Бары приходят в миллисекундах, и
+  // смешение единиц давало диапазоны «вне данных»: LWC прижимал окно к
+  // последним 1–2 свечам — те самые «2 огромные свечи на весь график».
+  const firstT = toSec(tOf(candles[0]));
+  const lastT = toSec(tOf(candles[candles.length - 1]));
   return { len: candles.length, firstT, lastT };
 }
 
@@ -96,10 +212,11 @@ export function classifyDataChange(prevMeta, nextMeta) {
  */
 export function shiftOfFirstBar(oldFirstT, candles) {
   if (!isNum(oldFirstT) || !Array.isArray(candles)) return 0;
+  const limit = toSec(oldFirstT);
   let n = 0;
   for (let i = 0; i < candles.length; i++) {
-    const t = tOf(candles[i]);
-    if (t == null || t >= oldFirstT) break;
+    const t = toSec(tOf(candles[i]));
+    if (t == null || t >= limit) break;
     n++;
   }
   return n;
@@ -134,6 +251,9 @@ export function clampTimeRangeToData(range, candles) {
 export function planViewRestore({ view, prevMeta, nextMeta, candles } = {}) {
   const keep = { mode: 'keep' };
   if (!view) return keep;
+  // Вырожденный текущий вид (гонка при инициализации / оверзум) не
+  // восстанавливаем: иначе «2 огромные свечи» закрепляются навсегда.
+  if (isDegenerateView(view, candles)) return keep;
   const kind = classifyDataChange(prevMeta, nextMeta);
   if (kind === 'unknown' || kind === 'none' || kind === 'append') return keep;
 
@@ -165,6 +285,7 @@ export function planViewRestore({ view, prevMeta, nextMeta, candles } = {}) {
 /** Применить решение. Никогда не бросает; возвращает true, если тронули вьюпорт. */
 export function applyViewPlan(tsApi, plan) {
   if (!tsApi || !plan || plan.mode === 'keep' || !plan.range) return false;
+  if (typeof window !== 'undefined') window.__vtag = 'plan:' + plan.mode;
   const { from, to } = plan.range;
   if (!isNum(from) || !isNum(to)) return false;
   try {
@@ -218,11 +339,22 @@ export function viewContextKey(sym, tf) {
  * Именно этот вид восстанавливается после перезагрузки данных/self-heal,
  * вместо дефолтного «последние N баров».
  */
-export function rememberUserView(ch, view, ctxKey) {
+export function rememberUserView(ch, view, ctxKey, candles) {
   if (!ch || !view || !view.log) return false;
+  // Вырожденный вид не запоминаем — сохраняем последний нормальный.
+  if (isDegenerateView(view, candles)) {
+    // А если вырожденным оказался уже запомненный вид (так бывает, когда
+    // чарт создаётся нулевой ширины), — выбрасываем его совсем, чтобы
+    // применился дефолтный вид, а не «6 свечей на весь график».
+    if (ch._userView && isDegenerateView({ log: ch._userView.log, time: ch._userView.time }, candles)) {
+      ch._userView = null;
+    }
+    return false;
+  }
   ch._userView = {
     log: { from: view.log.from, to: view.log.to },
     time: view.time ? { from: view.time.from, to: view.time.to } : null,
+    bars: viewBarCount(view, candles),
     ctx: ctxKey,
     at: Date.now(),
   };
@@ -233,10 +365,18 @@ export function rememberUserView(ch, view, ctxKey) {
  * План восстановления ПОЛЬЗОВАТЕЛЬСКОГО вида после перезагрузки данных.
  * Тот же контекст (символ+ТФ) → возвращаем его вид; другой контекст или
  * ничего не запомнено → 'keep' (вызывающий применит дефолтный вид).
+ * Вырожденный запомненный вид расширяем до MIN_VISIBLE_BARS, а не
+ * воспроизводим как есть.
  */
 export function planUserViewRestore(ch, ctxKey, candles) {
   const uv = ch && ch._userView;
   if (!uv || uv.ctx !== ctxKey) return { mode: 'keep' };
+  const degenerate = isDegenerateView({ log: uv.log, time: uv.time }, candles);
+  if (degenerate) {
+    const widened = widenLogicalRange(uv.log, MIN_VISIBLE_BARS + 4);
+    if (widened) return { mode: 'logical', range: widened };
+    return { mode: 'keep' };
+  }
   if (uv.time) {
     const r = clampTimeRangeToData(uv.time, candles);
     if (r) return { mode: 'time', range: r };

@@ -18,6 +18,13 @@ import {
   rememberUserView,
   planUserViewRestore,
   withStableView,
+  MIN_VISIBLE_BARS,
+  viewBarCount,
+  isDegenerateView,
+  widenLogicalRange,
+  enforceMinVisibleBars,
+  minTimeSpanSec,
+  slotsForBars,
 } from '../src/chart-view.js';
 
 const bar = (t, c = 100) => ({ t, o: c, h: c + 1, l: c - 1, c, qv: 1 });
@@ -242,4 +249,159 @@ test('applyViewPlanAsync: план по времени идёт через setVi
   await new Promise((r) => setTimeout(r, 150));
   assert.ok(calls.length >= 1);
   for (const c of calls) assert.deepEqual(c, ['time', { from: 100, to: 200 }]);
+});
+
+// ── «2 огромные свечи на весь график»: нижняя граница зума ──────────────
+// Артефакт рождается в гонке при инициализации (контейнер нулевой ширины)
+// или от оверзума колесом, а потом закреплялся как «вид пользователя».
+
+test('viewBarCount: считает свечи в окне по времени, а не по логике', () => {
+  const s = series(100); // шаг 60 с
+  const t0 = 1700000000;
+  // 3 бара в окне
+  assert.equal(viewBarCount({ log: { from: 47, to: 82 }, time: { from: t0, to: t0 + 120 } }, s), 3);
+  // 41 бар: логический span и временной совпадают
+  assert.equal(viewBarCount({ log: { from: 58, to: 99 }, time: { from: t0, to: t0 + 2400 } }, s), 41);
+  // без данных — падаем на логический диапазон
+  assert.equal(viewBarCount({ log: { from: 10, to: 49 } }, null), 39);
+  assert.equal(viewBarCount(null, s), 0);
+});
+
+test('isDegenerateView: 2 свечи = артефакт, 40 свечей = нормальный вид', () => {
+  const s = series(100);
+  const t0 = 1700000000;
+  const two = { log: { from: 48, to: 49 }, time: { from: t0 + 48 * 60, to: t0 + 49 * 60 } };
+  const many = { log: { from: 59, to: 99 }, time: { from: t0, to: t0 + 40 * 60 } };
+  assert.equal(isDegenerateView(two, s), true);
+  assert.equal(isDegenerateView(many, s), false);
+  assert.equal(isDegenerateView(null, s), true);
+  // в наборе меньше MIN_VISIBLE_BARS баров — судить не о чем, не трогаем
+  assert.equal(isDegenerateView(two, series(3)), false);
+});
+
+test('widenLogicalRange: расширяет влево, правый край на месте', () => {
+  assert.deepEqual(widenLogicalRange({ from: 48, to: 49 }), { from: 49 - MIN_VISIBLE_BARS, to: 49 });
+  assert.deepEqual(widenLogicalRange({ from: 10, to: 99 }), { from: 10, to: 99 });
+  assert.equal(widenLogicalRange(null), null);
+});
+
+test('enforceMinVisibleBars: вырожденный зум расширяется, нормальный не трогаем', () => {
+  const s = series(100);
+  const t0 = 1700000000;
+  const narrow = fakeTs({ from: 48, to: 49 }, { from: t0 + 48 * 60, to: t0 + 49 * 60 });
+  assert.equal(enforceMinVisibleBars(narrow, s), true);
+  assert.equal(narrow.calls.length, 1);
+  assert.equal(narrow.calls[0].kind, 'logical');
+  assert.deepEqual(narrow.calls[0].r, { from: 49 - MIN_VISIBLE_BARS, to: 49 });
+
+  const normal = fakeTs({ from: 59, to: 99 }, { from: t0, to: t0 + 40 * 60 });
+  assert.equal(enforceMinVisibleBars(normal, s), false);
+  assert.equal(normal.calls.length, 0);
+
+  assert.equal(enforceMinVisibleBars(null, s), false);
+  // данных меньше минимума — не лезем
+  const few = fakeTs({ from: 0, to: 1 }, { from: t0, to: t0 + 60 });
+  assert.equal(enforceMinVisibleBars(few, series(3)), false);
+});
+
+test('rememberUserView: вырожденный вид не перезаписывает нормальный', () => {
+  const s = series(100);
+  const t0 = 1700000000;
+  const ch = {};
+  const good = { log: { from: 59, to: 99 }, time: { from: t0, to: t0 + 40 * 60 }, barSpacing: 6 };
+  assert.equal(rememberUserView(ch, good, 'BTCUSDT|1m', s), true);
+  const saved = { ...ch._userView, log: { ...ch._userView.log } };
+  assert.equal(ch._userView.bars, 41);
+
+  const two = { log: { from: 48, to: 49 }, time: { from: t0 + 48 * 60, to: t0 + 49 * 60 }, barSpacing: 63 };
+  assert.equal(rememberUserView(ch, two, 'BTCUSDT|1m', s), false);
+  assert.deepEqual(ch._userView.log, saved.log, 'прежний нормальный вид сохранён');
+  assert.equal(ch._userView.bars, saved.bars);
+});
+
+test('planUserViewRestore: запомненные 2 свечи расширяются, а не воспроизводятся', () => {
+  const s = series(100);
+  const t0 = 1700000000;
+  const ch = {
+    _userView: {
+      log: { from: 48, to: 49 },
+      time: { from: t0 + 48 * 60, to: t0 + 49 * 60 },
+      bars: 2,
+      ctx: 'BTCUSDT|1m',
+    },
+  };
+  const plan = planUserViewRestore(ch, 'BTCUSDT|1m', s);
+  assert.equal(plan.mode, 'logical');
+  // расширяем с запасом: часть окна справа всегда занимает пустота отступа
+  assert.ok(plan.range.to - plan.range.from >= MIN_VISIBLE_BARS, 'окно шире минимума');
+  assert.equal(plan.range.to, 49, 'правый край не съезжает');
+});
+
+test('planViewRestore: вырожденный текущий вид не восстанавливаем (keep)', () => {
+  const s = series(100);
+  const t0 = 1700000000;
+  const prev = candleMeta(s);
+  const next = [bar(t0 - 600), ...s]; // prepend
+  const two = { log: { from: 48, to: 49 }, time: { from: t0 + 48 * 60, to: t0 + 49 * 60 } };
+  assert.deepEqual(planViewRestore({ view: two, prevMeta: prev, nextMeta: candleMeta(next), candles: next }), {
+    mode: 'keep',
+  });
+});
+
+test('viewBarCount: единицы не путаются (бары в мс, время LWC в секундах)', () => {
+  // Реальные бары приложения — миллисекунды, время из LWC — секунды.
+  const t0ms = 1700000000000;
+  const s = Array.from({ length: 100 }, (_, i) => bar(t0ms + i * 300000)); // 5 минут
+  // окно 23 свечи: 6900 секунд
+  const view = { log: { from: 1176.6, to: 1199 }, time: { from: 1700000000 + 6900, to: 1700000000 + 6900 + 6900 } };
+  assert.equal(viewBarCount({ log: view.log, time: { from: 1700006900, to: 1700013800 } }, s), 24);
+  // и то же самое, если бары пришли в секундах
+  const sSec = Array.from({ length: 100 }, (_, i) => bar(1700000000 + i * 300));
+  assert.equal(viewBarCount({ log: view.log, time: { from: 1700006900, to: 1700013800 } }, sSec), 24);
+  // нормальный зум не считается вырожденным
+  assert.equal(isDegenerateView({ log: view.log, time: { from: 1700006900, to: 1700013800 } }, s), false);
+});
+
+test('minTimeSpanSec: минимальная ширина окна по времени (единицы не путаются)', () => {
+  const ms = Array.from({ length: 100 }, (_, i) => bar(1700000000000 + i * 300000)); // 5 мин, мс
+  assert.equal(minTimeSpanSec(ms, 6), 300 * 5); // 5 шагов по 300 с
+  const sec = Array.from({ length: 100 }, (_, i) => bar(1700000000 + i * 300));
+  assert.equal(minTimeSpanSec(sec, 6), 300 * 5);
+  assert.equal(minTimeSpanSec([], 6), 0);
+});
+
+test('candleMeta: время в секундах — те же единицы, что у LWC', () => {
+  const msBars = [bar(1700000000000), bar(1700000300000), bar(1700000600000)];
+  const m = candleMeta(msBars);
+  assert.equal(m.firstT, 1700000000);
+  assert.equal(m.lastT, 1700000600);
+  // уже в секундах — не трогаем
+  const sBars = [bar(1700000000), bar(1700000300)];
+  assert.equal(candleMeta(sBars).firstT, 1700000000);
+  // восстановление по времени остаётся внутри данных, ширина сохраняется
+  const view = { log: { from: 100, to: 120 }, time: { from: 1700000300, to: 1700000600 } };
+  const r = clampTimeRangeToData(view.time, msBars);
+  assert.deepEqual(r, { from: 1700000300, to: 1700000600 });
+  // окно шире данных — прижимается к правому краю, но не схлопывается в 1 бар
+  const wide = clampTimeRangeToData({ from: 1600000000, to: 1800000000 }, msBars);
+  assert.ok(wide.to - wide.from >= 600, 'ширина окна не схлопнулась');
+});
+
+test('slotsForBars: слоты = свечи + пустота справа (rightOffset)', () => {
+  const ts = fakeTs({ from: 0, to: 10 }, null, { barSpacing: 8, rightOffset: 0 });
+  assert.equal(slotsForBars(ts, 6), 6);
+  const ts5 = fakeTs({ from: 0, to: 10 }, null, { barSpacing: 8, rightOffset: 5 });
+  assert.equal(slotsForBars(ts5, 6), 11);
+  assert.equal(slotsForBars(null, 6), 6);
+});
+
+test('enforceMinVisibleBars: при отступе справа расширяет до MIN свечей, а не слотов', () => {
+  const s = series(100);
+  const t0 = 1700000000;
+  // окно 6 слотов, из них 5 — пустота справа, видно 1 свечу
+  const ts = fakeTs({ from: 1198, to: 1204 }, { from: t0 + 99 * 60, to: t0 + 99 * 60 }, { barSpacing: 20, rightOffset: 5 });
+  assert.equal(enforceMinVisibleBars(ts, s), true);
+  assert.equal(ts.calls.length, 1);
+  const r = ts.calls[0].r;
+  assert.ok(r.to - r.from >= 6 + 5 - 0.001, 'в окне не меньше MIN свечей плюс отступ');
 });

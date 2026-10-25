@@ -14,6 +14,13 @@ import {
   planUserViewRestore,
   rememberUserView,
   viewContextKey,
+  enforceMinVisibleBars,
+  isDegenerateView,
+  minTimeSpanSec,
+  widenLogicalRange,
+  slotsForBars,
+  MIN_VISIBLE_BARS,
+  viewBarCount,
 } from './chart-view.js'
 import { cacheGetFresh, cacheSet, cacheGet, cacheHasIDB } from './idb-cache.js'
 import { runMetrics, workerAvailable } from './metrics-worker-runtime.js'
@@ -674,9 +681,12 @@ function applyDefaultChartView(ch,opts){
     // Apply view only once per data load to avoid periodic rescaling flicker
     if(ch._lastAppliedRangeFrom===from&&ch._lastAppliedRangeTo===len-1&&ch._lastAppliedRo===ro)return;
     ch._lastAppliedRangeFrom=from;ch._lastAppliedRangeTo=len-1;ch._lastAppliedRo=ro;
+    if(typeof window!=='undefined')window.__vtag='default';
     ch.lc.timeScale().applyOptions({rightOffset:ro,fixRightEdge:false});
     ch.lc.timeScale().setVisibleLogicalRange({from,to:len-1});
     ch.lc.timeScale().applyOptions({rightOffset:ro});
+    // нижняя граница зума: не оставляем вырожденное окно (2 свечи на весь график)
+    enforceMinVisibleBars(ch.lc.timeScale(),ch.candles);
   }catch(e){}
 }
 
@@ -696,6 +706,7 @@ function installViewDebug(){
         view:ch.lc?captureView(ch.lc.timeScale()):null,
         painted:ch._paintedMeta||null,
         userView:ch._userView||null,
+        barsVisible:ch.lc?viewBarCount(captureView(ch.lc.timeScale()),ch.candles):0,
         lastApplied:ch._lastAppliedRangeFrom==null?null:{from:ch._lastAppliedRangeFrom,to:ch._lastAppliedRangeTo},
       };
     });
@@ -719,6 +730,29 @@ function installViewDebug(){
     };
     window.__viewApplyDefault=(slot=0)=>{const ch=S.charts[slot];if(!ch?.lc)return'no-chart';applyDefaultChartView(ch);return'ok';};
     window.__viewRaw=(slot=0)=>S.charts[slot]||null;
+    window.__floorCheck=(slot=0,isFs=false)=>{
+      const ch=isFs?S.fsCharts[slot]:S.charts[slot];
+      if(!ch?.lc)return'no-chart';
+      const ts=ch.lc.timeScale(),view=captureView(ts);
+      const c=ch.candles||[];
+      const info={candles:c.length,t0:c[0]?c[0].t:null,tN:c.length?c[c.length-1].t:null,
+        log:view.log,time:view.time,bs:view.barSpacing,bars:viewBarCount(view,ch.candles),
+        had:!!ch._hadUserView,floorAt:ch._floorAt||null};
+      info.fixed=enforceMinVisibleBars(ts,ch.candles);
+      const a=ts.getVisibleLogicalRange();
+      info.after=a?{from:+a.from.toFixed(2),to:+a.to.toFixed(2)}:null;
+      return JSON.stringify(info);
+    };
+    window.__fsOpen=(slot=0)=>{try{openFullscreen(slot);return'ok';}catch(e){return'ERR '+e.message;}};
+    window.__zoomSet=(bars=2,slot=0,isFs=false)=>{
+      const ch=isFs?S.fsCharts[slot]:S.charts[slot];
+      if(!ch?.lc)return'no-chart';
+      const ts=ch.lc.timeScale(),lr=ts.getVisibleLogicalRange();
+      if(!lr)return'no-range';
+      const to=Math.round(lr.to);
+      ts.setVisibleLogicalRange({from:to-bars+1,to});
+      return'ok';
+    };
     console.log('[viewdbg] window.__view() доступен');
   }catch(e){}
 }
@@ -1448,6 +1482,21 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   });
   container.appendChild(interact);ch.interact=interact;
 
+  // ── Предел зума колесом ──────────────────────────────────────
+  // Не даём приблизиться сильнее, чем до MIN_VISIBLE_BARS свечей: иначе
+  // случайный «щелчок» трекпадом/колесом растягивает 2 свечи на весь
+  // график. Перехватываем ДО LWC (capture), чтобы зум не применился вовсе.
+  container.addEventListener('wheel',e=>{
+    try{
+      if(!ch.lc||!e.deltaY||e.deltaY>=0)return; // интересует только зум-ин
+      const ts=ch.lc.timeScale();
+      // Решаем по ФАКТИЧЕСКИ видимым свечам, а не по слотам: часть окна
+      // справа занимает пустота отступа, и «слотовая» оценка врёт.
+      const bars=viewBarCount(captureView(ts),ch.candles);
+      if(bars>0&&bars<=MIN_VISIBLE_BARS+2){e.preventDefault();e.stopPropagation();}
+    }catch(err){}
+  },{capture:true,passive:false});
+
   // Container-level listeners use abortable signal (cleanup on re-init / chart rebuild)
   const ab=new AbortController();
   const sig=ab.signal;
@@ -1678,10 +1727,63 @@ function initLCChart(slot,isFs=false,fsIdx=null){
   const onVisibleRangePan=()=>{_onPanStart();rCanvas(ch,{immediate:true});};
   // Запоминаем вид, выставленный ПОЛЬЗОВАТЕЛЕМ, чтобы перезагрузка данных
   // и self-heal возвращали его же, а не дефолтные «последние N баров».
+  // Страховка от «2 огромные свечи на весь график». Работает на следующем
+  // кадре: LWC применяет setVisibleLogicalRange отложенно, и в момент
+  // колбэка диапазон может быть ещё старым, поэтому проверять надо позже.
+  const vlog=(action,extra)=>{
+    if(new URLSearchParams(location.search).get('viewdbg')!=='1')return;
+    try{
+      const w=(window.__viewLog=window.__viewLog||[]);
+      const view=captureView(lc.timeScale());
+      w.push(Object.assign({t:Date.now()%1000000,slot:isFs?'fs'+ch.tf:String(S.charts.indexOf(ch)),
+        action,bars:viewBarCount(view,ch.candles),bs:view.barSpacing!=null?+view.barSpacing.toFixed(2):null,
+        log:view.log?[+view.log.from.toFixed(1),+view.log.to.toFixed(1)]:null,
+        had:!!ch._hadUserView,uv:ch._userView?ch._userView.bars:null},extra||{}));
+      if(w.length>400) w.splice(0,w.length-400);
+    }catch(e){}
+  };
+  const floorCheckOnce=()=>{
+    try{
+      const ts=lc.timeScale();
+      if(!isDegenerateView(captureView(ts),ch.candles)) return;
+      if(ch._hadUserView){
+        // Свой вид у пользователя уже есть — просто не даём зуму уйти за пол.
+        if(enforceMinVisibleBars(ts,ch.candles)){vlog('floor-set');ch._floorAt=Date.now();}
+      }else if(Date.now()-(ch._defFixAt||0)>600){
+        // Своего вида ещё нет (чарт создан нулевой ширины) — ставим дефолт.
+        ch._defFixAt=Date.now();
+        vlog('degen-no-view=>default');
+        applyDefaultChartView(ch);
+      }
+    }catch(e){}
+  };
+  // Повторяем: LWC применяет свой зум/диапазон кадром позже, и одиночная
+  // проверка успевает проиграть гонку (замерено: колесо оставляло 3 свечи).
+  const scheduleFloor=()=>{
+    if(ch._floorTimers) return;
+    ch._floorTimers=[];
+    floorCheckOnce();
+    ch._floorTimers.push(requestAnimationFrame(()=>floorCheckOnce()));
+    ch._floorTimers.push(setTimeout(floorCheckOnce,60));
+    ch._floorTimers.push(setTimeout(()=>{floorCheckOnce();ch._floorTimers=null;},180));
+  };
   const rememberView=()=>{
     try{
       const ctxKey=viewContextKey(getChartSym(ch),isFs?(ch.tf||S.tf):S.tf);
-      rememberUserView(ch,captureView(lc.timeScale()),ctxKey);
+      const ts=lc.timeScale();
+      scheduleFloor();
+      // Эхо нашей же поправки не сохраняем: иначе «страховочные» 6 свечей
+      // затирают настоящий вид пользователя.
+      if(ch._floorAt && Date.now()-ch._floorAt<400) return;
+      // Вырожденный вид (меньше MIN_VISIBLE_BARS свечей) не запоминаем: иначе
+      // «2 огромные свечи» возвращаются после каждой перезагрузки данных.
+      const remembered=rememberUserView(ch,captureView(ts),ctxKey,ch.candles);
+      vlog(remembered?'remember':'refuse');
+      // Нижняя граница зума — ТОЛЬКО когда у пользователя уже есть свой вид.
+      // На старте чарт бывает нулевой ширины, и граница закрепила бы зум-ин
+      // (замерено: вместо дефолтных ~90 свечей выходило 7).
+      if(ch._hadUserView && enforceMinVisibleBars(ts,ch.candles)) ch._floorAt=Date.now();
+      if(remembered) ch._hadUserView=true;
     }catch(e){}
   };
   lc.timeScale().subscribeVisibleLogicalRangeChange(range=>{
@@ -1706,6 +1808,58 @@ function initLCChart(slot,isFs=false,fsIdx=null){
     }
   }catch(e){}
 
+  // ── Жёсткий пол зума ─────────────────────────────────────────
+  // Ни один вызов в приложении не может оставить окно уже MIN_VISIBLE_BARS
+  // свечей: такие диапазоны рождаются в гонке при инициализации (чарт ещё
+  // нулевой ширины) или от оверзума, и пользователь видит «2 огромные
+  // свечи на весь график». Правим на входе, в самом сеттере.
+  try{
+    const tsF=lc.timeScale();
+    const rawLog=tsF.setVisibleLogicalRange.bind(tsF);
+    const rawTime=tsF.setVisibleRange.bind(tsF);
+    const vdbg=new URLSearchParams(location.search).get('viewdbg')==='1';
+    const trace=(api,r,was)=>{
+      if(!vdbg)return;
+      try{
+        const w=(window.__tsLog=window.__tsLog||[]);
+        w.push({slot:isFs?'fs'+fsIdx:String(slot),api,tag:window.__vtag||null,r:r&&r.from!=null?{from:+(+r.from).toFixed(2),to:+(+r.to).toFixed(2)}:null,
+          was,stack:(new Error().stack||'').split(String.fromCharCode(10)).slice(3,9).map(l=>l.trim()).join(' | ')});
+        if(w.length>400)w.splice(0,w.length-400);
+      }catch(e){}
+    };
+    const guardLog=(r)=>{
+      let out=r;
+      try{
+        const n=(ch.candles||[]).length;
+        // Правим только совсем вырожденные диапазоны: собственный зум
+        // пользователя (8–14 свечей) сюда попадать не должен, иначе он не
+        // переживёт перезагрузку. Остальное добирает enforceMinVisibleBars —
+        // он мерит уже применённое окно по свечам.
+        if(n>=MIN_VISIBLE_BARS&&r&&r.to-r.from<MIN_VISIBLE_BARS-1){
+          const w=widenLogicalRange({from:+r.from,to:+r.to},MIN_VISIBLE_BARS);
+          if(w)out=w;
+        }
+      }catch(e){}
+      trace('logical',out,out!==r?'widened':null);
+      return out;
+    };
+    const guardTime=(r)=>{
+      let out=r;
+      try{
+        const n=(ch.candles||[]).length;
+        if(n>=MIN_VISIBLE_BARS&&r&&typeof r.from==='number'&&isFinite(r.from)&&typeof r.to==='number'&&isFinite(r.to)&&r.to>r.from){
+          const minSpan=minTimeSpanSec(ch.candles,MIN_VISIBLE_BARS);
+          if(minSpan>0&&r.to-r.from<minSpan)out={from:r.to-minSpan,to:r.to};
+        }
+      }catch(e){}
+      trace('time',out,out!==r?'widened':null);
+      return out;
+    };
+    const rawFit=tsF.fitContent.bind(tsF);
+    tsF.fitContent=()=>{trace('fitContent',null,null);return rawFit();};
+    tsF.setVisibleLogicalRange=(r)=>rawLog(guardLog(r));
+    tsF.setVisibleRange=(r)=>rawTime(guardTime(r));
+  }catch(e){}
   ch.lc=lc;ch.cs=cs;ch.vs=vs;ch.oiLine=oiLine;ch.bbUpperLine=bbUpperLine;ch.bbLowerLine=bbLowerLine;
   return true;
 }
@@ -8103,6 +8257,7 @@ async function prependGridLabHistory(body,sym,tf){
     try{vTimeNow=(typeof ts.getVisibleRange==='function')?ts.getVisibleRange():null;}catch(e){}
     if(!vTimeNow||vTimeNow.from==null||vTimeNow.to==null)vTimeNow=(vTime&&vTime.from!=null&&vTime.to!=null)?vTime:null;
     if(vTimeNow){
+      if(typeof window!=='undefined')window.__vtag='glctx';
       try{ts.setVisibleRange(vTimeNow);}catch(e){}
     }else if(logRange&&typeof logRange.from==='number'&&typeof logRange.to==='number'){
       try{if(typeof ts.setVisibleLogicalRange==='function')ts.setVisibleLogicalRange({from:logRange.from+realShift,to:logRange.to+realShift});}catch(e){}
