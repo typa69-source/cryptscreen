@@ -2343,8 +2343,8 @@ async function loadMoreHistory(slot){
         // разнице длин ломалась, когда между fetch и setData прилетал
         // реалтайм-бар (длина менялась → target уезжал → рывок).
         const tsScale=ch.lc.timeScale();
-        const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
-        try{tsScale.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
+        // rightOffset тут не трогаем: подгрузка не должна двигать окно
+        // (см. repaintChartSeries — иначе сдвиг на каждом догрузе).
         const view=captureView(tsScale);
         const prevMeta=ch._paintedMeta||null;
         ch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
@@ -4032,17 +4032,24 @@ async function handleResumeRecovery(reason='resume'){
     if(!document.hidden)renderTable();
   },idleMs>60000?200:450);
 }
+/**
+ * Занят ли график пользователем прямо сейчас: тянет полотно, уровень или
+ * линейку. Пока занят — данные не подменяем и окно не «догоняем».
+ */
+function chartBusy(ch){
+  return !!(_anyChartPanning||ch?.draggingDraw||ch?.ruler?.active);
+}
 function repaintChartSeries(ch,cacheKey='',opts={}){
   if(!ch?.cs||!ch?.vs||!ch?.candles?.length)return;
-  // Не подменяем данные, пока пользователь тянет/зумит график: setData
-  // посреди жеста = рывок под курсором. Откладываем до конца жеста.
-  if(_anyChartPanning&&!opts?.force){
+  // Не подменяем данные, пока пользователь тянет/зумит график или уровень:
+  // setData посреди жеста = рывок под курсором. Откладываем до конца жеста.
+  if(chartBusy(ch)&&!opts?.force){
     ch._paintPendingKey=cacheKey;
     if(!ch._paintFlushTimer){
       ch._paintFlushTimer=setTimeout(()=>{
         ch._paintFlushTimer=null;
         const key=ch._paintPendingKey;ch._paintPendingKey=null;
-        if(key!==null&&ch.cs&&ch.lc)repaintChartSeries(ch,key,{force:true});
+        if(key!==null&&ch.cs&&ch.lc)repaintChartSeries(ch,key,{force:!chartBusy(ch)});
       },240);
     }
     return;
@@ -4054,16 +4061,18 @@ function repaintChartSeries(ch,cacheKey='',opts={}){
   // setVisibleRange(getVisibleRange()) — он «схлопывал» зум, у которого
   // слева пустота (getVisibleRange().from обрезается к первому бару).
   const tsApi=ch.lc?ch.lc.timeScale():null;
-  // rightOffset меняет окно сам, поэтому применяем его ДО снимка вьюпорта:
-  // иначе сдвиг от rightOffset попал бы в «скачок» после setData.
-  const roR=Math.max(0,Math.min(36,S.chartRightOffset|0));
-  try{tsApi&&tsApi.applyOptions({rightOffset:roR,fixRightEdge:false});}catch(e){}
+  // ВАЖНО: здесь НЕ применяем rightOffset. Любой пан/зум меняет внутренний
+  // отступ LWC, и принудительная установка настроенного значения на каждой
+  // перерисовке (каждые ~2.5 с при тихом WS, при подгрузке истории, при
+  // ремонте разрывов) сдвигала окно назад — «график смещается, пока я
+  // выставляю уровень». Отступ выставляет только applyDefaultChartView
+  // (загрузка символа/ТФ, смена настройки).
   const view=captureView(tsApi);
   const prevMeta=ch._paintedMeta||null;
   ch.cs.setData(ch.candles.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
   ch.vs.setData(ch.candles.map(k=>({time:toChartTime(k.t),value:k.qv,color:k.c>=k.o?'#1fa89122':'#e0404022'})));
   const plan=planViewRestore({view,prevMeta,nextMeta:candleMeta(ch.candles),candles:ch.candles});
-  applyViewPlanAsync(tsApi,plan);
+  applyViewPlanAsync(tsApi,plan,{shouldRetry:()=>!chartBusy(ch)});
   ch._paintedMeta=candleMeta(ch.candles);
   repaintBbSeries(ch);
   ch._oiHist=alignOiToCandles(ch.candles,ch._oiRaw||[]);
@@ -7140,8 +7149,7 @@ async function loadMoreFsHistory(idx){
       if(!fch.cs||!fch.lc)return;
       try{
         // Окно сохраняем по правилам chart-view.js (см. loadMoreHistory).
-        const ro=Math.max(0,Math.min(36,S.chartRightOffset|0));
-        try{fts.applyOptions({rightOffset:ro,fixRightEdge:false});}catch(e){}
+        // rightOffset не применяем — подгрузка не двигает окно.
         const view=captureView(fts);
         const prevMeta=fch._paintedMeta||null;
         fch.cs.setData(merged.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
@@ -8249,8 +8257,8 @@ async function prependGridLabHistory(body,sym,tf){
     const lastC=+m[m.length-1]?.c||1;
     try{ctx.cs.applyOptions({priceFormat:{type:'custom',formatter:fmtPrice,minMove:getPriceMinMove(lastC)}});}catch(e){}
     ctx.cs.setData(m.map(k=>({time:toChartTime(k.t),open:k.o,high:k.h,low:k.l,close:k.c})));
-    const gro=Math.max(0,Math.min(36,S.chartRightOffset|0));
-    try{ts.applyOptions({rightOffset:gro,fixRightEdge:false});}catch(e){}
+    // rightOffset здесь не применяем: обновление данных не должно
+    // сдвигать окно Grid Lab (см. repaintChartSeries).
     // TIME-anchored restore (see loadMoreHistory): the same wall-clock window
     // stays on screen, immune to LWC's own logical-range shift on setData.
     let vTimeNow=null;

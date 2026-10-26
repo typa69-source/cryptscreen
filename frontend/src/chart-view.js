@@ -320,6 +320,9 @@ export function applyViewPlanAsync(tsApi, plan, opts = {}) {
   const run = () => {
     if (done) return;
     done = true;
+    // Отложенная страховка нужна только если пользователь не занял график
+    // сам: иначе его перетаскивание/зум отменяется через 48 мс после начала.
+    if (typeof opts.shouldRetry === 'function' && !opts.shouldRetry()) return;
     applyViewPlan(tsApi, plan);
   };
   if (typeof requestAnimationFrame === 'function') {

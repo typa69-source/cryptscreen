@@ -405,3 +405,17 @@ test('enforceMinVisibleBars: при отступе справа расширяе
   const r = ts.calls[0].r;
   assert.ok(r.to - r.from >= 6 + 5 - 0.001, 'в окне не меньше MIN свечей плюс отступ');
 });
+
+test('applyViewPlanAsync: не догоняет окно, если пользователь занял график', () => {
+  const ts = fakeTs({ from: 10, to: 20 }, null, { barSpacing: 8, rightOffset: 0 });
+  let busy = true;
+  const plan = { mode: 'logical', range: { from: 30, to: 40 } };
+  applyViewPlanAsync(ts, plan, { shouldRetry: () => !busy });
+  // синхронное применение состоялось
+  assert.equal(ts.calls.length, 1);
+  busy = false;
+  // и повторная проверка не падает и не дублирует при занятом графике
+  const ts2 = fakeTs({ from: 10, to: 20 }, null, { barSpacing: 8, rightOffset: 0 });
+  applyViewPlanAsync(ts2, plan, { shouldRetry: () => false });
+  assert.equal(ts2.calls.length, 1);
+});
