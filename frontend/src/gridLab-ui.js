@@ -629,6 +629,24 @@ export function renderLevelsPickerIdle(body, txt) {
 }
 
 /**
+ * Скан не запустился по технической причине (не загрузился lazy-модуль,
+ * сеть моргнула). НЕ затираем прошлую тепловую полосу: пустая полоса и «—»
+ * читаются как «функция сломана», хотя достаточно повторить.
+ */
+export function renderLevelsPickerUnavailable(body, txt) {
+  const hint = body.querySelector('#gbLvlHint');
+  if (hint) {
+    hint.innerHTML = `<span style="color:#fbbf24" title="Модуль скана не загрузился (сеть/деплой). Повтор — при следующем изменении формы или кликом.">${txt || 'скан недоступен'}</span>`;
+  }
+  // Полосу не чистим: если скан уже считался, старые столбики остаются
+  // видимыми и кликабельными — они валидны для тех же границ.
+  if (!body._gbLvlCache) {
+    const strip = body.querySelector('#gbLvlHeat');
+    if (strip) strip.innerHTML = '<span style="font-size:9px;color:var(--text3)">нет данных скана</span>';
+  }
+}
+
+/**
  * Тепловая полоса-«теплокарта» N=2..60: одна строка мини-чанков.
  * Каждый чанк — div с background от heat (сине-зелёный→янтарный→красный).
  * Клик по чанку применяет N (меняет #gbLevels + слайдер, запускает sync).
@@ -720,7 +738,10 @@ export async function renderLevelsPicker(body, out, gbPrefs, deps) {
     levelsApi = await deps.ensureLevelsApi();
   }
   if (!levelsApi || typeof deps?.fetch1mFor !== 'function') {
-    renderLevelsPickerIdle(body);
+    // Раньше здесь стоял renderLevelsPickerIdle(): он молча стирал полосу и
+    // писал «—», поэтому при неудачной загрузке lazy-чанка функция выглядела
+    // «сломанной» без всякого объяснения.
+    renderLevelsPickerUnavailable(body, 'скан недоступен');
     return;
   }
   deps = { ...deps, levelsApi };
@@ -871,6 +892,34 @@ const PREVIEW_LINE_COLORS = {
  */
 export const PREVIEW_MAX_AXIS_LABELS = 14;
 
+/**
+ * Минимальная высота строки подписи у ценовой оси (LWC: fontSize 11 + padding).
+ * Ниже этого две подписи физически накладываются друг на друга.
+ */
+export const LABEL_ROW_MIN_PX = 15;
+
+/**
+ * Сколько подписей реально влезает в ЧАРТ такой высоты.
+ *
+ * Зачем считать от геометрии, а не держать фиксированные 14: в LWC 4.1.3
+ * `axisLabelVisible:false` гасит не только цену на оси, но и ЗАГОЛОВОК линии
+ * (`CustomPriceLinePriceAxisView._internal__updateRendererData` делает ранний
+ * return, если `!labelVisible`) — то есть прореживание подписей убивает и
+ * текст «−40.66%, −0.08 USDT» у уровня. При 20 уровнях в чарте высотой 340px
+ * шаг между линиями ~17px, все 20 подписей влезают, а фиксированный лимит 14
+ * молча оставлял 6 уровней вообще без чисел.
+ *
+ * Pure — для юнит-тестов.
+ */
+export function axisLabelCap(heightPx, rowPx = LABEL_ROW_MIN_PX, hardMax = 60) {
+  const h = +heightPx;
+  const row = Math.max(1, +rowPx || LABEL_ROW_MIN_PX);
+  const cap = Math.floor((isFinite(h) && h > 0 ? h : 0) / row);
+  // Верхняя граница — от перегрузки DOM/оси; нижняя — чтобы крайние подписи
+  // (они обязательны) всё равно рисовались.
+  return Math.max(2, Math.min(Math.max(2, hardMax | 0), cap || PREVIEW_MAX_AXIS_LABELS));
+}
+
 /** Индексы линий, у которых показываем подпись на оси (крайние — всегда). */
 export function axisLabelIdx(count, max = PREVIEW_MAX_AXIS_LABELS) {
   const n = Math.max(0, count | 0);
@@ -888,7 +937,7 @@ export function axisLabelIdx(count, max = PREVIEW_MAX_AXIS_LABELS) {
   return out;
 }
 
-export function buildPreviewPriceLines(out, lastClose) {
+export function buildPreviewPriceLines(out, lastClose, labelOpt = {}) {
   const gridMode = String(out.gridRiskMode || 'neutral');
   const step = out.step || 0;
   const gridLv = out.gridLevels || [];
@@ -917,7 +966,13 @@ export function buildPreviewPriceLines(out, lastClose) {
     anchorPrice: out.anchorPrice,
     gridLevels: gridLv,
   });
-  const labelIdx = axisLabelIdx(gridLv.length);
+  // Подписи: сколько влезает в текущую высоту чарта (см. axisLabelCap).
+  // Фиксированные 14 отрезали заголовки у части уровней — в LWC при
+  // axisLabelVisible:false не рисуется и текст «%, USDT» у линии.
+  const labelMax = labelOpt?.maxLabels != null
+    ? Math.max(2, labelOpt.maxLabels | 0)
+    : axisLabelCap(labelOpt?.heightPx, labelOpt?.rowPx);
+  const labelIdx = axisLabelIdx(gridLv.length, labelMax);
   const lastIdx = gridLv.length - 1;
   return gridLv.map((p, i) => {
     const meta = gridRiskMetaForPrice(p, anchorPx, step, riskRows, gridMode, favRows);
@@ -978,7 +1033,7 @@ function updateGridLabChartInPlace(body, ctx, out, gbPrefs, deps) {
   }
   ctx._gbLines = [];
   const lastClose = +ctx.merged[ctx.merged.length - 1]?.c;
-  for (const ln of buildPreviewPriceLines(out, lastClose)) {
+  for (const ln of buildPreviewPriceLines(out, lastClose, { heightPx: gbLabChartHeight(body) })) {
     try {
       ctx._gbLines.push(cs.createPriceLine({
         price: ln.price, color: ln.color, lineWidth: ln.lineWidth, lineStyle: ln.lineStyle,
@@ -998,6 +1053,18 @@ function updateGridLabChartInPlace(body, ctx, out, gbPrefs, deps) {
   }
   // Видовой снимок больше не нужен: чарт вообще не пересоздавался.
   body._gbPendingViewport = null;
+}
+
+/**
+ * Текущая высота чарта Grid Lab в пикселях (0, если контейнера ещё нет).
+ * Используется для расчёта числа подписей у ценовой оси.
+ */
+export function gbLabChartHeight(body) {
+  try {
+    const wrap = body?.querySelector('#gbChartWrap');
+    const h = wrap?.clientHeight | 0;
+    return h > 0 ? h : 0;
+  } catch (e) { return 0; }
 }
 
 /**
@@ -1265,6 +1332,9 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
   body._gbChartCtx = {
     lc: null, cs: null, ro: null, gbCh: null, gbLabSig: null, merged: null,
     sym: null, tf: null, _gbManagedLines: [], _histLoading: false,
+    // Подгрузка истории: исчерпание и троттлинг живут в контексте чарта, чтобы
+    // новая копия не наследовала флаги старой (см. prependGridLabHistory).
+    _histExhausted: false, _histLastAt: 0,
     _gbDrag: null, _gbVpLockUnsub: null,
     // Линии уровней и текущий out держим в контексте: при обновлении НА МЕСТЕ
     // (см. canReuseGridLabChart) их надо снять/обновить сами, чарт не пересоздаётся.
@@ -1357,7 +1427,7 @@ export function renderManualBacktestPreviewUi(body, out, gbPrefs, viewOpts, deps
   setTimeout(restoreView, 48);
 
   const lastCForLines = +merged[merged.length - 1]?.c;
-  const lines = buildPreviewPriceLines(out, lastCForLines);
+  const lines = buildPreviewPriceLines(out, lastCForLines, { heightPx: gbLabChartHeight(body) });
   for (const ln of lines) {
     try {
       body._gbChartCtx._gbLines.push(cs.createPriceLine({
@@ -1512,6 +1582,10 @@ export function cleanupGridLabContext(body) {
   if (!body) return;
   if (body._gridLabUiTimer) clearTimeout(body._gridLabUiTimer);
   if (body._gbPrepT) clearTimeout(body._gbPrepT);
+  if (body._gbEscHandler) {
+    try { document.removeEventListener('keydown', body._gbEscHandler); } catch (e) {}
+    body._gbEscHandler = null;
+  }
   body._gbSyncSeq = (body._gbSyncSeq || 0) + 1;
   const ctx = body._gbChartCtx;
   if (ctx?._gbVpLockUnsub) {
@@ -1609,7 +1683,14 @@ function bindGridLabBacktestForm(body, gbPrefs, scheduleGridLabSyncFn, applyRati
       const wrap = body.querySelector('#gbChartWrap');
       if (wrap) wrap.style.cursor = '';
     };
-    document.addEventListener('keydown', esc, { signal: body._gbFormSig });
+    // Снимаем прошлый ESC-обработчик перед навешиванием нового: таб «Сетка»
+    // перерисовывается многократно, и каждый повтор оставлял бы на document
+    // ещё одно замыкание, удерживающее модал вместе с чартом.
+    if (body._gbEscHandler) {
+      try { document.removeEventListener('keydown', body._gbEscHandler); } catch (e) { /* ignore */ }
+    }
+    body._gbEscHandler = esc;
+    document.addEventListener('keydown', esc);
   }
 }
 
@@ -1685,6 +1766,13 @@ export function renderGridLabModal(defSymOpt, deps = {}) {
     btnBt.classList.toggle('on', tab === 'backtest');
     btnSel.classList.toggle('on', tab === 'selector');
     if (tab === 'selector') {
+      // Уходим с таба «Сетка» — снести чарт, ResizeObserver и 460-мс таймер
+      // цены. РАНЬШЕ этого не делалось: innerHTML заменялся, а чарт продолжал
+      // жить в отвязанном DOM, тикер продолжал его дёргать каждые 460 мс, и
+      // при возврате на «Сетку» в body._gbChartCtx оставался мёртвый объект,
+      // в который писались новые priceLine'ы (LWC → «Object is disposed»).
+      cleanupGridLabContext(body);
+      body._gbChartCtx = null;
       // Selector rows are computed by the host (needs S.syms/S.mx/score fn).
       // Falls back to local helper if host didn't inject one.
       const rows = (deps.getGridSelectorRows || getGridSelectorRows)(

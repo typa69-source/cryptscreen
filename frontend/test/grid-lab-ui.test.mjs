@@ -18,7 +18,10 @@ import {
   levelsCacheKey,
   LEVELS_CACHE_TTL_MS,
   axisLabelIdx,
+  axisLabelCap,
+  LABEL_ROW_MIN_PX,
   PREVIEW_MAX_AXIS_LABELS,
+  buildPreviewPriceLines,
 } from '../src/gridLab-ui.js';
 
 // ── pushBoundsUndo ─────────────────────────────────────────────
@@ -338,4 +341,47 @@ test('axisLabelIdx: max меньше 2 всё равно даёт обе кра�
   const a = axisLabelIdx(10, 1);
   assert.equal(a.has(0), true);
   assert.equal(a.has(9), true);
+});
+
+// ── подписи уровней: число считается от геометрии чарта ──────────
+
+test('axisLabelCap: высокий чарт подписывает все 20 уровней (было — только 14)', () => {
+  // Чарт Grid Lab ~340px: шаг между 20 линиями ~17px, подписи не мешают.
+  const cap = axisLabelCap(340);
+  assert.ok(cap >= 20, `cap=${cap}, ожидалось >= 20 (20 уровней влезают)`);
+  const labeled = axisLabelIdx(20, cap);
+  assert.equal(labeled.size, 20, 'все 20 уровней должны иметь подпись');
+});
+
+test('axisLabelCap: при 150 уровнях подписи всё равно разрежаются', () => {
+  const cap = axisLabelCap(340);
+  const labeled = axisLabelIdx(150, cap);
+  assert.ok(labeled.size < 150, 'на 150 уровнях подписи обязаны прореживаться');
+  assert.ok(labeled.has(0) && labeled.has(149), 'крайние подписаны всегда');
+});
+
+test('axisLabelCap: маленькая/нулевая высота не ломает расчёт', () => {
+  assert.equal(axisLabelCap(0), PREVIEW_MAX_AXIS_LABELS, 'без DOM — прежний безопасный лимит');
+  assert.equal(axisLabelCap(null), PREVIEW_MAX_AXIS_LABELS);
+  assert.equal(axisLabelCap(NaN), PREVIEW_MAX_AXIS_LABELS);
+  assert.ok(axisLabelCap(40) >= 2, 'минимум — две крайние подписи');
+  assert.ok(LABEL_ROW_MIN_PX > 0);
+});
+
+test('buildPreviewPriceLines: в высоком чарте у КАЖДОГО уровня есть текст', () => {
+  const lo = 0.13, hi = 0.22, levels = 20;
+  const step = (hi - lo) / (levels - 1);
+  const gridLevels = Array.from({ length: levels }, (_, i) => lo + i * step);
+  const out = {
+    lower: lo, upper: hi, levels, leverage: 25, startEq: 0.2,
+    gridRiskMode: 'long', step, gridLevels, ok: true,
+  };
+  const lines = buildPreviewPriceLines(out, 0.1705, { heightPx: 340 });
+  assert.equal(lines.length, 20);
+  // В LWC заголовок линии рисуется ТОЛЬКО при axisLabelVisible:true, поэтому
+  // «нет подписи на оси» = «нет ни цены, ни убытка у уровня».
+  const missing = lines.filter((l) => !l.axisLabelVisible);
+  assert.equal(missing.length, 0, `без подписи остались уровни: ${missing.map((l) => l.price.toFixed(5)).join(', ')}`);
+  const noTitle = lines.filter((l) => !l.title);
+  assert.equal(noTitle.length, 0, 'у каждого уровня должен быть текст');
 });

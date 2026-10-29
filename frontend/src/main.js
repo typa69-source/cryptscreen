@@ -82,6 +82,7 @@ import {
   collectGridLabFields,
   detectBoundsChanges,
   renderGridLabModal as renderGridLabModalUi,
+  cleanupGridLabContext,
 } from './gridLab-ui.js'
 import { API, API_FDATA, TZ_OFFSET_S, toChartTime, HIST_LIMIT, HIST_INITIAL, HIST_CACHE_MAX, MIN_CHART_CANDLES, HIST_TRIGGER, FS_TFS, DRAW_HIT, DRAW_HISTORY_LIMIT, hexToRgbA, ALL_COLS, COLS_HIDDEN_BY_DEFAULT, GUEST_COL_VISIBLE, CHART_HEAD_DEFS, CHART_HEAD_IDS, GROUP_COLORS, FAVORITE_GROUP_ID, FAVORITE_GROUP_COLOR, THEME_CONFIGS, THEME_IDS, chartThemeColors, trendColShortLabel, trendKlineFetchLimit, tfToolbarBtnId, S, _lastDrawSym, _undoSymOrder, _redoSymOrder, setLastDrawSym, pushUndoSym, pushRedoSym, resetUndoRedo, _anyChartPanning, _panEndTimer, _deferredRenderNeeded, _panOverlayRaf, setAnyChartPanning, setPanEndTimer, setDeferredRenderNeeded, setPanOverlayRaf } from './state.js'
 import { fn, fk, fmtPrice, getPriceMinMove, formatDuration } from './format.js'
@@ -4406,10 +4407,17 @@ function kickGridLabPricePoll(symU){
   const m=document.getElementById('gridLabModal');
   const body=m?.querySelector('#gridLabBody');
   const ctx=body?._gbChartCtx;
+  // ctx бывает null: при уходе на таб «Сетка» контекст чарта сносится
+  // (cleanupGridLabContext + _gbChartCtx=null), а синк может прийти следом.
   if(ctx?._pollTimer){clearInterval(ctx._pollTimer);ctx._pollTimer=null;}
-  if(!symU)return;
+  if(!symU||!ctx)return;
   ctx._pollTimer=setInterval(()=>{
-    if(!document.getElementById('gridLabModal'))return;
+    // Модал закрыли или сменили таб — таймер обязан умереть, иначе он держит
+    // мёртвый чарт и дёргает pulseGridLabFromTicker по disposed-объекту.
+    const b=document.getElementById('gridLabModal')?.querySelector('#gridLabBody');
+    if(!b||b._gbChartCtx!==ctx||!ctx.cs){
+      clearInterval(ctx._pollTimer);ctx._pollTimer=null;return;
+    }
     const p=S.tk[symU]?.p;
     if(p!=null&&isFinite(+p))pulseGridLabFromTicker(symU,+p,Date.now());
   },460);
@@ -8230,14 +8238,42 @@ function readGridLabInputs(body,gbPrefs,wantBars,mergedCand){
     gbPrefs, wantBars, mergedCand,
   );
 }
+/** Grid Lab: не чаще одной подгрузки истории в этот интервал (мс). */
+const GB_HIST_COOLDOWN_MS = 1500;
+/** Grid Lab: слева от этого индекса окно считается «у края» → просим историю. */
+const GB_HIST_LEFT_EDGE = 40;
+
 async function prependGridLabHistory(body,sym,tf){
   const ctx=body._gbChartCtx;
   if(!ctx?.merged?.length||ctx._histLoading)return;
+  // ИСТОЧНИК КРАША ВКЛАДКИ: у окна Grid Lab есть подписка на видимый диапазон,
+  // которая при range.from<40 ставит фетч через 220 мс. Но обновление цены
+  // (pulseGridLabFromTicker, каждые 460 мс) и сам prepend тоже меняют диапазон —
+  // и пока пользователь стоит у левого края, они бесконечно перезапускают
+  // загрузку. Каждый проход тянет 1000 свечей, unshift'ит их в merged и делает
+  // setData; на пределе HIST_CACHE_MAX массив начинает ещё и пере-обрезаться.
+  // Вкладка упирается в память/CPU и «вылетает с ошибкой».
+  //
+  // Лечим тремя условиями: (1) исчерпанная история больше не запрашивается,
+  // (2) не чаще одного раза в GB_HIST_COOLDOWN_MS, (3) перед САМИМ запросом
+  // перепроверяем, что окно всё ещё у левого края.
+  if(ctx._histExhausted)return;
+  const nowMs=Date.now();
+  if(nowMs-(ctx._histLastAt||0)<GB_HIST_COOLDOWN_MS)return;
   ctx._histLoading=true;
+  ctx._histLastAt=nowMs;
   try{
-    const raw=await fj(`${API}/klines?symbol=${encodeURIComponent(sym)}&interval=${tf}&limit=${HIST_LIMIT}&endTime=${ctx.merged[0].t-1}`);
-    if(!raw?.length)return;
-    const nc=parseKlines(raw);if(!nc.length)return;
+    let fromNow=null;
+    try{fromNow=ctx.lc.timeScale().getVisibleLogicalRange();}catch(e){}
+    if(fromNow&&typeof fromNow.from==='number'&&fromNow.from>=GB_HIST_LEFT_EDGE)return;
+    const headT=ctx.merged[0].t;
+    const raw=await fj(`${API}/klines?symbol=${encodeURIComponent(sym)}&interval=${tf}&limit=${HIST_LIMIT}&endTime=${headT-1}`);
+    if(!raw?.length){ctx._histExhausted=true;return;}
+    const nc=parseKlines(raw);if(!nc.length){ctx._histExhausted=true;return;}
+    // Сервер мог вернуть те же бары (или новее) — значит истории больше нет,
+    // иначе цикл «запрос → нечего добавить → снова запрос» не завершится.
+    const older=nc.filter(k=>k.t<headT);
+    if(!older.length){ctx._histExhausted=true;return;}
     const ts=ctx.lc.timeScale();
     let logRange=null,vTime=null,pRange=null;
     try{logRange=(typeof ts.getVisibleLogicalRange==='function')?ts.getVisibleLogicalRange():null;}catch(e){}
@@ -8246,10 +8282,11 @@ async function prependGridLabHistory(body,sym,tf){
       const ps=typeof ctx.cs.priceScale==='function'?ctx.cs.priceScale():null;
       if(ps&&typeof ps.getVisibleRange==='function')pRange=ps.getVisibleRange();
     }catch(e){}
-    const prepended=nc.length;
+    const prepended=older.length;
     const m=ctx.merged;
+    if(m.length>=HIST_CACHE_MAX)return;
     const beforeLen=m.length;
-    m.unshift(...nc);
+    m.unshift(...older);
     if(m.length>HIST_CACHE_MAX)m.splice(0,m.length-HIST_CACHE_MAX);
     // real index shift after trim (see loadMoreHistory): restoring with the
     // raw prepended count drags the view to the right edge (magnet bug)
@@ -8301,11 +8338,30 @@ function fromChartTime(ct) {
 }
 
 let _gridLevelsApi = null;
+/**
+ * Lazy-модуль скана уровней.
+ *
+ * Раньше при сбое import() (_gridLevelsApi = null) вызывающий код молча
+ * деградировал в «—» и пустую тепловую полосу — то есть «Подбор» выглядел
+ * сломанным без единого объяснения. Теперь: 3 попытки с паузой (сетевой
+ * флап лечится сам), и только упорный сбой загрузки чанка — это уже повод
+ * взять свежий билд (после деплоя старые имена чанков исчезают).
+ */
 async function ensureGridLevelsApi() {
   if (_gridLevelsApi) return _gridLevelsApi;
-  try {
-    _gridLevelsApi = await import('./grid-lab-levels.js');
-  } catch (e) { _gridLevelsApi = null; }
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      _gridLevelsApi = await import('./grid-lab-levels.js');
+      if (_gridLevelsApi) return _gridLevelsApi;
+    } catch (e) {
+      _gridLevelsApi = null;
+      if (attempt < 3) {
+        await new Promise((r) => setTimeout(r, 250 * attempt));
+        continue;
+      }
+      if (isChunkLoadError(e)) _gbHardReloadOnce('Grid Lab scan');
+    }
+  }
   return _gridLevelsApi;
 }
 
@@ -8451,7 +8507,15 @@ function renderGridLabModal(defSymOpt) {
 
 function toggleGridLab(){
   const old=document.getElementById('gridLabModal');
-  if(old){old.remove();return;}
+  if(old){
+    // Раньше здесь был просто old.remove(): чарт, ResizeObserver, 460-мс
+    // поллер цены, ESC-обработчик на document и подписка на диапазон
+    // оставались жить в отвязанном DOM. Каждое повторное открытие
+    // добавляло ещё один комплект → вкладка со временем падала.
+    cleanupGridLabContext(old.querySelector('#gridLabBody'));
+    old.remove();
+    return;
+  }
   renderGridLabModal();
 }
 
@@ -8491,11 +8555,11 @@ function openGridLabFromRow(row, source, closeSelf){
   if(typeof closeSelf === 'function'){
     try { closeSelf(); } catch(e) { /* ignore */ }
   }
-  // If Grid Lab is already open, just refresh its inputs (cheap sync) instead of stacking.
-  const existingModal = document.getElementById('gridLabModal');
-  if(existingModal){
-    existingModal.remove();
-  }
+  // If Grid Lab is already open, don't stack a second copy: renderGridLabModal
+  // сам снимает прежний модал, но делает это ЧЕРЕЗ cleanupGridLabContext.
+  // Здесь был голый existingModal.remove() — он оставлял жить чарт,
+  // ResizeObserver и поллер цены, и каждый клик по строке скринера плодил
+  // ещё один комплект (та же утечка, что в toggleGridLab).
   // Pass payload.sym so the form opens on the right symbol and pulls the suggested bounds.
   renderGridLabModal(payload.sym);
 }
